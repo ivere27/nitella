@@ -1,0 +1,506 @@
+syntax = "proto3";
+
+package nitella.proxy;
+
+option go_package = "github.com/ivere27/nitella/pkg/api/proxy";
+
+import "google/protobuf/timestamp.proto";
+import "common/common.proto";
+import "google/protobuf/empty.proto";
+
+// ===========================================================================
+// PROXY CONTROL SERVICE (Local)
+// ===========================================================================
+// This service runs locally on the proxy node to allow control via CLI
+// or other local agents.
+
+service ProxyControlService {
+  // Lifecycle Management
+  rpc CreateProxy(CreateProxyRequest) returns (CreateProxyResponse);
+  rpc DisableProxy(DisableProxyRequest) returns (DisableProxyResponse);
+  rpc EnableProxy(EnableProxyRequest) returns (EnableProxyResponse);
+  rpc DeleteProxy(DeleteProxyRequest) returns (DeleteProxyResponse);
+  rpc UpdateProxy(UpdateProxyRequest) returns (UpdateProxyResponse);
+  rpc RestartListeners(google.protobuf.Empty) returns (RestartListenersResponse);
+  rpc GetStatus(GetStatusRequest) returns (ProxyStatus);
+  rpc ReloadRules(ReloadRulesRequest) returns (ReloadRulesResponse);
+
+  // Rule Management (Runtime)
+  rpc AddRule(AddRuleRequest) returns (Rule);
+  rpc RemoveRule(RemoveRuleRequest) returns (google.protobuf.Empty);
+  rpc ListRules(ListRulesRequest) returns (ListRulesResponse);
+  rpc ListProxies(ListProxiesRequest) returns (ListProxiesResponse);
+
+  // Quick Actions (Ephemeral, runtime only)
+  rpc BlockIP(BlockIPRequest) returns (google.protobuf.Empty);
+  rpc AllowIP(AllowIPRequest) returns (google.protobuf.Empty);
+
+  // Observability
+  rpc StreamConnections(StreamConnectionsRequest) returns (stream ConnectionEvent);
+  rpc StreamMetrics(StreamMetricsRequest) returns (stream MetricsSample);
+
+  // Connection Management
+  rpc GetActiveConnections(GetActiveConnectionsRequest) returns (GetActiveConnectionsResponse);
+  rpc CloseConnection(CloseConnectionRequest) returns (CloseConnectionResponse);
+  rpc CloseAllConnections(CloseAllConnectionsRequest) returns (CloseAllConnectionsResponse);
+
+  // Configuration
+  rpc ConfigureGeoIP(ConfigureGeoIPRequest) returns (ConfigureGeoIPResponse);
+
+  // GeoIP Lookup
+  rpc LookupIP(LookupIPRequest) returns (LookupIPResponse);
+  rpc GetGeoIPStatus(GetGeoIPStatusRequest) returns (GetGeoIPStatusResponse);
+}
+
+// ---------------------------------------------------------------------------
+// GeoIP Configuration
+// ---------------------------------------------------------------------------
+
+message ConfigureGeoIPRequest {
+  enum Mode {
+    MODE_LOCAL_DB = 0;
+    MODE_REMOTE_API = 1;
+  }
+  Mode mode = 1;
+
+  // Local DB Options
+  string city_db_path = 2;
+  string isp_db_path = 3;
+
+  // Remote API Options
+  string provider = 4; // "ip-api", "ipinfo"
+  string api_key = 5;  // Optional
+}
+
+message ConfigureGeoIPResponse {
+  bool success = 1;
+  string error = 2;
+}
+
+message LookupIPRequest {
+  string ip = 1;
+}
+
+message LookupIPResponse {
+  nitella.GeoInfo geo = 1;
+  bool cached = 2;        // True if result came from cache
+  int64 lookup_time_ms = 3; // Time taken to lookup
+}
+
+message GetGeoIPStatusRequest {}
+
+message GetGeoIPStatusResponse {
+  bool enabled = 1;
+  string mode = 2;           // "local", "remote", "ffi", "disabled"
+  string city_db_path = 3;   // For local mode
+  string isp_db_path = 4;    // For local mode
+  string provider = 5;       // For remote mode
+  repeated string strategy = 6; // Lookup strategy order
+  int64 cache_hits = 7;
+  int64 cache_misses = 8;
+}
+
+// ---------------------------------------------------------------------------
+// Lifecycle
+// ---------------------------------------------------------------------------
+
+message CreateProxyRequest {
+  string listen_addr = 1;       // e.g., "0.0.0.0:8080"
+  string default_backend = 2;   // e.g., "127.0.0.1:80" (optional, if no rules match)
+  string name = 3;              // Display name for this listener
+  string cert_pem = 4;          // Optional: Server Cert for mTLS
+  string key_pem = 5;           // Optional: Server Key for mTLS
+  string ca_pem = 6;            // Optional: Client CA for mTLS validation
+  nitella.ActionType default_action = 7;
+  nitella.MockPreset default_mock = 8;
+  nitella.FallbackAction fallback_action = 9;
+  nitella.MockPreset fallback_mock = 10;
+  ClientAuthType client_auth_type = 11;
+  repeated string tags = 12;    // Tags (e.g. "production", "aws")
+  HealthCheckConfig health_check = 13;
+}
+
+enum HealthCheckType {
+  HEALTH_CHECK_TYPE_UNSPECIFIED = 0;
+  HEALTH_CHECK_TYPE_TCP = 1;
+  HEALTH_CHECK_TYPE_HTTP = 2;
+  HEALTH_CHECK_TYPE_HTTPS = 3;
+}
+
+message HealthCheckConfig {
+  string interval = 1;       // e.g. "10s"
+  string timeout = 2;        // e.g. "2s"
+  HealthCheckType type = 3;
+  string path = 4;           // for http
+  int32 expected_status = 5;
+}
+
+enum ClientAuthType {
+  CLIENT_AUTH_AUTO = 0;    // Default: If CA present -> REQUIRE, else NONE
+  CLIENT_AUTH_NONE = 1;    // Ignore Client Certs (Public)
+  CLIENT_AUTH_REQUEST = 2; // Request Cert, but allow if missing (Permissive)
+  CLIENT_AUTH_REQUIRE = 3; // Reject if Cert missing (Strict)
+}
+
+message CreateProxyResponse {
+  bool success = 1;
+  string error_message = 2;
+  string proxy_id = 3;
+}
+
+message DisableProxyRequest {
+  string proxy_id = 1; // ID returned from CreateProxy, or empty for all
+}
+
+message DisableProxyResponse {
+  bool success = 1;
+  string error_message = 2;
+}
+
+message EnableProxyRequest {
+  string proxy_id = 1;
+}
+
+message EnableProxyResponse {
+  bool success = 1;
+  string error_message = 2;
+}
+
+message DeleteProxyRequest {
+  string proxy_id = 1;
+}
+
+message DeleteProxyResponse {
+  bool success = 1;
+  string error_message = 2;
+}
+
+message UpdateProxyRequest {
+  string proxy_id = 1;
+  string listen_addr = 2;
+  string default_backend = 3;
+  string name = 4;
+  string cert_pem = 5;
+  string key_pem = 6;
+  string ca_pem = 7;
+  nitella.ActionType default_action = 8;
+  nitella.MockPreset default_mock = 9;
+  nitella.FallbackAction fallback_action = 10;
+  nitella.MockPreset fallback_mock = 11;
+  ClientAuthType client_auth_type = 12;
+  repeated string tags = 13;
+  HealthCheckConfig health_check = 14;
+}
+
+message UpdateProxyResponse {
+  bool success = 1;
+  string error_message = 2;
+}
+
+message RestartListenersResponse {
+  bool success = 1;
+  int32 restarted_count = 2;
+  string error_message = 3;
+}
+
+message GetStatusRequest {
+  string proxy_id = 1;
+}
+
+message ProxyStatus {
+  string proxy_id = 1;
+  bool running = 2;
+  string listen_addr = 3;
+  int64 active_connections = 4;
+  int64 total_connections = 5;
+  int64 bytes_in = 6;
+  int64 bytes_out = 7;
+  int64 uptime_seconds = 8;
+  int64 memory_rss = 9; // Resident Set Size in bytes
+  nitella.ActionType default_action = 10;
+  nitella.MockPreset default_mock = 11;
+  nitella.FallbackAction fallback_action = 12;
+  nitella.MockPreset fallback_mock = 13;
+  string default_backend = 14;
+  ClientAuthType client_auth_type = 15;
+  repeated string tags = 16;
+  HealthCheckConfig health_check = 17;
+  HealthStatus health_status = 18;
+}
+
+enum HealthStatus {
+  HEALTH_STATUS_UNKNOWN = 0;
+  HEALTH_STATUS_HEALTHY = 1;
+  HEALTH_STATUS_UNHEALTHY = 2;
+  HEALTH_STATUS_STARTING = 3;
+}
+
+message ReloadRulesRequest {
+  repeated Rule rules = 1;
+}
+
+message ReloadRulesResponse {
+  bool success = 1;
+  int32 rules_loaded = 2;
+  string error_message = 3;
+}
+
+// ---------------------------------------------------------------------------
+// Rules
+// ---------------------------------------------------------------------------
+
+message Rule {
+  string id = 1;
+  string name = 2;
+  int32 priority = 3;           // Higher number = higher priority
+  bool enabled = 4;
+
+  repeated Condition conditions = 5;
+
+  nitella.ActionType action = 6;
+
+  // Target backend for this rule (overrides default).
+  // Can be a specific "IP:Port" or a named group.
+  string target_backend = 7;
+
+  // Additional configuration for specific actions
+  RateLimitConfig rate_limit = 8;
+  MockConfig mock_response = 9;
+
+  string expression = 10; // Traefik-style rule expression
+}
+
+message Condition {
+  nitella.ConditionType type = 1;
+  nitella.Operator op = 2;
+  string value = 3; // The value to match against (IP, Country Code, etc.)
+  bool negate = 4;  // Invert the match result
+}
+
+message RateLimitConfig {
+  int32 max_connections = 1;
+  int32 interval_seconds = 2;
+
+  // Auto-Block / Fail2Ban Logic
+  bool auto_block = 3;
+  int32 block_duration_seconds = 4; // Initial block time (e.g. 600)
+
+  // Escalation policy: [600, 3600, 86400] -> 10m, 1h, 24h.
+  // If empty, uses block_duration_seconds constantly.
+  // If last step is reached, subsequent blocks use the last step value.
+  repeated int32 block_steps_seconds = 5;
+
+  // Heuristic for "Failure"
+  bool count_only_failures = 6;     // If true, only count if duration < min_duration
+  int32 failure_duration_threshold = 7; // Seconds. If conn lasts less than this, it's a failure.
+}
+
+message MockConfig {
+  nitella.MockPreset preset = 1;   // Named preset: ssh-secure, ssh-tarpit, http-403, etc.
+  string protocol = 2; // "http", "ssh", "raw"
+  bytes payload = 3;
+  int32 delay_ms = 4;
+}
+
+message AddRuleRequest {
+  string proxy_id = 1;
+  Rule rule = 2;
+}
+
+message RemoveRuleRequest {
+  string proxy_id = 1;
+  string rule_id = 2;
+}
+
+message ListRulesRequest {
+  string proxy_id = 1;
+}
+
+message ListRulesResponse {
+  repeated Rule rules = 1;
+}
+
+message ListProxiesRequest {
+  // Empty for now, maybe filter later
+}
+
+message ListProxiesResponse {
+  repeated ProxyStatus proxies = 1;
+}
+
+// ---------------------------------------------------------------------------
+// Quick Actions
+// ---------------------------------------------------------------------------
+
+message BlockIPRequest {
+  string ip = 1;
+  int64 duration_seconds = 2; // 0 = indefinite
+  string reason = 3;
+}
+
+message AllowIPRequest {
+  string ip = 1;
+  int64 duration_seconds = 2;
+}
+
+// ---------------------------------------------------------------------------
+// Observability
+// ---------------------------------------------------------------------------
+
+message StreamConnectionsRequest {
+  bool active_only = 1; // If true, only streams currently active events
+}
+
+message ConnectionEvent {
+  string conn_id = 1;
+  string source_ip = 2;
+  int32 source_port = 3;
+  string target_addr = 4;
+
+  EventType event_type = 5;
+  int64 timestamp = 6;
+
+  // Context
+  string rule_matched = 7; // Rule ID or Name
+  nitella.ActionType action_taken = 8;
+
+  // Stats (for CLOSED events)
+  int64 bytes_in = 9;
+  int64 bytes_out = 10;
+
+
+  nitella.GeoInfo geo = 11;
+}
+
+enum EventType {
+  EVENT_TYPE_UNSPECIFIED = 0;
+  EVENT_TYPE_CONNECTED = 1;
+  EVENT_TYPE_CLOSED = 2;
+  EVENT_TYPE_BLOCKED = 3;
+}
+
+message StreamMetricsRequest {
+  int32 interval_seconds = 1;
+}
+
+message MetricsSample {
+  int64 timestamp = 1;
+  int64 active_conns = 2;
+  int64 total_conns = 3;
+  int64 bytes_in_rate = 4;  // bytes per second
+  int64 bytes_out_rate = 5; // bytes per second
+  int64 blocked_total = 6;
+}
+
+// ---------------------------------------------------------------------------
+// Connection Management
+// ---------------------------------------------------------------------------
+
+message ActiveConnection {
+  string id = 1;
+  string source_ip = 2;
+  int32 source_port = 3;
+  string dest_addr = 4;
+  google.protobuf.Timestamp start_time = 5;
+  int64 bytes_in = 6;
+  int64 bytes_out = 7;
+  nitella.GeoInfo geo = 8;
+}
+
+message GetActiveConnectionsRequest {
+  string node_id = 1;
+  string proxy_id = 2;
+}
+
+message GetActiveConnectionsResponse {
+  repeated ActiveConnection connections = 1;
+}
+
+message CloseConnectionRequest {
+  string proxy_id = 1;
+  string conn_id = 2;
+}
+
+message CloseConnectionResponse {
+  bool success = 1;
+  string error_message = 2;
+}
+
+message CloseAllConnectionsRequest {
+  string proxy_id = 1;
+}
+
+message CloseAllConnectionsResponse {
+  bool success = 1;
+  string error_message = 2;
+}
+
+// ---------------------------------------------------------------------------
+// Statistics (Detailed) for UI Access
+// ---------------------------------------------------------------------------
+
+message GetIPStatsRequest {
+  int32 limit = 1;
+  int32 offset = 2;
+  string source_ip_filter = 3; // Prefix match
+  string country_filter = 4;
+  string sort_by = 5; // "recency", "connection_count", "bytes_total", "last_seen"
+}
+
+message IPStatsResult {
+  string source_ip = 1;
+  google.protobuf.Timestamp first_seen = 2;
+  google.protobuf.Timestamp last_seen = 3;
+  int64 connection_count = 4;
+  int64 total_bytes_in = 5;
+  int64 total_bytes_out = 6;
+  int64 total_duration_ms = 7;
+  int64 blocked_count = 8;
+  int64 allowed_count = 9;
+
+  // Geo Info
+  string geo_country = 10;
+  string geo_city = 11;
+  string geo_isp = 12;
+
+  double recency_weight = 13;
+}
+
+message GetIPStatsResponse {
+  repeated IPStatsResult stats = 1;
+  int64 total_count = 2;
+}
+
+message GetGeoStatsRequest {
+  string type = 1; // "country", "city", "isp"
+  int32 limit = 2;
+  int32 offset = 3;
+}
+
+message GeoStatsResult {
+  string type = 1;
+  string value = 2;
+  int64 connection_count = 3;
+  int64 unique_ips = 4;
+  int64 total_bytes_in = 5;
+  int64 total_bytes_out = 6;
+  int64 blocked_count = 7;
+}
+
+message GetGeoStatsResponse {
+  repeated GeoStatsResult stats = 1;
+}
+
+message GetStatsSummaryRequest {
+  // empty
+}
+
+message StatsSummaryResponse {
+  int64 total_connections = 1;
+  int64 total_bytes_in = 2;
+  int64 total_bytes_out = 3;
+  int64 unique_ips = 4;
+  int64 unique_countries = 5;
+  int64 blocked_total = 6;
+  int64 allowed_total = 7;
+}

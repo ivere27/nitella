@@ -1,0 +1,162 @@
+syntax = "proto3";
+
+package nitella.process;
+
+option go_package = "github.com/ivere27/nitella/pkg/api/process";
+
+import "google/protobuf/timestamp.proto";
+import "proxy/proxy.proto";
+import "common/common.proto";
+
+// ProcessControl is the service for Parent <-> Child process communication
+// Used for child process isolation mode where each listener runs in a separate process
+service ProcessControl {
+  // Lifecycle
+  rpc StartListener(StartListenerRequest) returns (StartListenerResponse);
+  rpc StopListener(StopListenerRequest) returns (StopListenerResponse);
+
+  // Health and Metrics
+  rpc HealthCheck(HealthCheckRequest) returns (HealthCheckResponse);
+  rpc GetMetrics(GetMetricsRequest) returns (GetMetricsResponse);
+
+  // Rule Management
+  rpc AddRule(AddRuleRequest) returns (AddRuleResponse);
+  rpc RemoveRule(RemoveRuleRequest) returns (RemoveRuleResponse);
+  rpc ListRules(ListRulesRequest) returns (ListRulesResponse);
+
+  // Connection Management
+  rpc GetActiveConnections(GetActiveConnectionsRequest) returns (GetActiveConnectionsResponse);
+  rpc CloseConnection(CloseConnectionRequest) returns (CloseConnectionResponse);
+  rpc CloseAllConnections(CloseAllConnectionsRequest) returns (CloseAllConnectionsResponse);
+
+  // Streaming events from Child -> Parent (connections, logs, metrics)
+  rpc StreamEvents(StreamEventsRequest) returns (stream Event);
+}
+
+// ---------------------------------------------------------------------------
+// Lifecycle Messages
+// ---------------------------------------------------------------------------
+
+message StartListenerRequest {
+  string id = 1;
+  string name = 2;
+  string listen_addr = 3;
+  string default_backend = 4;
+  nitella.ActionType default_action = 5;
+  nitella.proxy.MockConfig default_mock = 6;
+  string cert_pem = 7;
+  string key_pem = 8;
+  string ca_pem = 9;
+  nitella.proxy.ClientAuthType client_auth_type = 10;
+  nitella.FallbackAction fallback_action = 11;
+  nitella.MockPreset fallback_mock = 12;
+}
+
+message StartListenerResponse {
+  bool success = 1;
+  string error_message = 2;
+}
+
+message StopListenerRequest {}
+
+message StopListenerResponse {
+  bool success = 1;
+}
+
+// ---------------------------------------------------------------------------
+// Health and Metrics Messages
+// ---------------------------------------------------------------------------
+
+message HealthCheckRequest {}
+
+message HealthCheckResponse {
+  string status = 1; // "ok", "error", "idle"
+  int32 active_connections = 2;
+}
+
+message GetMetricsRequest {}
+
+message GetMetricsResponse {
+  nitella.proxy.ProxyStatus status = 1;
+}
+
+// ---------------------------------------------------------------------------
+// Rule Messages
+// ---------------------------------------------------------------------------
+
+message AddRuleRequest {
+  nitella.proxy.Rule rule = 1;
+}
+
+message AddRuleResponse {
+  bool success = 1;
+  string error_message = 2;
+}
+
+message RemoveRuleRequest {
+  string rule_id = 1;
+}
+
+message RemoveRuleResponse {
+  bool success = 1;
+}
+
+message ListRulesRequest {}
+
+message ListRulesResponse {
+  repeated nitella.proxy.Rule rules = 1;
+}
+
+// ---------------------------------------------------------------------------
+// Connection Management Messages
+// ---------------------------------------------------------------------------
+
+message GetActiveConnectionsRequest {}
+
+message GetActiveConnectionsResponse {
+  repeated nitella.proxy.ActiveConnection connections = 1;
+}
+
+message CloseConnectionRequest {
+  string conn_id = 1;
+}
+
+message CloseConnectionResponse {
+  bool success = 1;
+  string error_message = 2;
+}
+
+message CloseAllConnectionsRequest {}
+
+message CloseAllConnectionsResponse {
+  bool success = 1;
+  string error_message = 2;
+}
+
+// ---------------------------------------------------------------------------
+// Event Streaming Messages
+// ---------------------------------------------------------------------------
+
+message StreamEventsRequest {}
+
+message Event {
+  oneof type {
+    nitella.proxy.ConnectionEvent connection = 1;
+    LogEvent log = 2;
+    MetricsEvent metrics = 3;
+  }
+}
+
+message LogEvent {
+  string level = 1;    // "debug", "info", "warn", "error"
+  string message = 2;
+  google.protobuf.Timestamp timestamp = 3;
+}
+
+message MetricsEvent {
+  int64 active_connections = 1;
+  int64 total_connections = 2;
+  int64 bytes_in = 3;
+  int64 bytes_out = 4;
+  google.protobuf.Timestamp timestamp = 5;
+}

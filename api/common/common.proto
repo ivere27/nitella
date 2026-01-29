@@ -4,6 +4,72 @@ package nitella;
 
 option go_package = "github.com/ivere27/nitella/pkg/api/common";
 
+// ActionType defines the possible actions for rules and defaults
+enum ActionType {
+  ACTION_TYPE_UNSPECIFIED = 0;
+  ACTION_TYPE_ALLOW = 1;
+  ACTION_TYPE_BLOCK = 2;
+  ACTION_TYPE_MOCK = 3;
+}
+
+// FallbackAction defines what to do when a primary action fails or is not applicable
+enum FallbackAction {
+  FALLBACK_ACTION_UNSPECIFIED = 0;
+  FALLBACK_ACTION_CLOSE = 1;
+  FALLBACK_ACTION_MOCK = 2;
+}
+
+// MockPreset defines pre-configured mock responses
+enum MockPreset {
+  MOCK_PRESET_UNSPECIFIED = 0;
+  MOCK_PRESET_SSH_SECURE = 1;
+  MOCK_PRESET_SSH_TARPIT = 2;
+  MOCK_PRESET_HTTP_403 = 3;
+  MOCK_PRESET_HTTP_404 = 4;
+  MOCK_PRESET_HTTP_401 = 5;
+  MOCK_PRESET_REDIS_SECURE = 6;
+  MOCK_PRESET_MYSQL_SECURE = 7;
+  MOCK_PRESET_MYSQL_TARPIT = 8;
+  MOCK_PRESET_RDP_SECURE = 9;
+  MOCK_PRESET_TELNET_SECURE = 10;
+  MOCK_PRESET_RAW_TARPIT = 11;
+}
+
+// ConditionType defines the type of condition in a rule
+enum ConditionType {
+  CONDITION_TYPE_UNSPECIFIED = 0;
+  CONDITION_TYPE_SOURCE_IP = 1;
+  CONDITION_TYPE_GEO_COUNTRY = 2;
+  CONDITION_TYPE_GEO_CITY = 3;
+  CONDITION_TYPE_GEO_ISP = 4;
+  CONDITION_TYPE_TIME_RANGE = 5;        // Format: "HH:MM-HH:MM" (24h)
+  CONDITION_TYPE_TLS_FINGERPRINT = 6;
+  CONDITION_TYPE_TLS_CN = 7;
+  CONDITION_TYPE_TLS_SERIAL = 8;
+  CONDITION_TYPE_TLS_PRESENT = 9;       // Client presented any valid cert (value: "true" or "false")
+  CONDITION_TYPE_TLS_CA = 10;           // Issuing CA CommonName matches
+  CONDITION_TYPE_TLS_SAN = 11;          // Subject Alternative Name matches (DNS or email)
+  CONDITION_TYPE_TLS_OU = 12;           // Organizational Unit matches
+}
+
+// Operator defines how to match the value in a condition
+enum Operator {
+  OPERATOR_UNSPECIFIED = 0;
+  OPERATOR_EQ = 1;      // Equals
+  OPERATOR_CONTAINS = 2;// String contains
+  OPERATOR_REGEX = 3;   // Regular expression
+  OPERATOR_CIDR = 4;    // IP CIDR match (e.g., 192.168.1.0/24)
+}
+
+// SortOrder defines sorting options for statistics queries
+enum SortOrder {
+  SORT_LAST_SEEN_DESC = 0;            // Default
+  SORT_LAST_SEEN_ASC = 1;
+  SORT_CONNECTION_COUNT_DESC = 2;
+  SORT_BYTES_TOTAL_DESC = 3;
+  SORT_RECENCY_WEIGHT_DESC = 4;
+}
+
 // GeoInfo contains geographical information for an IP address.
 message GeoInfo {
   string country = 1;

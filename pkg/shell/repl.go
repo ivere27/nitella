@@ -193,6 +193,19 @@ func (r *REPL) readLine() (string, error) {
 				if i >= n {
 					continue
 				}
+
+				// Alt+Backspace (ESC + DEL or ESC + BS) - delete word backward
+				if buf[i] == 0x7F || buf[i] == 0x08 {
+					i++
+					if pos > 0 {
+						newPos := r.findWordStart(line, pos)
+						line = append(line[:newPos], line[pos:]...)
+						pos = newPos
+						r.printPrompt(line, pos)
+					}
+					continue
+				}
+
 				if buf[i] != '[' {
 					i++
 					continue
@@ -236,8 +249,8 @@ func (r *REPL) readLine() (string, error) {
 					}
 
 				case 'C': // Right arrow
-					if seq == "1;5" {
-						// Ctrl+Right - move to next word
+					if seq == "1;5" || seq == "1;3" {
+						// Ctrl+Right or Alt+Right - move to next word
 						pos = r.findWordEnd(line, pos)
 					} else {
 						if pos < len(line) {
@@ -247,8 +260,8 @@ func (r *REPL) readLine() (string, error) {
 					r.printPrompt(line, pos)
 
 				case 'D': // Left arrow
-					if seq == "1;5" {
-						// Ctrl+Left - move to previous word
+					if seq == "1;5" || seq == "1;3" {
+						// Ctrl+Left or Alt+Left - move to previous word
 						pos = r.findWordStart(line, pos)
 					} else {
 						if pos > 0 {

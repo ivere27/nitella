@@ -1,0 +1,59 @@
+# Nitella Proxy Daemon
+#
+# Includes GeoLite2 databases from MaxMind (https://www.maxmind.com)
+# License: CC BY-SA 4.0 - Commercial use allowed with attribution
+# Database source: https://github.com/P3TERX/GeoLite.mmdb
+
+# Build stage
+FROM golang:1.22-alpine AS builder
+
+RUN apk add --no-cache git gcc musl-dev
+
+WORKDIR /app
+
+COPY go.mod go.sum ./
+RUN go mod download
+
+COPY . .
+
+# Build with CGO enabled for SQLite support
+RUN CGO_ENABLED=1 go build -ldflags="-s -w" -o /app/bin/nitellad ./cmd/nitellad
+RUN CGO_ENABLED=1 go build -ldflags="-s -w" -o /app/bin/nitella ./cmd/nitella
+
+# Runtime stage
+FROM alpine:3.19
+
+RUN apk add --no-cache ca-certificates tzdata curl
+
+WORKDIR /app
+
+# Copy binaries
+COPY --from=builder /app/bin/nitellad /app/nitellad
+COPY --from=builder /app/bin/nitella /app/nitella
+
+# Create directories
+RUN mkdir -p /app/data /app/db /app/config
+
+# Download GeoLite2 databases (see license info at top of file)
+# Using direct GitHub URLs instead of git.io short URLs for reliability
+RUN curl -sL -o /app/db/GeoLite2-City.mmdb https://github.com/P3TERX/GeoLite.mmdb/raw/download/GeoLite2-City.mmdb && \
+    curl -sL -o /app/db/GeoLite2-ASN.mmdb https://github.com/P3TERX/GeoLite.mmdb/raw/download/GeoLite2-ASN.mmdb
+
+# Default ports
+# 8080: Proxy port (configurable)
+# 50051: Admin gRPC API
+EXPOSE 8080 50051
+
+# Volume for persistent data and config
+VOLUME ["/app/data", "/app/config"]
+
+# Environment variables
+ENV NITELLA_TOKEN=""
+
+ENTRYPOINT ["/app/nitellad"]
+CMD ["--listen", ":8080", "--admin-port", "50051", \
+     "--db-path", "/app/data/nitella.db", \
+     "--stats-db", "/app/data/stats.db", \
+     "--geoip-city", "/app/db/GeoLite2-City.mmdb", \
+     "--geoip-isp", "/app/db/GeoLite2-ASN.mmdb", \
+     "--geoip-cache", "/app/data/geoip_cache.db"]

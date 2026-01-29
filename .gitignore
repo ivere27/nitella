@@ -5,6 +5,8 @@ bin/
 *.so
 *.dylib
 /mock
+/nitellad
+/nitella
 
 # Test binary
 *.test
@@ -28,6 +30,9 @@ Thumbs.db
 
 # Database
 *.db
+*.db-shm
+*.db-wal
+
 
 # GeoIP databases (download separately)
 *.mmdb

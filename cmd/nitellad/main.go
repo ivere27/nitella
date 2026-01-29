@@ -1,0 +1,502 @@
+package main
+
+import (
+	"crypto/rand"
+	"encoding/hex"
+	"flag"
+	"fmt"
+	"net"
+	"os"
+	"os/signal"
+	"path/filepath"
+	"strings"
+	"syscall"
+	"time"
+
+	"github.com/ivere27/nitella/pkg/api/common"
+	geoip_pb "github.com/ivere27/nitella/pkg/api/geoip"
+	pb "github.com/ivere27/nitella/pkg/api/proxy"
+	cfgpkg "github.com/ivere27/nitella/pkg/config"
+	"github.com/ivere27/nitella/pkg/geoip"
+	"github.com/ivere27/nitella/pkg/log"
+	"github.com/ivere27/nitella/pkg/node"
+	"github.com/ivere27/nitella/pkg/node/stats"
+	"github.com/ivere27/nitella/pkg/server"
+	"google.golang.org/grpc"
+)
+
+func main() {
+	// Check for child mode (subcommand)
+	if len(os.Args) > 1 && os.Args[0] != "child" && os.Args[1] == "child" {
+		runChild()
+		return
+	}
+
+	// Proxy flags
+	configFile := flag.String("config", "", "Path to YAML config file")
+	listenAddr := flag.String("listen", ":8080", "Listen address for proxy")
+	backendTarget := flag.String("backend", "", "Default backend address")
+	dbPath := flag.String("db-path", "nitella.db", "Path to SQLite database")
+	statsDB := flag.String("stats-db", "", "Path to statistics database (default: same dir as config)")
+	processMode := flag.Bool("process-mode", false, "Run each proxy as a separate child process (for isolation)")
+
+	// GeoIP flags
+	geoipCity := flag.String("geoip-city", "", "Path to GeoIP2 City DB")
+	geoipIsp := flag.String("geoip-isp", "", "Path to GeoIP2 ISP DB")
+	geoipCache := flag.String("geoip-cache", "geoip_cache.db", "Path to GeoIP L2 Cache (SQLite)")
+	geoipCacheTTL := flag.Int("geoip-cache-ttl", 24, "GeoIP L2 Cache TTL in hours (0 = permanent)")
+	geoipStrategy := flag.String("geoip-strategy", "l1,l2,local,remote", "Lookup strategy order")
+	geoipTimeout := flag.Int("geoip-timeout", 3000, "GeoIP Remote Provider timeout in milliseconds")
+	geoipAddr := flag.String("geoip-addr", "", "Address of external GeoIP service")
+
+	// TLS flags
+	tlsCert := flag.String("tls-cert", "", "Path to TLS Certificate")
+	tlsKey := flag.String("tls-key", "", "Path to TLS Private Key")
+	tlsCA := flag.String("tls-ca", "", "Path to Client CA Certificate")
+	mtls := flag.Bool("mtls", false, "Require Client Certificates (mTLS)")
+
+	// Admin API flags
+	adminPort := flag.Int("admin-port", 0, "Port for Admin gRPC API (0 = disabled)")
+	adminToken := flag.String("admin-token", os.Getenv("NITELLA_TOKEN"), "Authentication token for Admin API (env: NITELLA_TOKEN)")
+
+	flag.Parse()
+
+	log.Println("Nitella Proxy Daemon starting...")
+
+	// Load config file if specified
+	var yamlConfig *cfgpkg.YAMLConfig
+	if *configFile != "" {
+		ext := strings.ToLower(filepath.Ext(*configFile))
+		if ext == ".yaml" || ext == ".yml" {
+			var err error
+			yamlConfig, err = cfgpkg.LoadYAMLConfig(*configFile)
+			if err != nil {
+				log.Fatalf("Failed to load YAML config: %v", err)
+			}
+			log.Printf("Loaded YAML config from %s", *configFile)
+		} else {
+			log.Fatalf("Unsupported config format: %s (only .yaml/.yml supported)", ext)
+		}
+	}
+
+	// Load TLS files
+	loadFile := func(path string) string {
+		if path == "" {
+			return ""
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			log.Printf("[WARN] Failed to read file %s: %v", path, err)
+			return ""
+		}
+		return string(data)
+	}
+
+	certPEM := loadFile(*tlsCert)
+	keyPEM := loadFile(*tlsKey)
+	caPEM := loadFile(*tlsCA)
+
+	clientAuth := pb.ClientAuthType_CLIENT_AUTH_NONE
+	if *mtls {
+		clientAuth = pb.ClientAuthType_CLIENT_AUTH_REQUIRE
+	} else if caPEM != "" {
+		clientAuth = pb.ClientAuthType_CLIENT_AUTH_REQUEST
+	}
+
+	// Initialize GeoIP
+	var geoIPClient geoip.GeoIPClient
+	if *geoipAddr != "" {
+		log.Printf("Connecting to external GeoIP service at %s...", *geoipAddr)
+		client, err := geoip.NewRemoteClient(*geoipAddr)
+		if err != nil {
+			log.Fatalf("Failed to connect to GeoIP service: %v", err)
+		}
+		geoIPClient = client
+	} else {
+		geoipManager := geoip.NewManager()
+		if *geoipTimeout > 0 {
+			geoipManager.SetTimeout(time.Duration(*geoipTimeout) * time.Millisecond)
+		}
+		if *geoipStrategy != "" {
+			strategies := []string{}
+			for _, s := range strings.Split(*geoipStrategy, ",") {
+				s = strings.TrimSpace(s)
+				if s != "" {
+					strategies = append(strategies, s)
+				}
+			}
+			if len(strategies) > 0 {
+				geoipManager.SetStrategy(strategies)
+			}
+		}
+		if *geoipCache != "" {
+			if err := geoipManager.InitL2(*geoipCache, *geoipCacheTTL); err != nil {
+				log.Printf("Warning: Failed to init GeoIP L2 cache: %v", err)
+			}
+		}
+		if *geoipCity != "" || *geoipIsp != "" {
+			if err := geoipManager.SetLocalDB(*geoipCity, *geoipIsp); err != nil {
+				log.Printf("Warning: Failed to init GeoIP local DB: %v", err)
+			}
+		} else {
+			// Use HTTPS remote providers
+			geoipManager.AddRemoteProvider("ip-whois", "https://ipwhois.app/json/%s")
+			geoipManager.AddRemoteProvider("free-ip-api", "https://freeipapi.com/api/json/%s")
+			log.Println("[INFO] GeoIP using HTTPS remote providers (no local DB)")
+		}
+
+		// Use FFI for zero-copy GeoIP calls (Go-to-Go FFI via synurang)
+		ffiServer := geoip.NewFfiServer(geoipManager)
+		ffiConn := geoip_pb.NewFfiClientConn(ffiServer)
+		geoIPClient = geoip.NewFfiClient(ffiConn)
+		log.Println("[INFO] GeoIP using embedded FFI mode (zero-copy)")
+	}
+
+	// Create ProxyManager
+	// useEmbedded=true means goroutines, useEmbedded=false means child processes
+	useEmbedded := !*processMode
+	pm := node.NewProxyManager(useEmbedded)
+	if *processMode {
+		log.Println("[INFO] Process mode enabled: each proxy runs as a separate child process")
+	}
+	if geoIPClient != nil {
+		pm.GeoIP.SetClient(geoIPClient)
+	}
+
+	// Initialize DB persistence
+	if *configFile == "" {
+		log.Printf("Initializing local SQLite DB for persistence: %s", *dbPath)
+		if err := pm.InitDB(*dbPath); err != nil {
+			log.Printf("[WARN] Failed to initialize DB persistence: %v. Rules will be in-memory only.", err)
+		} else {
+			log.Printf("Persistence enabled: %s", *dbPath)
+		}
+	} else {
+		pm.ConfigPath = *configFile
+	}
+
+	// Initialize stats service
+	statsDir := "."
+	if *configFile != "" {
+		statsDir = filepath.Dir(*configFile)
+	}
+	if *statsDB != "" {
+		statsDir = filepath.Dir(*statsDB)
+	}
+	statsPath := filepath.Join(statsDir, "stats.db")
+	if *statsDB != "" {
+		statsPath = *statsDB
+	}
+
+	statsService, statsErr := stats.NewStatsService(statsPath)
+	if statsErr == nil {
+		statsService.Start()
+		statsService.SetEnabled(true)
+		pm.SetStatsService(statsService)
+		log.Printf("[INFO] Statistics service enabled: %s", statsPath)
+	} else {
+		log.Printf("[WARN] Failed to initialize stats service: %v", statsErr)
+	}
+
+	// Build listeners from config or command line
+	type listenerConfig struct {
+		name          string
+		listenAddr    string
+		defaultBackend string
+		defaultAction string
+		defaultMock   string
+		certPEM       string
+		keyPEM        string
+		caPEM         string
+		clientAuth    pb.ClientAuthType
+	}
+
+	var listeners []listenerConfig
+
+	if yamlConfig != nil {
+		for name, ep := range yamlConfig.EntryPoints {
+			lc := listenerConfig{
+				name:          name,
+				listenAddr:    ep.Address,
+				defaultAction: ep.DefaultAction,
+				defaultMock:   ep.DefaultMock,
+				certPEM:       certPEM,
+				keyPEM:        keyPEM,
+				caPEM:         caPEM,
+				clientAuth:    clientAuth,
+			}
+			// Find associated service
+			for _, router := range yamlConfig.TCP.Routers {
+				if containsString(router.EntryPoints, name) && router.Service != "" {
+					if svc, ok := yamlConfig.TCP.Services[router.Service]; ok {
+						lc.defaultBackend = svc.Address
+						break
+					}
+				}
+			}
+			listeners = append(listeners, lc)
+		}
+		log.Printf("Configured %d listeners from YAML", len(listeners))
+	} else {
+		// Command-line mode
+		be := *backendTarget
+		if be == "" {
+			log.Fatal("No backend specified. Use --backend or provide a config file.")
+		}
+		listeners = append(listeners, listenerConfig{
+			name:          "default",
+			listenAddr:    *listenAddr,
+			defaultBackend: be,
+			defaultAction: "allow",
+			certPEM:       certPEM,
+			keyPEM:        keyPEM,
+			caPEM:         caPEM,
+			clientAuth:    clientAuth,
+		})
+	}
+
+	// Start proxies
+	var proxyIDs []string
+	for _, lc := range listeners {
+		// Convert string action to enum
+		var actionType common.ActionType
+		switch strings.ToLower(lc.defaultAction) {
+		case "block":
+			actionType = common.ActionType_ACTION_TYPE_BLOCK
+		case "mock":
+			actionType = common.ActionType_ACTION_TYPE_MOCK
+		default:
+			actionType = common.ActionType_ACTION_TYPE_ALLOW
+		}
+
+		resp, err := pm.CreateProxy(&pb.CreateProxyRequest{
+			ListenAddr:     lc.listenAddr,
+			DefaultBackend: lc.defaultBackend,
+			Name:           lc.name,
+			CertPem:        lc.certPEM,
+			KeyPem:         lc.keyPEM,
+			CaPem:          lc.caPEM,
+			ClientAuthType: lc.clientAuth,
+			DefaultAction:  actionType,
+			DefaultMock:    node.StringToMockPreset(lc.defaultMock),
+		})
+		if err != nil || !resp.Success {
+			log.Fatalf("Failed to start proxy %s: %v %s", lc.name, err, resp.ErrorMessage)
+		}
+		proxyID := resp.ProxyId
+		proxyIDs = append(proxyIDs, proxyID)
+
+		defaultAction := strings.ToLower(lc.defaultAction)
+		if defaultAction == "" {
+			defaultAction = "allow"
+		}
+		log.Printf("Proxy [%s] started on %s -> %s (ID: %s, default: %s)",
+			lc.name, lc.listenAddr, lc.defaultBackend, proxyID, defaultAction)
+
+		// Add default rule
+		defaultRule := &pb.Rule{
+			Name:     "__default",
+			Priority: -1000,
+			Enabled:  true,
+		}
+		if defaultAction == "block" {
+			defaultRule.Action = common.ActionType_ACTION_TYPE_BLOCK
+			log.Printf("  Default: BLOCK (whitelist mode)")
+		} else if defaultAction == "mock" {
+			defaultRule.Action = common.ActionType_ACTION_TYPE_MOCK
+			defaultRule.MockResponse = &pb.MockConfig{
+				Preset: node.StringToMockPreset(lc.defaultMock),
+			}
+			log.Printf("  Default: MOCK (preset: %s)", lc.defaultMock)
+		} else {
+			defaultRule.Action = common.ActionType_ACTION_TYPE_ALLOW
+			log.Printf("  Default: ALLOW (blacklist mode)")
+		}
+		if _, err := pm.AddRule(&pb.AddRuleRequest{
+			ProxyId: proxyID,
+			Rule:    defaultRule,
+		}); err != nil {
+			log.Printf("  Warning: Failed to add default rule: %v", err)
+		}
+	}
+
+	// Start Admin API Server
+	var adminServer *grpc.Server
+	if *adminPort > 0 {
+		// Generate token if not provided
+		if *adminToken == "" {
+			*adminToken = generateToken()
+			log.Printf("[Admin] Generated token (keep secret): %s", *adminToken)
+		}
+
+		adminLis, err := net.Listen("tcp", fmt.Sprintf(":%d", *adminPort))
+		if err != nil {
+			log.Fatalf("Failed to listen on admin port %d: %v", *adminPort, err)
+		}
+
+		adminServer = grpc.NewServer(
+			grpc.UnaryInterceptor(server.ProxyAdminAuthInterceptor(*adminToken)),
+			grpc.StreamInterceptor(server.ProxyAdminStreamAuthInterceptor(*adminToken)),
+		)
+		server.RegisterProxyAdmin(adminServer, server.NewProxyAdminServer(pm))
+
+		log.Printf("[Admin] gRPC API listening on :%d", *adminPort)
+
+		go func() {
+			if err := adminServer.Serve(adminLis); err != nil {
+				log.Printf("[Admin] Server error: %v", err)
+			}
+		}()
+	}
+
+	// Wait for shutdown signal
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
+	<-sigCh
+
+	log.Println("Shutting down...")
+	if adminServer != nil {
+		adminServer.GracefulStop()
+	}
+	// Close ProxyManager (stops all listeners, health checks, GeoIP)
+	pm.Close()
+	if statsService != nil {
+		statsService.Stop()
+	}
+	log.Println("Goodbye.")
+}
+
+func containsString(slice []string, s string) bool {
+	for _, item := range slice {
+		if item == s {
+			return true
+		}
+	}
+	return false
+}
+
+// generateToken generates a random 32-character token.
+func generateToken() string {
+	bytes := make([]byte, 16)
+	if _, err := rand.Read(bytes); err != nil {
+		return "default-token-" + fmt.Sprintf("%d", os.Getpid())
+	}
+	return hex.EncodeToString(bytes)
+}
+
+func init() {
+	// Set up usage message
+	flag.Usage = func() {
+		fmt.Fprintf(os.Stderr, `nitellad - Nitella Proxy Daemon
+
+Usage: nitellad [options]
+
+Proxy Options:
+  -listen string       Listen address for proxy (default ":8080")
+  -backend string      Default backend address (required unless -config)
+  -config string       Path to YAML config file
+  -db-path string      Path to SQLite database (default "nitella.db")
+  -stats-db string     Path to statistics database
+  -process-mode        Run each proxy as separate child process (for isolation)
+
+Admin API Options:
+  -admin-port int      Port for Admin gRPC API (0 = disabled)
+  -admin-token string  Authentication token (env: NITELLA_TOKEN)
+
+TLS Options:
+  -tls-cert string     Path to TLS Certificate
+  -tls-key string      Path to TLS Private Key
+  -tls-ca string       Path to Client CA Certificate
+  -mtls                Require Client Certificates (mTLS)
+
+GeoIP Options:
+  -geoip-city string   Path to GeoIP2 City DB (MaxMind)
+  -geoip-isp string    Path to GeoIP2 ISP/ASN DB (MaxMind)
+  -geoip-cache string  Path to GeoIP L2 Cache SQLite (default "geoip_cache.db")
+  -geoip-cache-ttl int GeoIP L2 Cache TTL in hours (default 24)
+  -geoip-strategy str  Lookup order: l1,l2,local,remote (default "l1,l2,local,remote")
+  -geoip-timeout int   Remote provider timeout in ms (default 3000)
+  -geoip-addr string   External GeoIP service address (optional)
+
+Examples:
+  # Basic proxy
+  nitellad --listen :8080 --backend localhost:3000
+
+  # With admin API (generates token if not provided)
+  nitellad --listen :8080 --backend localhost:3000 --admin-port 50051
+
+  # With admin API and custom token
+  nitellad --listen :8080 --backend localhost:3000 --admin-port 50051 --admin-token mytoken
+
+  # Using YAML config
+  nitellad --config proxy.yaml
+
+  # With local GeoIP database
+  nitellad --listen :8080 --backend localhost:3000 --geoip-city /path/to/GeoLite2-City.mmdb
+
+  # With TLS
+  nitellad --listen :8443 --backend localhost:3000 --tls-cert cert.pem --tls-key key.pem
+
+  # Process mode (each proxy as separate child process for isolation)
+  nitellad --listen :8080 --backend localhost:3000 --process-mode --admin-port 50051
+`)
+	}
+}
+
+// runChild runs in child process mode.
+// Child processes handle a single listener and communicate with parent via Unix socket.
+func runChild() {
+	// Parse child-specific flags
+	childFlags := flag.NewFlagSet("child", flag.ExitOnError)
+	socketPath := childFlags.String("socket", "", "Unix socket path for IPC")
+	listenAddr := childFlags.String("listen", "", "Listen address")
+	proxyID := childFlags.String("id", "", "Proxy ID")
+	_ = childFlags.String("name", "", "Proxy name") // Used by parent to identify listener
+	backendAddr := childFlags.String("backend", "", "Default backend address")
+
+	if err := childFlags.Parse(os.Args[2:]); err != nil {
+		log.Fatalf("[child] Failed to parse flags: %v", err)
+	}
+
+	if *socketPath == "" {
+		log.Fatal("[child] --socket is required")
+	}
+
+	log.Printf("[child] Starting child process (id=%s, socket=%s)", *proxyID, *socketPath)
+
+	// Create ProxyManager for this child (embedded listeners)
+	pm := node.NewProxyManager(true)
+
+	// Create gRPC server on Unix socket
+	listener, err := net.Listen("unix", *socketPath)
+	if err != nil {
+		log.Fatalf("[child] Failed to create Unix socket: %v", err)
+	}
+	defer listener.Close()
+
+	grpcServer := grpc.NewServer()
+	processServer := server.NewProcessServer(pm)
+
+	// Register process control service
+	server.RegisterProcessControl(grpcServer, processServer)
+
+	log.Printf("[child] Unix socket ready: %s", *socketPath)
+	log.Printf("[child] Waiting for parent to initialize listener (listen=%s, backend=%s)", *listenAddr, *backendAddr)
+
+	// Handle shutdown signals
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
+
+	go func() {
+		<-sigCh
+		log.Println("[child] Shutting down...")
+		grpcServer.GracefulStop()
+	}()
+
+	// Serve gRPC
+	if err := grpcServer.Serve(listener); err != nil {
+		log.Printf("[child] gRPC server error: %v", err)
+	}
+
+	log.Println("[child] Goodbye.")
+}

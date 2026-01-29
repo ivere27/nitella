@@ -174,6 +174,39 @@ func (c *RemoteAdminClient) Close() error {
 }
 
 // ============================================================================
+// FFI Client (Zero-Copy via synurang)
+// ============================================================================
+
+// FfiClient is an FFI GeoIP client using synurang zero-copy FFI.
+// This avoids serialization overhead for Go-to-Go calls.
+type FfiClient struct {
+	client pb.GeoIPServiceClient
+}
+
+// NewFfiClient creates an FFI GeoIP client using synurang FFI.
+// The conn should be created via geoip_pb.NewFfiClientConn(ffiServer).
+func NewFfiClient(conn grpc.ClientConnInterface) *FfiClient {
+	return &FfiClient{
+		client: pb.NewGeoIPServiceClient(conn),
+	}
+}
+
+// Lookup performs IP geolocation lookup via FFI.
+func (c *FfiClient) Lookup(ctx context.Context, ip string) (*pbCommon.GeoInfo, error) {
+	return c.client.Lookup(ctx, &pb.LookupRequest{Ip: ip})
+}
+
+// GetStatus returns service status via FFI.
+func (c *FfiClient) GetStatus(ctx context.Context) (*pb.ServiceStatus, error) {
+	return c.client.GetStatus(ctx, &emptypb.Empty{})
+}
+
+// Close is a no-op for FFI client (no network connection).
+func (c *FfiClient) Close() error {
+	return nil
+}
+
+// ============================================================================
 // Factory Functions
 // ============================================================================
 

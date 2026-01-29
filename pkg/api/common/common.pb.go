@@ -21,6 +21,378 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
+// ActionType defines the possible actions for rules and defaults
+type ActionType int32
+
+const (
+	ActionType_ACTION_TYPE_UNSPECIFIED ActionType = 0
+	ActionType_ACTION_TYPE_ALLOW       ActionType = 1
+	ActionType_ACTION_TYPE_BLOCK       ActionType = 2
+	ActionType_ACTION_TYPE_MOCK        ActionType = 3
+)
+
+// Enum value maps for ActionType.
+var (
+	ActionType_name = map[int32]string{
+		0: "ACTION_TYPE_UNSPECIFIED",
+		1: "ACTION_TYPE_ALLOW",
+		2: "ACTION_TYPE_BLOCK",
+		3: "ACTION_TYPE_MOCK",
+	}
+	ActionType_value = map[string]int32{
+		"ACTION_TYPE_UNSPECIFIED": 0,
+		"ACTION_TYPE_ALLOW":       1,
+		"ACTION_TYPE_BLOCK":       2,
+		"ACTION_TYPE_MOCK":        3,
+	}
+)
+
+func (x ActionType) Enum() *ActionType {
+	p := new(ActionType)
+	*p = x
+	return p
+}
+
+func (x ActionType) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (ActionType) Descriptor() protoreflect.EnumDescriptor {
+	return file_common_common_proto_enumTypes[0].Descriptor()
+}
+
+func (ActionType) Type() protoreflect.EnumType {
+	return &file_common_common_proto_enumTypes[0]
+}
+
+func (x ActionType) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use ActionType.Descriptor instead.
+func (ActionType) EnumDescriptor() ([]byte, []int) {
+	return file_common_common_proto_rawDescGZIP(), []int{0}
+}
+
+// FallbackAction defines what to do when a primary action fails or is not applicable
+type FallbackAction int32
+
+const (
+	FallbackAction_FALLBACK_ACTION_UNSPECIFIED FallbackAction = 0
+	FallbackAction_FALLBACK_ACTION_CLOSE       FallbackAction = 1
+	FallbackAction_FALLBACK_ACTION_MOCK        FallbackAction = 2
+)
+
+// Enum value maps for FallbackAction.
+var (
+	FallbackAction_name = map[int32]string{
+		0: "FALLBACK_ACTION_UNSPECIFIED",
+		1: "FALLBACK_ACTION_CLOSE",
+		2: "FALLBACK_ACTION_MOCK",
+	}
+	FallbackAction_value = map[string]int32{
+		"FALLBACK_ACTION_UNSPECIFIED": 0,
+		"FALLBACK_ACTION_CLOSE":       1,
+		"FALLBACK_ACTION_MOCK":        2,
+	}
+)
+
+func (x FallbackAction) Enum() *FallbackAction {
+	p := new(FallbackAction)
+	*p = x
+	return p
+}
+
+func (x FallbackAction) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (FallbackAction) Descriptor() protoreflect.EnumDescriptor {
+	return file_common_common_proto_enumTypes[1].Descriptor()
+}
+
+func (FallbackAction) Type() protoreflect.EnumType {
+	return &file_common_common_proto_enumTypes[1]
+}
+
+func (x FallbackAction) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use FallbackAction.Descriptor instead.
+func (FallbackAction) EnumDescriptor() ([]byte, []int) {
+	return file_common_common_proto_rawDescGZIP(), []int{1}
+}
+
+// MockPreset defines pre-configured mock responses
+type MockPreset int32
+
+const (
+	MockPreset_MOCK_PRESET_UNSPECIFIED   MockPreset = 0
+	MockPreset_MOCK_PRESET_SSH_SECURE    MockPreset = 1
+	MockPreset_MOCK_PRESET_SSH_TARPIT    MockPreset = 2
+	MockPreset_MOCK_PRESET_HTTP_403      MockPreset = 3
+	MockPreset_MOCK_PRESET_HTTP_404      MockPreset = 4
+	MockPreset_MOCK_PRESET_HTTP_401      MockPreset = 5
+	MockPreset_MOCK_PRESET_REDIS_SECURE  MockPreset = 6
+	MockPreset_MOCK_PRESET_MYSQL_SECURE  MockPreset = 7
+	MockPreset_MOCK_PRESET_MYSQL_TARPIT  MockPreset = 8
+	MockPreset_MOCK_PRESET_RDP_SECURE    MockPreset = 9
+	MockPreset_MOCK_PRESET_TELNET_SECURE MockPreset = 10
+	MockPreset_MOCK_PRESET_RAW_TARPIT    MockPreset = 11
+)
+
+// Enum value maps for MockPreset.
+var (
+	MockPreset_name = map[int32]string{
+		0:  "MOCK_PRESET_UNSPECIFIED",
+		1:  "MOCK_PRESET_SSH_SECURE",
+		2:  "MOCK_PRESET_SSH_TARPIT",
+		3:  "MOCK_PRESET_HTTP_403",
+		4:  "MOCK_PRESET_HTTP_404",
+		5:  "MOCK_PRESET_HTTP_401",
+		6:  "MOCK_PRESET_REDIS_SECURE",
+		7:  "MOCK_PRESET_MYSQL_SECURE",
+		8:  "MOCK_PRESET_MYSQL_TARPIT",
+		9:  "MOCK_PRESET_RDP_SECURE",
+		10: "MOCK_PRESET_TELNET_SECURE",
+		11: "MOCK_PRESET_RAW_TARPIT",
+	}
+	MockPreset_value = map[string]int32{
+		"MOCK_PRESET_UNSPECIFIED":   0,
+		"MOCK_PRESET_SSH_SECURE":    1,
+		"MOCK_PRESET_SSH_TARPIT":    2,
+		"MOCK_PRESET_HTTP_403":      3,
+		"MOCK_PRESET_HTTP_404":      4,
+		"MOCK_PRESET_HTTP_401":      5,
+		"MOCK_PRESET_REDIS_SECURE":  6,
+		"MOCK_PRESET_MYSQL_SECURE":  7,
+		"MOCK_PRESET_MYSQL_TARPIT":  8,
+		"MOCK_PRESET_RDP_SECURE":    9,
+		"MOCK_PRESET_TELNET_SECURE": 10,
+		"MOCK_PRESET_RAW_TARPIT":    11,
+	}
+)
+
+func (x MockPreset) Enum() *MockPreset {
+	p := new(MockPreset)
+	*p = x
+	return p
+}
+
+func (x MockPreset) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (MockPreset) Descriptor() protoreflect.EnumDescriptor {
+	return file_common_common_proto_enumTypes[2].Descriptor()
+}
+
+func (MockPreset) Type() protoreflect.EnumType {
+	return &file_common_common_proto_enumTypes[2]
+}
+
+func (x MockPreset) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use MockPreset.Descriptor instead.
+func (MockPreset) EnumDescriptor() ([]byte, []int) {
+	return file_common_common_proto_rawDescGZIP(), []int{2}
+}
+
+// ConditionType defines the type of condition in a rule
+type ConditionType int32
+
+const (
+	ConditionType_CONDITION_TYPE_UNSPECIFIED     ConditionType = 0
+	ConditionType_CONDITION_TYPE_SOURCE_IP       ConditionType = 1
+	ConditionType_CONDITION_TYPE_GEO_COUNTRY     ConditionType = 2
+	ConditionType_CONDITION_TYPE_GEO_CITY        ConditionType = 3
+	ConditionType_CONDITION_TYPE_GEO_ISP         ConditionType = 4
+	ConditionType_CONDITION_TYPE_TIME_RANGE      ConditionType = 5 // Format: "HH:MM-HH:MM" (24h)
+	ConditionType_CONDITION_TYPE_TLS_FINGERPRINT ConditionType = 6
+	ConditionType_CONDITION_TYPE_TLS_CN          ConditionType = 7
+	ConditionType_CONDITION_TYPE_TLS_SERIAL      ConditionType = 8
+	ConditionType_CONDITION_TYPE_TLS_PRESENT     ConditionType = 9  // Client presented any valid cert (value: "true" or "false")
+	ConditionType_CONDITION_TYPE_TLS_CA          ConditionType = 10 // Issuing CA CommonName matches
+	ConditionType_CONDITION_TYPE_TLS_SAN         ConditionType = 11 // Subject Alternative Name matches (DNS or email)
+	ConditionType_CONDITION_TYPE_TLS_OU          ConditionType = 12 // Organizational Unit matches
+)
+
+// Enum value maps for ConditionType.
+var (
+	ConditionType_name = map[int32]string{
+		0:  "CONDITION_TYPE_UNSPECIFIED",
+		1:  "CONDITION_TYPE_SOURCE_IP",
+		2:  "CONDITION_TYPE_GEO_COUNTRY",
+		3:  "CONDITION_TYPE_GEO_CITY",
+		4:  "CONDITION_TYPE_GEO_ISP",
+		5:  "CONDITION_TYPE_TIME_RANGE",
+		6:  "CONDITION_TYPE_TLS_FINGERPRINT",
+		7:  "CONDITION_TYPE_TLS_CN",
+		8:  "CONDITION_TYPE_TLS_SERIAL",
+		9:  "CONDITION_TYPE_TLS_PRESENT",
+		10: "CONDITION_TYPE_TLS_CA",
+		11: "CONDITION_TYPE_TLS_SAN",
+		12: "CONDITION_TYPE_TLS_OU",
+	}
+	ConditionType_value = map[string]int32{
+		"CONDITION_TYPE_UNSPECIFIED":     0,
+		"CONDITION_TYPE_SOURCE_IP":       1,
+		"CONDITION_TYPE_GEO_COUNTRY":     2,
+		"CONDITION_TYPE_GEO_CITY":        3,
+		"CONDITION_TYPE_GEO_ISP":         4,
+		"CONDITION_TYPE_TIME_RANGE":      5,
+		"CONDITION_TYPE_TLS_FINGERPRINT": 6,
+		"CONDITION_TYPE_TLS_CN":          7,
+		"CONDITION_TYPE_TLS_SERIAL":      8,
+		"CONDITION_TYPE_TLS_PRESENT":     9,
+		"CONDITION_TYPE_TLS_CA":          10,
+		"CONDITION_TYPE_TLS_SAN":         11,
+		"CONDITION_TYPE_TLS_OU":          12,
+	}
+)
+
+func (x ConditionType) Enum() *ConditionType {
+	p := new(ConditionType)
+	*p = x
+	return p
+}
+
+func (x ConditionType) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (ConditionType) Descriptor() protoreflect.EnumDescriptor {
+	return file_common_common_proto_enumTypes[3].Descriptor()
+}
+
+func (ConditionType) Type() protoreflect.EnumType {
+	return &file_common_common_proto_enumTypes[3]
+}
+
+func (x ConditionType) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use ConditionType.Descriptor instead.
+func (ConditionType) EnumDescriptor() ([]byte, []int) {
+	return file_common_common_proto_rawDescGZIP(), []int{3}
+}
+
+// Operator defines how to match the value in a condition
+type Operator int32
+
+const (
+	Operator_OPERATOR_UNSPECIFIED Operator = 0
+	Operator_OPERATOR_EQ          Operator = 1 // Equals
+	Operator_OPERATOR_CONTAINS    Operator = 2 // String contains
+	Operator_OPERATOR_REGEX       Operator = 3 // Regular expression
+	Operator_OPERATOR_CIDR        Operator = 4 // IP CIDR match (e.g., 192.168.1.0/24)
+)
+
+// Enum value maps for Operator.
+var (
+	Operator_name = map[int32]string{
+		0: "OPERATOR_UNSPECIFIED",
+		1: "OPERATOR_EQ",
+		2: "OPERATOR_CONTAINS",
+		3: "OPERATOR_REGEX",
+		4: "OPERATOR_CIDR",
+	}
+	Operator_value = map[string]int32{
+		"OPERATOR_UNSPECIFIED": 0,
+		"OPERATOR_EQ":          1,
+		"OPERATOR_CONTAINS":    2,
+		"OPERATOR_REGEX":       3,
+		"OPERATOR_CIDR":        4,
+	}
+)
+
+func (x Operator) Enum() *Operator {
+	p := new(Operator)
+	*p = x
+	return p
+}
+
+func (x Operator) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (Operator) Descriptor() protoreflect.EnumDescriptor {
+	return file_common_common_proto_enumTypes[4].Descriptor()
+}
+
+func (Operator) Type() protoreflect.EnumType {
+	return &file_common_common_proto_enumTypes[4]
+}
+
+func (x Operator) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use Operator.Descriptor instead.
+func (Operator) EnumDescriptor() ([]byte, []int) {
+	return file_common_common_proto_rawDescGZIP(), []int{4}
+}
+
+// SortOrder defines sorting options for statistics queries
+type SortOrder int32
+
+const (
+	SortOrder_SORT_LAST_SEEN_DESC        SortOrder = 0 // Default
+	SortOrder_SORT_LAST_SEEN_ASC         SortOrder = 1
+	SortOrder_SORT_CONNECTION_COUNT_DESC SortOrder = 2
+	SortOrder_SORT_BYTES_TOTAL_DESC      SortOrder = 3
+	SortOrder_SORT_RECENCY_WEIGHT_DESC   SortOrder = 4
+)
+
+// Enum value maps for SortOrder.
+var (
+	SortOrder_name = map[int32]string{
+		0: "SORT_LAST_SEEN_DESC",
+		1: "SORT_LAST_SEEN_ASC",
+		2: "SORT_CONNECTION_COUNT_DESC",
+		3: "SORT_BYTES_TOTAL_DESC",
+		4: "SORT_RECENCY_WEIGHT_DESC",
+	}
+	SortOrder_value = map[string]int32{
+		"SORT_LAST_SEEN_DESC":        0,
+		"SORT_LAST_SEEN_ASC":         1,
+		"SORT_CONNECTION_COUNT_DESC": 2,
+		"SORT_BYTES_TOTAL_DESC":      3,
+		"SORT_RECENCY_WEIGHT_DESC":   4,
+	}
+)
+
+func (x SortOrder) Enum() *SortOrder {
+	p := new(SortOrder)
+	*p = x
+	return p
+}
+
+func (x SortOrder) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (SortOrder) Descriptor() protoreflect.EnumDescriptor {
+	return file_common_common_proto_enumTypes[5].Descriptor()
+}
+
+func (SortOrder) Type() protoreflect.EnumType {
+	return &file_common_common_proto_enumTypes[5]
+}
+
+func (x SortOrder) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use SortOrder.Descriptor instead.
+func (SortOrder) EnumDescriptor() ([]byte, []int) {
+	return file_common_common_proto_rawDescGZIP(), []int{5}
+}
+
 // GeoInfo contains geographical information for an IP address.
 type GeoInfo struct {
 	state   protoimpl.MessageState `protogen:"open.v1"`
@@ -194,7 +566,59 @@ const file_common_common_proto_rawDesc = "" +
 	"\x02as\x18\f \x01(\tR\x02as\x12\x16\n" +
 	"\x06source\x18\r \x01(\tR\x06source\x12\x1d\n" +
 	"\n" +
-	"latency_ms\x18\x0e \x01(\x03R\tlatencyMsB+Z)github.com/ivere27/nitella/pkg/api/commonb\x06proto3"
+	"latency_ms\x18\x0e \x01(\x03R\tlatencyMs*m\n" +
+	"\n" +
+	"ActionType\x12\x1b\n" +
+	"\x17ACTION_TYPE_UNSPECIFIED\x10\x00\x12\x15\n" +
+	"\x11ACTION_TYPE_ALLOW\x10\x01\x12\x15\n" +
+	"\x11ACTION_TYPE_BLOCK\x10\x02\x12\x14\n" +
+	"\x10ACTION_TYPE_MOCK\x10\x03*f\n" +
+	"\x0eFallbackAction\x12\x1f\n" +
+	"\x1bFALLBACK_ACTION_UNSPECIFIED\x10\x00\x12\x19\n" +
+	"\x15FALLBACK_ACTION_CLOSE\x10\x01\x12\x18\n" +
+	"\x14FALLBACK_ACTION_MOCK\x10\x02*\xe0\x02\n" +
+	"\n" +
+	"MockPreset\x12\x1b\n" +
+	"\x17MOCK_PRESET_UNSPECIFIED\x10\x00\x12\x1a\n" +
+	"\x16MOCK_PRESET_SSH_SECURE\x10\x01\x12\x1a\n" +
+	"\x16MOCK_PRESET_SSH_TARPIT\x10\x02\x12\x18\n" +
+	"\x14MOCK_PRESET_HTTP_403\x10\x03\x12\x18\n" +
+	"\x14MOCK_PRESET_HTTP_404\x10\x04\x12\x18\n" +
+	"\x14MOCK_PRESET_HTTP_401\x10\x05\x12\x1c\n" +
+	"\x18MOCK_PRESET_REDIS_SECURE\x10\x06\x12\x1c\n" +
+	"\x18MOCK_PRESET_MYSQL_SECURE\x10\a\x12\x1c\n" +
+	"\x18MOCK_PRESET_MYSQL_TARPIT\x10\b\x12\x1a\n" +
+	"\x16MOCK_PRESET_RDP_SECURE\x10\t\x12\x1d\n" +
+	"\x19MOCK_PRESET_TELNET_SECURE\x10\n" +
+	"\x12\x1a\n" +
+	"\x16MOCK_PRESET_RAW_TARPIT\x10\v*\x95\x03\n" +
+	"\rConditionType\x12\x1e\n" +
+	"\x1aCONDITION_TYPE_UNSPECIFIED\x10\x00\x12\x1c\n" +
+	"\x18CONDITION_TYPE_SOURCE_IP\x10\x01\x12\x1e\n" +
+	"\x1aCONDITION_TYPE_GEO_COUNTRY\x10\x02\x12\x1b\n" +
+	"\x17CONDITION_TYPE_GEO_CITY\x10\x03\x12\x1a\n" +
+	"\x16CONDITION_TYPE_GEO_ISP\x10\x04\x12\x1d\n" +
+	"\x19CONDITION_TYPE_TIME_RANGE\x10\x05\x12\"\n" +
+	"\x1eCONDITION_TYPE_TLS_FINGERPRINT\x10\x06\x12\x19\n" +
+	"\x15CONDITION_TYPE_TLS_CN\x10\a\x12\x1d\n" +
+	"\x19CONDITION_TYPE_TLS_SERIAL\x10\b\x12\x1e\n" +
+	"\x1aCONDITION_TYPE_TLS_PRESENT\x10\t\x12\x19\n" +
+	"\x15CONDITION_TYPE_TLS_CA\x10\n" +
+	"\x12\x1a\n" +
+	"\x16CONDITION_TYPE_TLS_SAN\x10\v\x12\x19\n" +
+	"\x15CONDITION_TYPE_TLS_OU\x10\f*s\n" +
+	"\bOperator\x12\x18\n" +
+	"\x14OPERATOR_UNSPECIFIED\x10\x00\x12\x0f\n" +
+	"\vOPERATOR_EQ\x10\x01\x12\x15\n" +
+	"\x11OPERATOR_CONTAINS\x10\x02\x12\x12\n" +
+	"\x0eOPERATOR_REGEX\x10\x03\x12\x11\n" +
+	"\rOPERATOR_CIDR\x10\x04*\x95\x01\n" +
+	"\tSortOrder\x12\x17\n" +
+	"\x13SORT_LAST_SEEN_DESC\x10\x00\x12\x16\n" +
+	"\x12SORT_LAST_SEEN_ASC\x10\x01\x12\x1e\n" +
+	"\x1aSORT_CONNECTION_COUNT_DESC\x10\x02\x12\x19\n" +
+	"\x15SORT_BYTES_TOTAL_DESC\x10\x03\x12\x1c\n" +
+	"\x18SORT_RECENCY_WEIGHT_DESC\x10\x04B+Z)github.com/ivere27/nitella/pkg/api/commonb\x06proto3"
 
 var (
 	file_common_common_proto_rawDescOnce sync.Once
@@ -208,9 +632,16 @@ func file_common_common_proto_rawDescGZIP() []byte {
 	return file_common_common_proto_rawDescData
 }
 
+var file_common_common_proto_enumTypes = make([]protoimpl.EnumInfo, 6)
 var file_common_common_proto_msgTypes = make([]protoimpl.MessageInfo, 1)
 var file_common_common_proto_goTypes = []any{
-	(*GeoInfo)(nil), // 0: nitella.GeoInfo
+	(ActionType)(0),     // 0: nitella.ActionType
+	(FallbackAction)(0), // 1: nitella.FallbackAction
+	(MockPreset)(0),     // 2: nitella.MockPreset
+	(ConditionType)(0),  // 3: nitella.ConditionType
+	(Operator)(0),       // 4: nitella.Operator
+	(SortOrder)(0),      // 5: nitella.SortOrder
+	(*GeoInfo)(nil),     // 6: nitella.GeoInfo
 }
 var file_common_common_proto_depIdxs = []int32{
 	0, // [0:0] is the sub-list for method output_type
@@ -230,13 +661,14 @@ func file_common_common_proto_init() {
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_common_common_proto_rawDesc), len(file_common_common_proto_rawDesc)),
-			NumEnums:      0,
+			NumEnums:      6,
 			NumMessages:   1,
 			NumExtensions: 0,
 			NumServices:   0,
 		},
 		GoTypes:           file_common_common_proto_goTypes,
 		DependencyIndexes: file_common_common_proto_depIdxs,
+		EnumInfos:         file_common_common_proto_enumTypes,
 		MessageInfos:      file_common_common_proto_msgTypes,
 	}.Build()
 	File_common_common_proto = out.File

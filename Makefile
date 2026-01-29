@@ -8,21 +8,59 @@ COMMIT_HASH ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo "unknown")
 BUILD_DATE := $(shell date +"%Y-%m-%dT%H:%M:%SZ")
 LD_FLAGS := -X main.commitHash=$(COMMIT_HASH) -X main.buildDate=$(BUILD_DATE)
 
-.PHONY: all build proto test clean deps fmt lint
+.PHONY: all build proto test clean deps fmt lint build_plugin
 
 all: build
+
+# ============================================================================
+# Build synurang FFI plugin
+# ============================================================================
+
+SYNURANG_REPO ?= github.com/ivere27/synurang
+
+build_plugin:
+	@echo "Building protoc-gen-synurang-ffi..."
+	go install $(SYNURANG_REPO)/cmd/protoc-gen-synurang-ffi@latest
+	@echo "Installed to $(shell go env GOPATH)/bin/protoc-gen-synurang-ffi"
 
 # ============================================================================
 # Build All
 # ============================================================================
 
-build: proto geoip_build mock_build
+build: proto geoip_build mock_build nitellad_build nitella_build
 
 # ============================================================================
 # Proto Generation
 # ============================================================================
 
-proto: geoip_proto
+proto: common_proto proxy_proto process_proto geoip_proto geoip_ffi_proto
+
+common_proto:
+	@mkdir -p pkg/api/common
+	protoc --proto_path=api \
+		--go_out=pkg/api --go_opt=paths=source_relative \
+		api/common/common.proto
+
+proxy_proto: common_proto
+	@mkdir -p pkg/api/proxy
+	protoc --proto_path=api \
+		--go_out=pkg/api --go_opt=paths=source_relative \
+		--go-grpc_out=pkg/api --go-grpc_opt=paths=source_relative \
+		api/proxy/proxy.proto
+
+process_proto: common_proto proxy_proto
+	@mkdir -p pkg/api/process
+	protoc --proto_path=api \
+		--go_out=pkg/api --go_opt=paths=source_relative \
+		--go-grpc_out=pkg/api --go-grpc_opt=paths=source_relative \
+		api/process/process.proto
+
+geoip_ffi_proto: common_proto geoip_proto
+	@mkdir -p pkg/api/geoip
+	protoc --proto_path=api \
+		--plugin=protoc-gen-synurang-ffi=$(shell go env GOPATH)/bin/protoc-gen-synurang-ffi \
+		--synurang-ffi_out=pkg/api/geoip --synurang-ffi_opt=paths=source_relative,services=GeoIPService \
+		api/geoip/geoip.proto
 
 # ============================================================================
 # Test
@@ -97,6 +135,45 @@ geoip_clean:
 	rm -f pkg/api/geoip/*.pb.go
 
 # ============================================================================
+# Nitellad Proxy Daemon
+# ============================================================================
+
+.PHONY: nitellad_build nitellad_run nitellad_test nitellad_test_integration nitella_build nitella_run nitellad_docker_build nitellad_docker_run
+
+nitellad_build: proto
+	@mkdir -p $(BUILD_DIR)
+	go build -ldflags "$(LD_FLAGS)" -o $(BUILD_DIR)/nitellad ./cmd/nitellad
+
+nitella_build: proto
+	@mkdir -p $(BUILD_DIR)
+	go build -ldflags "$(LD_FLAGS)" -o $(BUILD_DIR)/nitella ./cmd/nitella
+
+nitellad_run: nitellad_build
+	./$(BUILD_DIR)/nitellad
+
+# Run nitella CLI
+# Usage: make nitella_run TOKEN=xxx ADDR=localhost:50051
+NITELLA_ADDR ?= localhost:50051
+nitella_run: nitella_build
+	./$(BUILD_DIR)/nitella --addr $(NITELLA_ADDR) $(if $(TOKEN),--token $(TOKEN))
+
+nitellad_test:
+	go test -v ./pkg/node/...
+
+# Integration tests for nitellad and nitella (requires binaries)
+# Tests: standalone mode, YAML config, multiple clients, rule enforcement (block/allow/mock)
+# Tests: child process mode (ProcessListener), multiple children, CLI commands
+# Mode tests run in both embedded and process mode to verify feature parity
+# Only runs proxy-related tests (not geoip server, mock server tests)
+nitellad_test_integration: nitellad_build nitella_build mock_build
+	@echo "Running nitellad integration tests..."
+	go test -v ./test/integration/... -run "Proxy|Rule|Connection|Client|AdminAPI|RateLimit|DDoS|Fallback|GeoIPLookup|ProcessListener|CLI|Mode" -timeout 300s
+
+nitellad_clean:
+	rm -f $(BUILD_DIR)/nitellad $(BUILD_DIR)/nitella
+	rm -f pkg/api/proxy/*.pb.go
+
+# ============================================================================
 # Development
 # ============================================================================
 
@@ -150,6 +227,50 @@ geoip_docker_run: geoip_docker_build
 			$(if $(GEOIP_TOKEN),-e GEOIP_TOKEN=$(GEOIP_TOKEN)) \
 			-v $(PWD)/data:/app/data \
 			nitella-geoip; \
+	fi
+
+# Nitellad Docker
+nitellad_docker_build:
+	docker build -f Dockerfile.nitellad -t nitellad .
+
+# Run nitellad docker container (includes GeoLite2 databases)
+# Usage: make nitellad_docker_run
+#        make nitellad_docker_run NITELLA_TOKEN=my-secret-token
+#        make nitellad_docker_run NITELLA_CONFIG=my_config.yaml BACKEND=host.docker.internal:3000
+#        make nitellad_docker_run PROXY_PORT=9090 ADMIN_PORT=50051
+NITELLA_TOKEN ?=
+NITELLA_CONFIG ?=
+PROXY_PORT ?= 8080
+ADMIN_PORT ?= 50051
+BACKEND ?=
+nitellad_docker_run: nitellad_docker_build
+	@mkdir -p data
+	@if [ -n "$(NITELLA_CONFIG)" ] && [ -f "$(NITELLA_CONFIG)" ]; then \
+		echo "Running with config: $(NITELLA_CONFIG)"; \
+		docker run -it --rm \
+			--add-host=host.docker.internal:host-gateway \
+			-p $(PROXY_PORT):8080 -p $(ADMIN_PORT):50051 \
+			$(if $(NITELLA_TOKEN),-e NITELLA_TOKEN=$(NITELLA_TOKEN)) \
+			-v $(PWD)/$(NITELLA_CONFIG):/app/config/nitella.yaml \
+			-v $(PWD)/data:/app/data \
+			nitellad --config /app/config/nitella.yaml \
+			--db-path /app/data/nitella.db \
+			--stats-db /app/data/stats.db \
+			--geoip-city /app/db/GeoLite2-City.mmdb \
+			--geoip-isp /app/db/GeoLite2-ASN.mmdb \
+			--geoip-cache /app/data/geoip_cache.db \
+			--admin-port 50051; \
+	else \
+		echo "Running with default settings (listen :8080, admin :50051, no persistence)"; \
+		docker run -it --rm \
+			--add-host=host.docker.internal:host-gateway \
+			-p $(PROXY_PORT):8080 -p $(ADMIN_PORT):50051 \
+			$(if $(NITELLA_TOKEN),-e NITELLA_TOKEN=$(NITELLA_TOKEN)) \
+			nitellad \
+			--geoip-city /app/db/GeoLite2-City.mmdb \
+			--geoip-isp /app/db/GeoLite2-ASN.mmdb \
+			--admin-port 50051 \
+			$(if $(BACKEND),--backend $(BACKEND)); \
 	fi
 
 # ============================================================================
