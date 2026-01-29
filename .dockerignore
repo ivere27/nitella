@@ -1,0 +1,29 @@
+# Build artifacts
+bin/
+*.db
+*.db-wal
+*.db-shm
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Git
+.git/
+.gitignore
+
+# Docs (not needed in image)
+docs/
+*.md
+!README.md
+
+# Test files
+test/
+*_test.go
+
+# Local config
+*.yaml
+*.yml
+!geoip_provider.yaml

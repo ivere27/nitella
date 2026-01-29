@@ -1,0 +1,36 @@
+# Binaries
+bin/
+*.exe
+*.dll
+*.so
+*.dylib
+
+# Test binary
+*.test
+/data/
+
+# Output
+*.out
+
+# Dependency directories
+vendor/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Database
+*.db
+
+# GeoIP databases (download separately)
+*.mmdb
+
+# Config with secrets
+config_prod.yaml
+provider_prod.yaml

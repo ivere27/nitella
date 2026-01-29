@@ -1,0 +1,27 @@
+syntax = "proto3";
+
+package nitella;
+
+option go_package = "github.com/ivere27/nitella/pkg/api/common";
+
+// GeoInfo contains geographical information for an IP address.
+message GeoInfo {
+  string country = 1;
+  string city = 2;
+  string isp = 3;
+
+  // Extended fields
+  string country_code = 4;
+  string region = 5;
+  string region_name = 6;
+  string zip = 7;
+  double latitude = 8;
+  double longitude = 9;
+  string timezone = 10;
+  string org = 11;
+  string as = 12;
+
+  // Metadata
+  string source = 13;    // e.g., "cache-l1", "cache-l2", "local-db", "remote:ip-api"
+  int64 latency_ms = 14;
+}

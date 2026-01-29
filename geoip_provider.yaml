@@ -1,0 +1,124 @@
+geoip:
+  # Lookup strategy order (l1, l2, local, remote)
+  strategy:
+    - l1
+    - l2
+    - local
+    - remote
+
+  # Lookup timeout in milliseconds
+  timeout_ms: 3000
+
+  # Local MaxMind database configuration
+  local:
+    enabled: false
+    # Paths to MaxMind databases (supports ~ for home directory)
+    city_db: ""
+    isp_db: ""
+
+  # Cache configuration
+  cache:
+    # L1 (In-memory cache)
+    l1:
+      capacity: 10000
+      ttl_hours: 1
+
+    # L2 (SQLite cache with TTL, 0 = permanent/no expiration)
+    l2:
+      enabled: true
+      path: geoip_cache.db
+      ttl_hours: 24  # Set to 0 for permanent storage
+
+  # Remote HTTP providers (tried in priority order)
+  remote_providers:
+    - name: ip-whois
+      enabled: true
+      url: "https://ipwhois.app/json/%s"
+      priority: 1
+      field_mapping:
+        country:
+          - country
+        country_code:
+          - country_code
+        region:
+          - region_code
+        region_name:
+          - region
+        city:
+          - city
+        zip:
+          - postal
+        timezone:
+          - timezone_id
+        latitude:
+          - latitude
+        longitude:
+          - longitude
+        isp:
+          - connection.isp
+        org:
+          - connection.org
+        as:
+          - connection.asn
+
+    - name: free-ip-api
+      enabled: true
+      url: "https://freeipapi.com/api/json/%s"
+      priority: 2
+      field_mapping:
+        country:
+          - countryName
+        country_code:
+          - countryCode
+        region:
+          - regionName
+        region_name:
+          - regionName
+        city:
+          - cityName
+        zip:
+          - zipCode
+        timezone:
+          - timeZone
+        latitude:
+          - latitude
+        longitude:
+          - longitude
+
+    - name: ip-api
+      enabled: false
+      url: "https://ip-api.com/json/%s"
+      priority: 3
+      field_mapping:
+        country:
+          - country
+        country_code:
+          - countryCode
+        region:
+          - region
+        region_name:
+          - regionName
+        city:
+          - city
+        zip:
+          - zip
+        timezone:
+          - timezone
+        latitude:
+          - lat
+        longitude:
+          - lon
+        isp:
+          - isp
+        org:
+          - org
+        as:
+          - as
+
+  # Admin server configuration (disabled by default, enable via --admin-port flag)
+  admin:
+    enabled: false
+    port: 50053
+    # Token for admin authentication (leave empty to auto-generate on startup)
+    # Can also use environment variable: ${GEOIP_ADMIN_TOKEN}
+    token: ""

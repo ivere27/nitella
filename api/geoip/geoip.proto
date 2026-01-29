@@ -1,0 +1,275 @@
+syntax = "proto3";
+
+import "google/protobuf/empty.proto";
+import "common/common.proto";
+
+package nitella.geoip;
+
+option go_package = "github.com/ivere27/nitella/pkg/api/geoip";
+
+// GeoIPService provides public IP geolocation lookups
+service GeoIPService {
+  // Lookup resolves an IP to geographical info
+  rpc Lookup(LookupRequest) returns (nitella.GeoInfo);
+
+  // GetStatus returns the health and stats of the service
+  rpc GetStatus(google.protobuf.Empty) returns (ServiceStatus);
+}
+
+// GeoIPAdminService provides administrative operations (requires token auth)
+service GeoIPAdminService {
+  // ============================================================================
+  // Lookup (authenticated)
+  // ============================================================================
+
+  // Lookup resolves an IP to geographical info
+  rpc Lookup(LookupRequest) returns (nitella.GeoInfo);
+
+  // GetStatus returns the health and stats of the service
+  rpc GetStatus(google.protobuf.Empty) returns (ServiceStatus);
+
+  // ============================================================================
+  // Local Database Management
+  // ============================================================================
+
+  // LoadLocalDB loads MaxMind database files
+  rpc LoadLocalDB(LoadLocalDBRequest) returns (google.protobuf.Empty);
+
+  // UnloadLocalDB unloads the local database
+  rpc UnloadLocalDB(google.protobuf.Empty) returns (google.protobuf.Empty);
+
+  // GetLocalDBStatus returns the status of the local database
+  rpc GetLocalDBStatus(google.protobuf.Empty) returns (LocalDBStatus);
+
+  // ============================================================================
+  // Provider Management
+  // ============================================================================
+
+  // ListProviders returns all configured providers with stats
+  rpc ListProviders(google.protobuf.Empty) returns (ListProvidersResponse);
+
+  // AddProvider adds a new HTTP provider
+  rpc AddProvider(AddProviderRequest) returns (ProviderInfo);
+
+  // RemoveProvider removes a provider by name
+  rpc RemoveProvider(RemoveProviderRequest) returns (google.protobuf.Empty);
+
+  // UpdateProvider updates an existing provider
+  rpc UpdateProvider(UpdateProviderRequest) returns (ProviderInfo);
+
+  // ReorderProviders changes the provider priority order
+  rpc ReorderProviders(ReorderProvidersRequest) returns (ListProvidersResponse);
+
+  // EnableProvider enables a disabled provider
+  rpc EnableProvider(ProviderNameRequest) returns (google.protobuf.Empty);
+
+  // DisableProvider disables a provider without removing it
+  rpc DisableProvider(ProviderNameRequest) returns (google.protobuf.Empty);
+
+  // GetProviderStats returns detailed statistics for a provider
+  rpc GetProviderStats(ProviderNameRequest) returns (ProviderStats);
+
+  // ============================================================================
+  // Cache Management
+  // ============================================================================
+
+  // GetCacheStats returns cache statistics
+  rpc GetCacheStats(google.protobuf.Empty) returns (CacheStats);
+
+  // ClearCache clears specified cache layers
+  rpc ClearCache(ClearCacheRequest) returns (google.protobuf.Empty);
+
+  // GetCacheSettings returns current cache settings
+  rpc GetCacheSettings(google.protobuf.Empty) returns (CacheSettings);
+
+  // UpdateCacheSettings updates cache configuration
+  rpc UpdateCacheSettings(UpdateCacheSettingsRequest) returns (CacheSettings);
+
+  // VacuumL2 optimizes the L2 cache database
+  rpc VacuumL2(google.protobuf.Empty) returns (google.protobuf.Empty);
+
+  // ============================================================================
+  // Strategy Management
+  // ============================================================================
+
+  // GetStrategy returns the current lookup strategy
+  rpc GetStrategy(google.protobuf.Empty) returns (StrategyResponse);
+
+  // SetStrategy sets the lookup strategy order
+  rpc SetStrategy(SetStrategyRequest) returns (StrategyResponse);
+
+  // ============================================================================
+  // Config File Management
+  // ============================================================================
+
+  // ReloadConfig reloads configuration from file
+  rpc ReloadConfig(google.protobuf.Empty) returns (google.protobuf.Empty);
+
+  // SaveConfig saves current configuration to file
+  rpc SaveConfig(google.protobuf.Empty) returns (google.protobuf.Empty);
+}
+
+// ============================================================================
+// Public Service Messages
+// ============================================================================
+
+message LookupRequest {
+  string ip = 1;
+}
+
+message ServiceStatus {
+  bool ready = 1;
+  int64 l1_cache_size = 2;
+  int64 l2_cache_size = 3;
+  repeated string active_providers = 4;
+  string strategy = 5;
+  bool local_db_loaded = 6;
+  int32 l2_ttl_hours = 7;  // 0 = permanent
+}
+
+// ============================================================================
+// Local DB Messages
+// ============================================================================
+
+message LoadLocalDBRequest {
+  string city_db_path = 1;
+  string isp_db_path = 2;
+}
+
+message LocalDBStatus {
+  bool loaded = 1;
+  string city_db_path = 2;
+  string isp_db_path = 3;
+  int64 city_db_size = 4;
+  int64 isp_db_size = 5;
+}
+
+// ============================================================================
+// Provider Messages
+// ============================================================================
+
+message ProviderNameRequest {
+  string name = 1;
+}
+
+message ListProvidersResponse {
+  repeated ProviderInfo providers = 1;
+}
+
+message ProviderInfo {
+  string name = 1;
+  string url = 2;
+  bool enabled = 3;
+  int32 priority = 4;
+  FieldMapping field_mapping = 5;
+  ProviderStats stats = 6;
+}
+
+message AddProviderRequest {
+  string name = 1;
+  string url = 2;
+  int32 priority = 3;
+  FieldMapping field_mapping = 4;
+}
+
+message RemoveProviderRequest {
+  string name = 1;
+}
+
+message UpdateProviderRequest {
+  string name = 1;
+  string url = 2;
+  int32 priority = 3;
+  FieldMapping field_mapping = 4;
+  bool enabled = 5;
+}
+
+message ReorderProvidersRequest {
+  repeated string provider_names = 1;  // Names in new priority order
+}
+
+message ProviderStats {
+  string name = 1;
+  int64 lookup_count = 2;
+  int64 success_count = 3;
+  int64 error_count = 4;
+  int64 total_latency_ms = 5;
+  int64 avg_latency_ms = 6;
+  int64 last_used_unix = 7;
+  string last_error = 8;
+}
+
+message FieldMapping {
+  repeated string country = 1;
+  repeated string country_code = 2;
+  repeated string region = 3;
+  repeated string region_name = 4;
+  repeated string city = 5;
+  repeated string zip = 6;
+  repeated string timezone = 7;
+  repeated string latitude = 8;
+  repeated string longitude = 9;
+  repeated string isp = 10;
+  repeated string org = 11;
+  repeated string as = 12;
+}
+
+// ============================================================================
+// Cache Messages
+// ============================================================================
+
+message CacheStats {
+  int64 l1_size = 1;
+  int64 l1_capacity = 2;
+  int64 l1_hits = 3;
+  int64 l1_misses = 4;
+
+  int64 l2_size = 5;
+  bool l2_enabled = 6;
+  string l2_path = 7;
+  int64 l2_hits = 8;
+  int64 l2_misses = 9;
+  int32 l2_ttl_hours = 10;  // 0 = permanent
+}
+
+message ClearCacheRequest {
+  CacheLayer layer = 1;
+}
+
+enum CacheLayer {
+  CACHE_LAYER_ALL = 0;
+  CACHE_LAYER_L1 = 1;
+  CACHE_LAYER_L2 = 2;
+}
+
+message CacheSettings {
+  int32 l1_capacity = 1;
+  int32 l1_ttl_hours = 2;
+
+  bool l2_enabled = 3;
+  string l2_path = 4;
+  int32 l2_ttl_hours = 5;  // 0 = permanent (no expiration)
+}
+
+message UpdateCacheSettingsRequest {
+  int32 l1_capacity = 1;
+  int32 l1_ttl_hours = 2;
+
+  bool l2_enabled = 3;
+  string l2_path = 4;
+  int32 l2_ttl_hours = 5;  // 0 = permanent (no expiration)
+}
+
+// ============================================================================
+// Strategy Messages
+// ============================================================================
+
+message StrategyResponse {
+  repeated string steps = 1;  // e.g., ["l1", "l2", "local", "remote"]
+  int32 timeout_ms = 2;
+}
+
+message SetStrategyRequest {
+  repeated string steps = 1;
+  int32 timeout_ms = 2;
+}
