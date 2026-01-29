@@ -3,7 +3,6 @@ package integration
 import (
 	"context"
 	"fmt"
-	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -483,17 +482,6 @@ func verifyGeoInfo(t *testing.T, info *pbCommon.GeoInfo, ip, expectedCountry str
 }
 
 // Helper functions
-
-func getFreePort(t *testing.T) int {
-	t.Helper()
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("Failed to get free port: %v", err)
-	}
-	port := listener.Addr().(*net.TCPAddr).Port
-	listener.Close()
-	return port
-}
 
 func waitForGrpc(t *testing.T, addr string, timeout time.Duration) {
 	t.Helper()

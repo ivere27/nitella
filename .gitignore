@@ -4,6 +4,7 @@ bin/
 *.dll
 *.so
 *.dylib
+/mock
 
 # Test binary
 *.test

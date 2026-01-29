@@ -16,7 +16,7 @@ all: build
 # Build All
 # ============================================================================
 
-build: proto geoip_build
+build: proto geoip_build mock_build
 
 # ============================================================================
 # Proto Generation
@@ -59,7 +59,7 @@ geoip_test:
 	go test -v ./pkg/geoip/...
 
 geoip_test_integration: geoip_build
-	go test -v ./test/integration/... -timeout 120s
+	go test -v ./test/integration/... -run "GeoIP|Lookup" -timeout 120s
 
 # Run geoip server with default settings
 geoip_run: geoip_server
@@ -151,3 +151,42 @@ geoip_docker_run: geoip_docker_build
 			-v $(PWD)/data:/app/data \
 			nitella-geoip; \
 	fi
+
+# ============================================================================
+# Mock Server Module
+# ============================================================================
+
+.PHONY: mock_build mock_run mock_test mock_test_integration mock_docker_build mock_docker_run
+
+mock_build:
+	@mkdir -p $(BUILD_DIR)
+	go build -ldflags "$(LD_FLAGS)" -o $(BUILD_DIR)/mock ./cmd/mock
+
+mock_test:
+	go test -v ./pkg/mockproto/...
+
+mock_test_integration: mock_build
+	go test -v ./test/integration/... -run Mock -timeout 120s
+
+# Run mock server
+# Usage: make mock_run PORT=2222 PROTOCOL=ssh
+MOCK_PORT ?= 8080
+MOCK_PROTOCOL ?= http
+mock_run: mock_build
+	./$(BUILD_DIR)/mock -port $(MOCK_PORT) -protocol $(MOCK_PROTOCOL)
+
+mock_clean:
+	rm -f $(BUILD_DIR)/mock
+
+# Docker
+mock_docker_build:
+	docker build -f Dockerfile.mock -t nitella-mock .
+
+# Run mock docker container
+# Usage: make mock_docker_run PORT=2222 PROTOCOL=ssh
+mock_docker_run: mock_docker_build
+	docker run -it --rm \
+		-p $(MOCK_PORT):$(MOCK_PORT) \
+		-e PORT=$(MOCK_PORT) \
+		-e PROTOCOL=$(MOCK_PROTOCOL) \
+		nitella-mock

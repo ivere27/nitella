@@ -15,7 +15,20 @@ High-performance GeoIP lookup service with multi-layer caching and multiple prov
 
 See [docs/GEOIP.md](docs/GEOIP.md) for detailed documentation.
 
-#### Quick Start
+### Mock Server
+
+Honeypot/mock server that emulates various network protocols to detect scanning and waste attacker resources.
+
+- **Multiple Protocols**: HTTP, SSH, MySQL, MSSQL, Redis, SMTP, Telnet, RDP
+- **Tarpit Mode**: Waste attacker time with slow/endless responses
+- **Drip Mode**: Send data byte-by-byte to tie up scanners
+- **Customizable**: Custom payloads, delays, and behaviors
+
+See [docs/MOCK.md](docs/MOCK.md) for detailed documentation.
+
+## Quick Start
+
+### GeoIP
 
 ```bash
 # Build
@@ -26,16 +39,25 @@ make geoip_run_local
 
 # Run CLI
 make geoip_run_cli TOKEN=your-admin-token
+
+# Docker (includes GeoLite2 databases)
+make geoip_docker_run GEOIP_TOKEN=your-secret-token
 ```
 
-#### Docker
+### Mock
 
 ```bash
-# Build and run (includes GeoLite2 databases)
-make geoip_docker_run GEOIP_TOKEN=your-secret-token
+# Build
+make mock_build
 
-# With config file
-make geoip_docker_run GEOIP_TOKEN=your-secret-token GEOIP_CONFIG=geoip_provider.yaml
+# Run SSH honeypot
+make mock_run PORT=2222 PROTOCOL=ssh
+
+# Run with tarpit mode (wastes attacker time)
+./bin/mock -port 22 -protocol ssh -tarpit
+
+# Docker
+make mock_docker_run PORT=2222 PROTOCOL=ssh
 ```
 
 ## Installation
@@ -61,10 +83,12 @@ nitella/
 │   └── geoip/                # GeoIP service
 ├── cmd/
 │   ├── geoip-server/         # GeoIP server binary
-│   └── geoip/                # GeoIP CLI binary
+│   ├── geoip/                # GeoIP CLI binary
+│   └── mock/                 # Mock server binary
 ├── pkg/
 │   ├── api/                  # Generated protobuf code
 │   ├── geoip/                # GeoIP library
+│   ├── mockproto/            # Mock protocol handlers
 │   ├── shell/                # CLI utilities
 │   └── log/                  # Logging utility
 ├── test/
@@ -101,6 +125,14 @@ make geoip_test_integration   # Run integration tests
 make geoip_run_local          # Run server locally
 make geoip_run_cli TOKEN=xxx  # Run admin CLI
 make geoip_docker_run         # Run in Docker
+
+# Mock
+make mock_build               # Build mock server
+make mock_test                # Run unit tests
+make mock_test_integration    # Run integration tests
+make mock_run                 # Run (default: HTTP on 8080)
+make mock_run PORT=22 PROTOCOL=ssh  # Run SSH mock
+make mock_docker_run          # Run in Docker
 ```
 
 ## Third-Party Data
