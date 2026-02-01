@@ -165,7 +165,7 @@ The integration tests use:
 
 3. **gRPC client testing**: `admin_api_test.go` connects to nitellad's admin API via gRPC
 
-4. **Child process testing**: `process_test.go` tests `ProcessListener` which spawns child processes for process isolation. Uses `NITELLA_BIN` env var to specify the nitellad binary path.
+4. **Child process testing**: `process_test.go` tests `ProcessListener` which spawns child processes for process isolation. Process mode tests are skipped when running via `go test` because they require running as the actual nitellad binary.
 
 ### Test Isolation
 

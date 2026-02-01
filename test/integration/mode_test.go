@@ -5,7 +5,6 @@ import (
 	"io"
 	"net"
 	"os"
-	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -27,16 +26,17 @@ var testModes = []testMode{
 	{"Process", false},
 }
 
-// setupMode prepares the test environment for the given mode
+// setupMode prepares the test environment for the given mode.
+// Process mode tests require running as the actual nitellad binary.
 func setupMode(t *testing.T, mode testMode) {
 	if !mode.useEmbedded {
-		// Process mode needs the binary
-		wd, _ := os.Getwd()
-		binPath := filepath.Join(wd, "../../bin/nitellad")
-		if _, err := os.Stat(binPath); os.IsNotExist(err) {
-			t.Skipf("nitellad binary not found at %s. Run 'make build' first.", binPath)
+		exe, err := os.Executable()
+		if err != nil {
+			t.Skipf("Cannot determine executable path: %v", err)
 		}
-		os.Setenv("NITELLA_BIN", binPath)
+		if !strings.Contains(exe, "nitellad") {
+			t.Skip("Process mode tests require running as nitellad binary, skipped in 'go test'.")
+		}
 	}
 }
 

@@ -63,15 +63,12 @@ func getCompiledRegex(pattern string) *regexp.Regexp {
 		}
 	}
 
-	// Use CompilePOSIX for linear time complexity (prevents catastrophic backtracking)
+	// Use CompilePOSIX for linear time complexity (prevents ReDoS)
+	// No fallback to standard regex - POSIX patterns only for security
 	compiled, err := regexp.CompilePOSIX(pattern)
 	if err != nil {
-		// Try standard compile as fallback (some patterns need it)
-		compiled, err = regexp.Compile(pattern)
-		if err != nil {
-			regexCache[pattern] = nil // Cache the failure
-			return nil
-		}
+		regexCache[pattern] = nil // Cache the failure
+		return nil
 	}
 	regexCache[pattern] = compiled
 	return compiled

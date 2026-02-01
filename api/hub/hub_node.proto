@@ -1,0 +1,134 @@
+syntax = "proto3";
+
+package nitella.hub;
+
+option go_package = "github.com/ivere27/nitella/pkg/api/hub";
+
+import "google/protobuf/timestamp.proto";
+import "hub/hub_common.proto";
+import "proxy/proxy.proto";
+import "common/common.proto";
+
+// ===========================================================================
+// NODE SERVICE - For Proxy Nodes connecting to Hub
+// ===========================================================================
+
+// NodeCommand for E2E Encrypted Payload (Inner)
+message NodeCommand {
+  oneof command {
+    nitella.proxy.AddRuleRequest add_rule = 1;
+    nitella.proxy.RemoveRuleRequest remove_rule = 2;
+    nitella.proxy.ListRulesRequest fetch_rules = 3;
+
+    // Connection Management
+    nitella.proxy.GetActiveConnectionsRequest get_connections = 4;
+    nitella.proxy.CloseConnectionRequest close_connection = 5;
+    nitella.proxy.CloseAllConnectionsRequest close_all = 6;
+
+    // Statistics Access (For UI)
+    nitella.proxy.GetIPStatsRequest get_ip_stats = 7;
+    nitella.proxy.GetGeoStatsRequest get_geo_stats = 8;
+    nitella.proxy.GetStatsSummaryRequest get_stats_summary = 9;
+    nitella.proxy.ResolveApprovalRequest resolve_approval = 10;
+
+    // Proxy Management
+    nitella.proxy.ListProxiesRequest list_proxies = 11;
+    nitella.proxy.CreateProxyRequest create_proxy = 12;
+    nitella.proxy.UpdateProxyRequest update_proxy = 13;
+    nitella.proxy.DeleteProxyRequest delete_proxy = 14;
+    nitella.proxy.EnableProxyRequest enable_proxy = 15;
+    nitella.proxy.DisableProxyRequest disable_proxy = 16;
+  }
+}
+
+service NodeService {
+  // Registration
+  rpc Register(NodeRegisterRequest) returns (NodeRegisterResponse);
+  rpc WatchRegistration(WatchRegistrationRequest) returns (stream WatchRegistrationResponse);
+  rpc CheckCertificate(CheckCertificateRequest) returns (CheckCertificateResponse); // Courier mode
+
+  // Heartbeat / Status
+  rpc Heartbeat(HeartbeatRequest) returns (HeartbeatResponse);
+
+  // Command Reception (Hub -> Node)
+  rpc ReceiveCommands(ReceiveCommandsRequest) returns (stream Command);
+  // Command Response (Node -> Hub) - For Sync E2E
+  rpc RespondToCommand(CommandResponse) returns (Empty);
+
+  // Metrics/Logs Push (Node -> Hub) - Zero-Trust: Encrypted
+  rpc PushMetrics(stream EncryptedMetrics) returns (Empty);
+  rpc PushLogs(stream EncryptedLogEntry) returns (Empty);
+  rpc PushAlert(nitella.Alert) returns (Empty);
+
+  // Certificate Revocation (Hub -> Node broadcast)
+  rpc StreamRevocations(StreamRevocationsRequest) returns (stream RevocationEvent);
+
+  // P2P Signaling (Node <-> Hub <-> Mobile)
+  rpc StreamSignaling(stream SignalMessage) returns (stream SignalMessage);
+}
+
+// ===========================================================================
+// REQUEST/RESPONSE MESSAGES
+// ===========================================================================
+
+// Registration
+message NodeRegisterRequest {
+  string registration_code = 1; // Optional (if checking status)
+  string csr_pem = 2; // Required if code is empty (New)
+  bytes encrypted_metadata = 3;    // E2E Encrypted Name
+  repeated int32 listen_ports = 4;
+  string version = 5; // Node version
+  string invite_code = 6;
+  string pairing_code = 7; // For Secure Pairing Mode
+}
+
+message NodeRegisterResponse {
+  string registration_code = 1;
+  RegistrationStatus status = 2;  // PENDING, APPROVED, REJECTED
+  string cert_pem = 3; // If approved
+  string ca_pem = 4;   // If approved
+  string watch_secret = 5; // Secret required for WatchRegistration (only registrant knows)
+}
+
+message WatchRegistrationRequest {
+  string registration_code = 1;
+  string watch_secret = 2; // Must match the secret returned during Register()
+}
+
+message WatchRegistrationResponse {
+  RegistrationStatus status = 1; // PENDING, APPROVED, REJECTED
+  string cert_pem = 2;
+  string ca_pem = 3;
+}
+
+message CheckCertificateRequest {
+  string fingerprint = 1; // SHA256 of SPKI
+}
+
+message CheckCertificateResponse {
+  bool found = 1;
+  string cert_pem = 2;
+  string ca_pem = 3;
+}
+
+// Heartbeat
+message HeartbeatRequest {
+  string node_id = 1;
+  NodeStatus status = 2;
+  int64 uptime_seconds = 3;
+}
+
+message HeartbeatResponse {
+  bool rules_changed = 1;     // Hint to sync rules
+  bool config_changed = 2;    // Hint to reload config
+}
+
+// Commands
+message ReceiveCommandsRequest {
+  string node_id = 1;
+}
+
+// Revocations
+message StreamRevocationsRequest {
+  string node_id = 1;
+}

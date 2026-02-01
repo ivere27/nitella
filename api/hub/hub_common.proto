@@ -1,0 +1,171 @@
+syntax = "proto3";
+
+package nitella.hub;
+
+option go_package = "github.com/ivere27/nitella/pkg/api/hub";
+
+import "google/protobuf/timestamp.proto";
+import "common/common.proto";
+
+// ===========================================================================
+// COMMON MESSAGES - Shared across Admin, Mobile, and Node services
+// ===========================================================================
+
+message Empty {}
+
+enum RegistrationStatus {
+  REGISTRATION_STATUS_UNSPECIFIED = 0;
+  REGISTRATION_STATUS_PENDING = 1;
+  REGISTRATION_STATUS_APPROVED = 2;
+  REGISTRATION_STATUS_REJECTED = 3;
+}
+
+enum NodeStatus {
+  NODE_STATUS_UNSPECIFIED = 0;
+  NODE_STATUS_OFFLINE = 1;
+  NODE_STATUS_ONLINE = 2;
+  NODE_STATUS_BLOCKED = 3;
+  NODE_STATUS_CONNECTING = 4;
+}
+
+// Node represents a managed proxy node
+message Node {
+  string id = 1;
+  bytes encrypted_metadata = 2; // E2E Encrypted Name and other metadata
+  string owner_id = 3;
+  NodeStatus status = 4; // online, offline, connecting
+  google.protobuf.Timestamp last_seen = 5;
+  string public_ip = 6;
+  repeated int32 listen_ports = 7;
+  bool geoip_enabled = 8;
+  string version = 9;
+  google.protobuf.Timestamp created_at = 10;
+}
+
+// Metrics data (plaintext - for local use only)
+message Metrics {
+  string node_id = 1;
+  google.protobuf.Timestamp timestamp = 2;
+  int64 connections_active = 3;
+  int64 connections_total = 4;
+  int64 bytes_in = 5;
+  int64 bytes_out = 6;
+  int64 blocked_count = 7;
+  map<string, int64> rules_hit_count = 8;
+}
+
+// Encrypted Metrics for Hub storage (Zero-Trust)
+message EncryptedMetrics {
+  string node_id = 1;
+  google.protobuf.Timestamp timestamp = 2;
+  nitella.EncryptedPayload encrypted = 3;  // Encrypted Metrics blob
+}
+
+// Log entry (plaintext - for local/internal use only)
+message LogEntry {
+  string node_id = 1;
+  google.protobuf.Timestamp timestamp = 2;
+  string level = 3;
+  string message = 4;
+  map<string, string> fields = 5;
+}
+
+// Encrypted Log Entry for Hub relay (Zero-Trust)
+// Hub cannot read log contents - only User can decrypt
+message EncryptedLogEntry {
+  string node_id = 1;
+  google.protobuf.Timestamp timestamp = 2;
+  nitella.EncryptedPayload encrypted = 3;  // Encrypted LogEntry blob
+}
+
+// User
+message User {
+  string id = 1;
+  string blind_index = 2; // Hash(Email + Salt)
+  bytes encrypted_profile = 3; // Encrypted Email, Avatar, etc.
+  string role = 4;       // admin, user, viewer
+  string tier = 5;       // free, pro, business
+  int32 max_nodes = 6;
+  google.protobuf.Timestamp last_login = 7;
+  google.protobuf.Timestamp created_at = 8;
+}
+
+// Response from Node to Hub (and back to Mobile)
+message CommandResponse {
+  string command_id = 1;
+  nitella.EncryptedPayload encrypted_data = 2; // E2E encrypted return data (contains serialized CommandResult)
+}
+
+// CommandResult matches the structure of CommandResponse but is intended to be encrypted
+message CommandResult {
+  string status = 1; // "OK", "ERROR"
+  string error_message = 2;
+  bytes response_payload = 3; // The actual data (e.g. serialized list_proxies_response)
+}
+
+// Command from Hub to Node (E2E encrypted only)
+message Command {
+  string id = 1;
+  nitella.EncryptedPayload encrypted = 2;  // Always encrypted
+  google.protobuf.Timestamp expires_at = 3;
+}
+
+enum CommandType {
+  COMMAND_TYPE_UNSPECIFIED = 0;
+  COMMAND_TYPE_EXECUTE = 1;
+  COMMAND_TYPE_ADD_RULE = 2;
+  COMMAND_TYPE_REMOVE_RULE = 3;
+  COMMAND_TYPE_GET_ACTIVE_CONNECTIONS = 4;
+  COMMAND_TYPE_CLOSE_CONNECTION = 5;
+  COMMAND_TYPE_CLOSE_ALL_CONNECTIONS = 6;
+  COMMAND_TYPE_STATS_CONTROL = 7;
+  COMMAND_TYPE_LIST_PROXIES = 8;
+
+  // Proxy Template Management
+  COMMAND_TYPE_APPLY_PROXY = 20;     // Apply proxy config to node
+  COMMAND_TYPE_UNAPPLY_PROXY = 21;   // Remove proxy config from node
+  COMMAND_TYPE_GET_APPLIED = 22;     // List applied proxy configs
+  COMMAND_TYPE_PROXY_UPDATE = 23;    // Notification: proxy config updated
+}
+
+message EncryptedCommandPayload {
+  CommandType type = 1;
+  bytes payload = 2;
+}
+
+// Certificate Revocation Event
+message RevocationEvent {
+  string serial_number = 1;
+  string fingerprint = 2;
+  google.protobuf.Timestamp revoked_at = 3;
+  string reason = 4;
+}
+
+// WebRTC Signaling
+message SignalMessage {
+  string target_id = 1; // NodeID (from App to Hub) or ClientID (from Node to Hub)
+  string source_id = 2; // Populated by Hub
+  string type = 3;      // "offer", "answer", "candidate"
+  string payload = 4;   // JSON SDP or Candidate
+  string source_user_id = 5; // Populated by Hub (UserID) - For P2P Identity
+}
+
+// ===========================================================================
+// PAIRING PAYLOAD - Encrypted with PAKE shared secret (Hub cannot decrypt)
+// ===========================================================================
+
+// PairingRequest: Node -> CLI (encrypted with PAKE shared secret)
+message PairingRequest {
+  string csr_pem = 1;           // Node's CSR for signing
+  bytes node_public_key = 2;    // Node's Ed25519 public key
+  string node_version = 3;
+}
+
+// PairingResponse: CLI -> Node (encrypted with PAKE shared secret)
+// Contains everything the node needs to operate securely
+message PairingResponse {
+  string cert_pem = 1;          // Signed certificate for the node
+  string ca_pem = 2;            // CA certificate for verification
+  bytes viewer_public_key = 3;  // CLI's Ed25519 public key for encrypting metrics/alerts
+  string routing_token = 4;     // Blind routing token for Hub communication
+}

@@ -70,6 +70,87 @@ enum SortOrder {
   SORT_RECENCY_WEIGHT_DESC = 4;
 }
 
+// ===========================================================================
+// HUB-RELATED TYPES (for E2E encryption and approval workflow)
+// ===========================================================================
+
+// PemLabel defines PEM block types
+enum PemLabel {
+  PEM_LABEL_UNSPECIFIED = 0;
+  PEM_LABEL_CERTIFICATE = 1;
+  PEM_LABEL_PUBLIC_KEY = 2;
+  PEM_LABEL_PRIVATE_KEY = 3;
+  PEM_LABEL_ENCRYPTED_PRIVATE_KEY = 4;
+}
+
+// ACTION_TYPE_REQUIRE_APPROVAL for approval workflow
+// Note: Extend ActionType in your proxy service if needed
+
+// ApprovalDuration defines how long an approval decision lasts
+enum ApprovalDuration {
+  APPROVAL_DURATION_UNSPECIFIED = 0;
+  APPROVAL_DURATION_ONCE = 1;           // Single connection only (no caching)
+  APPROVAL_DURATION_1_MINUTE = 2;       // 60 seconds
+  APPROVAL_DURATION_10_MINUTES = 3;     // 600 seconds
+  APPROVAL_DURATION_1_HOUR = 4;         // 3600 seconds
+  APPROVAL_DURATION_24_HOURS = 5;       // 86400 seconds
+}
+
+// ApprovalActionType defines the user's decision for an approval request
+enum ApprovalActionType {
+  APPROVAL_ACTION_TYPE_UNSPECIFIED = 0;
+  APPROVAL_ACTION_TYPE_ALLOW = 1;          // Allow connection
+  APPROVAL_ACTION_TYPE_BLOCK = 2;          // Block connection
+  APPROVAL_ACTION_TYPE_BLOCK_ADD_RULE = 3; // Block and create permanent rule
+}
+
+// P2PMode defines the peer-to-peer connection strategy
+enum P2PMode {
+  P2P_MODE_UNSPECIFIED = 0;
+  P2P_MODE_AUTO = 1;    // Try P2P first, fallback to Hub if fails
+  P2P_MODE_DIRECT = 2;  // P2P only, show error if fails (no fallback)
+  P2P_MODE_HUB = 3;     // Hub relay only, no P2P
+}
+
+// CryptoAlgorithm for forward compatibility
+enum CryptoAlgorithm {
+  ALGO_UNKNOWN = 0;
+  ALGO_ED25519 = 1; // Ed25519 Signing + X25519 ECDH + AES-GCM Encryption
+}
+
+// EncryptedPayload wraps E2E encrypted data using X25519 ECDH + AES-256-GCM.
+// The sender generates an ephemeral X25519 keypair, derives a shared secret
+// with the recipient's public key using ECDH, then encrypts with AES-GCM.
+message EncryptedPayload {
+  bytes ephemeral_pubkey = 1;    // X25519 ephemeral public key (32 bytes)
+  bytes nonce = 2;               // AES-GCM nonce (12 bytes)
+  bytes ciphertext = 3;          // AES-256-GCM encrypted payload with auth tag
+  string sender_fingerprint = 4; // SHA256 of sender's cert for key lookup
+  bytes signature = 5;           // Ed25519 signature of ciphertext (optional)
+  CryptoAlgorithm algorithm = 6; // Algorithm identifier for forward compat
+}
+
+// SecureCommandPayload is the inner structure that gets encrypted.
+// It includes anti-replay fields that are only visible after decryption.
+message SecureCommandPayload {
+  string request_id = 1;          // Unique ID for this request
+  int64 timestamp = 2;            // Unix timestamp (seconds)
+  bytes data = 3;                 // The actual command content
+}
+
+// Alert (encrypted content for Zero-Trust)
+message Alert {
+  string id = 1;
+  string node_id = 2;
+  // Plaintext fields for Hub routing only
+  string severity = 3; // info, warning, critical (Hub needs this for priority)
+  int64 timestamp_unix = 4;
+  bool acknowledged = 5;
+  // Encrypted content (title, description) - only Mobile can decrypt
+  EncryptedPayload encrypted = 6;
+  map<string, string> metadata = 7; // Routing info (e.g. type=approval, tag=production)
+}
+
 // GeoInfo contains geographical information for an IP address.
 message GeoInfo {
   string country = 1;

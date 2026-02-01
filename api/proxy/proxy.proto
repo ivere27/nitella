@@ -504,3 +504,19 @@ message StatsSummaryResponse {
   int64 blocked_total = 6;
   int64 allowed_total = 7;
 }
+
+// ---------------------------------------------------------------------------
+// Approval Workflow (for Hub integration)
+// ---------------------------------------------------------------------------
+
+message ResolveApprovalRequest {
+  string req_id = 1;  // Approval request ID
+  nitella.ApprovalActionType action = 2;
+  nitella.ApprovalDuration duration = 3;
+  string reason = 4;  // Optional reason for the decision
+}
+
+message ResolveApprovalResponse {
+  bool success = 1;
+  string error_message = 2;
+}

@@ -1,8 +1,9 @@
 package node
 
 import (
+	"crypto/rand"
+	"encoding/binary"
 	"fmt"
-	"math/rand"
 	"net"
 	"time"
 
@@ -11,6 +12,16 @@ import (
 	"github.com/ivere27/nitella/pkg/config"
 	"github.com/ivere27/nitella/pkg/mockproto"
 )
+
+// secureRandomInt returns a cryptographically random int in [0, max)
+func secureRandomInt(max int) int {
+	if max <= 0 {
+		return 0
+	}
+	var buf [8]byte
+	rand.Read(buf[:])
+	return int(binary.LittleEndian.Uint64(buf[:]) % uint64(max))
+}
 
 // HandleMockConnection handles the connection for ACTION_MOCK
 func (p *EmbeddedListener) HandleMockConnection(conn net.Conn, rule *pb.Rule) {
@@ -120,7 +131,7 @@ func (p *EmbeddedListener) HandleMockConnection(conn net.Conn, rule *pb.Rule) {
 				// Add Jitter to avoid predictable static delay (fingerprinting protection)
 				// Range: [attempts*delay, attempts*delay + 50% delay]
 				baseDelay := mockConfig.DelayMs * attempts
-				jitter := rand.Intn(mockConfig.DelayMs/2 + 1)
+				jitter := secureRandomInt(mockConfig.DelayMs/2 + 1)
 
 				mockConfig.DelayMs = baseDelay + jitter
 				fmt.Printf("[Tarpit] Penalty applied for %s: %d attempts -> %dms delay (jitter: %d)\n", sourceIP, attempts, mockConfig.DelayMs, jitter)

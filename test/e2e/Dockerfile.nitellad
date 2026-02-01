@@ -1,0 +1,23 @@
+FROM golang:1.24-alpine AS builder
+
+RUN apk add --no-cache gcc musl-dev sqlite-dev
+
+WORKDIR /app
+COPY go.mod go.sum ./
+RUN go mod download
+
+COPY . .
+RUN CGO_ENABLED=1 go build -tags release -o nitellad ./cmd/nitellad
+
+FROM alpine:3.19
+RUN apk add --no-cache ca-certificates sqlite netcat-openbsd curl
+WORKDIR /app
+COPY --from=builder /app/nitellad .
+
+# Data directory for node identity
+VOLUME /data
+
+EXPOSE 8080 50051
+
+ENTRYPOINT ["./nitellad"]
+CMD ["--listen", ":8080", "--admin-port", "50051", "--db-path", "/data/nitella.db"]

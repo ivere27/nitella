@@ -1,6 +1,7 @@
 package mockproto
 
 import (
+	"crypto/rand"
 	"net"
 	"time"
 )
@@ -79,7 +80,10 @@ func mysqlTarpit(conn net.Conn) error {
 func sendMySQLHandshake(conn net.Conn) error {
 	serverVersion := "5.7.21-log\x00"
 	threadID := []byte{0x2d, 0x00, 0x00, 0x00}
-	salt1 := "12345678\x00"
+	// Generate random salt (8 bytes + null terminator)
+	saltBytes := make([]byte, 8)
+	rand.Read(saltBytes)
+	salt1 := string(saltBytes) + "\x00"
 	capabilities := []byte{0xff, 0xf7}
 	charset := byte(0x21)
 	status := []byte{0x02, 0x00}

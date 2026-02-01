@@ -3823,6 +3823,126 @@ func (x *StatsSummaryResponse) GetAllowedTotal() int64 {
 	return 0
 }
 
+type ResolveApprovalRequest struct {
+	state         protoimpl.MessageState    `protogen:"open.v1"`
+	ReqId         string                    `protobuf:"bytes,1,opt,name=req_id,json=reqId,proto3" json:"req_id,omitempty"` // Approval request ID
+	Action        common.ApprovalActionType `protobuf:"varint,2,opt,name=action,proto3,enum=nitella.ApprovalActionType" json:"action,omitempty"`
+	Duration      common.ApprovalDuration   `protobuf:"varint,3,opt,name=duration,proto3,enum=nitella.ApprovalDuration" json:"duration,omitempty"`
+	Reason        string                    `protobuf:"bytes,4,opt,name=reason,proto3" json:"reason,omitempty"` // Optional reason for the decision
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ResolveApprovalRequest) Reset() {
+	*x = ResolveApprovalRequest{}
+	mi := &file_proxy_proxy_proto_msgTypes[53]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ResolveApprovalRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ResolveApprovalRequest) ProtoMessage() {}
+
+func (x *ResolveApprovalRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_proxy_proxy_proto_msgTypes[53]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ResolveApprovalRequest.ProtoReflect.Descriptor instead.
+func (*ResolveApprovalRequest) Descriptor() ([]byte, []int) {
+	return file_proxy_proxy_proto_rawDescGZIP(), []int{53}
+}
+
+func (x *ResolveApprovalRequest) GetReqId() string {
+	if x != nil {
+		return x.ReqId
+	}
+	return ""
+}
+
+func (x *ResolveApprovalRequest) GetAction() common.ApprovalActionType {
+	if x != nil {
+		return x.Action
+	}
+	return common.ApprovalActionType(0)
+}
+
+func (x *ResolveApprovalRequest) GetDuration() common.ApprovalDuration {
+	if x != nil {
+		return x.Duration
+	}
+	return common.ApprovalDuration(0)
+}
+
+func (x *ResolveApprovalRequest) GetReason() string {
+	if x != nil {
+		return x.Reason
+	}
+	return ""
+}
+
+type ResolveApprovalResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Success       bool                   `protobuf:"varint,1,opt,name=success,proto3" json:"success,omitempty"`
+	ErrorMessage  string                 `protobuf:"bytes,2,opt,name=error_message,json=errorMessage,proto3" json:"error_message,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ResolveApprovalResponse) Reset() {
+	*x = ResolveApprovalResponse{}
+	mi := &file_proxy_proxy_proto_msgTypes[54]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ResolveApprovalResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ResolveApprovalResponse) ProtoMessage() {}
+
+func (x *ResolveApprovalResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_proxy_proxy_proto_msgTypes[54]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ResolveApprovalResponse.ProtoReflect.Descriptor instead.
+func (*ResolveApprovalResponse) Descriptor() ([]byte, []int) {
+	return file_proxy_proxy_proto_rawDescGZIP(), []int{54}
+}
+
+func (x *ResolveApprovalResponse) GetSuccess() bool {
+	if x != nil {
+		return x.Success
+	}
+	return false
+}
+
+func (x *ResolveApprovalResponse) GetErrorMessage() string {
+	if x != nil {
+		return x.ErrorMessage
+	}
+	return ""
+}
+
 var File_proxy_proxy_proto protoreflect.FileDescriptor
 
 const file_proxy_proxy_proto_rawDesc = "" +
@@ -4118,7 +4238,15 @@ const file_proxy_proxy_proto_rawDesc = "" +
 	"unique_ips\x18\x04 \x01(\x03R\tuniqueIps\x12)\n" +
 	"\x10unique_countries\x18\x05 \x01(\x03R\x0funiqueCountries\x12#\n" +
 	"\rblocked_total\x18\x06 \x01(\x03R\fblockedTotal\x12#\n" +
-	"\rallowed_total\x18\a \x01(\x03R\fallowedTotal*\x88\x01\n" +
+	"\rallowed_total\x18\a \x01(\x03R\fallowedTotal\"\xb3\x01\n" +
+	"\x16ResolveApprovalRequest\x12\x15\n" +
+	"\x06req_id\x18\x01 \x01(\tR\x05reqId\x123\n" +
+	"\x06action\x18\x02 \x01(\x0e2\x1b.nitella.ApprovalActionTypeR\x06action\x125\n" +
+	"\bduration\x18\x03 \x01(\x0e2\x19.nitella.ApprovalDurationR\bduration\x12\x16\n" +
+	"\x06reason\x18\x04 \x01(\tR\x06reason\"X\n" +
+	"\x17ResolveApprovalResponse\x12\x18\n" +
+	"\asuccess\x18\x01 \x01(\bR\asuccess\x12#\n" +
+	"\rerror_message\x18\x02 \x01(\tR\ferrorMessage*\x88\x01\n" +
 	"\x0fHealthCheckType\x12!\n" +
 	"\x1dHEALTH_CHECK_TYPE_UNSPECIFIED\x10\x00\x12\x19\n" +
 	"\x15HEALTH_CHECK_TYPE_TCP\x10\x01\x12\x1a\n" +
@@ -4177,7 +4305,7 @@ func file_proxy_proxy_proto_rawDescGZIP() []byte {
 }
 
 var file_proxy_proxy_proto_enumTypes = make([]protoimpl.EnumInfo, 5)
-var file_proxy_proxy_proto_msgTypes = make([]protoimpl.MessageInfo, 53)
+var file_proxy_proxy_proto_msgTypes = make([]protoimpl.MessageInfo, 55)
 var file_proxy_proxy_proto_goTypes = []any{
 	(HealthCheckType)(0),                 // 0: nitella.proxy.HealthCheckType
 	(ClientAuthType)(0),                  // 1: nitella.proxy.ClientAuthType
@@ -4237,108 +4365,114 @@ var file_proxy_proxy_proto_goTypes = []any{
 	(*GetGeoStatsResponse)(nil),          // 55: nitella.proxy.GetGeoStatsResponse
 	(*GetStatsSummaryRequest)(nil),       // 56: nitella.proxy.GetStatsSummaryRequest
 	(*StatsSummaryResponse)(nil),         // 57: nitella.proxy.StatsSummaryResponse
-	(*common.GeoInfo)(nil),               // 58: nitella.GeoInfo
-	(common.ActionType)(0),               // 59: nitella.ActionType
-	(common.MockPreset)(0),               // 60: nitella.MockPreset
-	(common.FallbackAction)(0),           // 61: nitella.FallbackAction
-	(common.ConditionType)(0),            // 62: nitella.ConditionType
-	(common.Operator)(0),                 // 63: nitella.Operator
-	(*timestamp.Timestamp)(nil),          // 64: google.protobuf.Timestamp
-	(*empty.Empty)(nil),                  // 65: google.protobuf.Empty
+	(*ResolveApprovalRequest)(nil),       // 58: nitella.proxy.ResolveApprovalRequest
+	(*ResolveApprovalResponse)(nil),      // 59: nitella.proxy.ResolveApprovalResponse
+	(*common.GeoInfo)(nil),               // 60: nitella.GeoInfo
+	(common.ActionType)(0),               // 61: nitella.ActionType
+	(common.MockPreset)(0),               // 62: nitella.MockPreset
+	(common.FallbackAction)(0),           // 63: nitella.FallbackAction
+	(common.ConditionType)(0),            // 64: nitella.ConditionType
+	(common.Operator)(0),                 // 65: nitella.Operator
+	(*timestamp.Timestamp)(nil),          // 66: google.protobuf.Timestamp
+	(common.ApprovalActionType)(0),       // 67: nitella.ApprovalActionType
+	(common.ApprovalDuration)(0),         // 68: nitella.ApprovalDuration
+	(*empty.Empty)(nil),                  // 69: google.protobuf.Empty
 }
 var file_proxy_proxy_proto_depIdxs = []int32{
 	4,  // 0: nitella.proxy.ConfigureGeoIPRequest.mode:type_name -> nitella.proxy.ConfigureGeoIPRequest.Mode
-	58, // 1: nitella.proxy.LookupIPResponse.geo:type_name -> nitella.GeoInfo
-	59, // 2: nitella.proxy.CreateProxyRequest.default_action:type_name -> nitella.ActionType
-	60, // 3: nitella.proxy.CreateProxyRequest.default_mock:type_name -> nitella.MockPreset
-	61, // 4: nitella.proxy.CreateProxyRequest.fallback_action:type_name -> nitella.FallbackAction
-	60, // 5: nitella.proxy.CreateProxyRequest.fallback_mock:type_name -> nitella.MockPreset
+	60, // 1: nitella.proxy.LookupIPResponse.geo:type_name -> nitella.GeoInfo
+	61, // 2: nitella.proxy.CreateProxyRequest.default_action:type_name -> nitella.ActionType
+	62, // 3: nitella.proxy.CreateProxyRequest.default_mock:type_name -> nitella.MockPreset
+	63, // 4: nitella.proxy.CreateProxyRequest.fallback_action:type_name -> nitella.FallbackAction
+	62, // 5: nitella.proxy.CreateProxyRequest.fallback_mock:type_name -> nitella.MockPreset
 	1,  // 6: nitella.proxy.CreateProxyRequest.client_auth_type:type_name -> nitella.proxy.ClientAuthType
 	12, // 7: nitella.proxy.CreateProxyRequest.health_check:type_name -> nitella.proxy.HealthCheckConfig
 	0,  // 8: nitella.proxy.HealthCheckConfig.type:type_name -> nitella.proxy.HealthCheckType
-	59, // 9: nitella.proxy.UpdateProxyRequest.default_action:type_name -> nitella.ActionType
-	60, // 10: nitella.proxy.UpdateProxyRequest.default_mock:type_name -> nitella.MockPreset
-	61, // 11: nitella.proxy.UpdateProxyRequest.fallback_action:type_name -> nitella.FallbackAction
-	60, // 12: nitella.proxy.UpdateProxyRequest.fallback_mock:type_name -> nitella.MockPreset
+	61, // 9: nitella.proxy.UpdateProxyRequest.default_action:type_name -> nitella.ActionType
+	62, // 10: nitella.proxy.UpdateProxyRequest.default_mock:type_name -> nitella.MockPreset
+	63, // 11: nitella.proxy.UpdateProxyRequest.fallback_action:type_name -> nitella.FallbackAction
+	62, // 12: nitella.proxy.UpdateProxyRequest.fallback_mock:type_name -> nitella.MockPreset
 	1,  // 13: nitella.proxy.UpdateProxyRequest.client_auth_type:type_name -> nitella.proxy.ClientAuthType
 	12, // 14: nitella.proxy.UpdateProxyRequest.health_check:type_name -> nitella.proxy.HealthCheckConfig
-	59, // 15: nitella.proxy.ProxyStatus.default_action:type_name -> nitella.ActionType
-	60, // 16: nitella.proxy.ProxyStatus.default_mock:type_name -> nitella.MockPreset
-	61, // 17: nitella.proxy.ProxyStatus.fallback_action:type_name -> nitella.FallbackAction
-	60, // 18: nitella.proxy.ProxyStatus.fallback_mock:type_name -> nitella.MockPreset
+	61, // 15: nitella.proxy.ProxyStatus.default_action:type_name -> nitella.ActionType
+	62, // 16: nitella.proxy.ProxyStatus.default_mock:type_name -> nitella.MockPreset
+	63, // 17: nitella.proxy.ProxyStatus.fallback_action:type_name -> nitella.FallbackAction
+	62, // 18: nitella.proxy.ProxyStatus.fallback_mock:type_name -> nitella.MockPreset
 	1,  // 19: nitella.proxy.ProxyStatus.client_auth_type:type_name -> nitella.proxy.ClientAuthType
 	12, // 20: nitella.proxy.ProxyStatus.health_check:type_name -> nitella.proxy.HealthCheckConfig
 	2,  // 21: nitella.proxy.ProxyStatus.health_status:type_name -> nitella.proxy.HealthStatus
 	27, // 22: nitella.proxy.ReloadRulesRequest.rules:type_name -> nitella.proxy.Rule
 	28, // 23: nitella.proxy.Rule.conditions:type_name -> nitella.proxy.Condition
-	59, // 24: nitella.proxy.Rule.action:type_name -> nitella.ActionType
+	61, // 24: nitella.proxy.Rule.action:type_name -> nitella.ActionType
 	29, // 25: nitella.proxy.Rule.rate_limit:type_name -> nitella.proxy.RateLimitConfig
 	30, // 26: nitella.proxy.Rule.mock_response:type_name -> nitella.proxy.MockConfig
-	62, // 27: nitella.proxy.Condition.type:type_name -> nitella.ConditionType
-	63, // 28: nitella.proxy.Condition.op:type_name -> nitella.Operator
-	60, // 29: nitella.proxy.MockConfig.preset:type_name -> nitella.MockPreset
+	64, // 27: nitella.proxy.Condition.type:type_name -> nitella.ConditionType
+	65, // 28: nitella.proxy.Condition.op:type_name -> nitella.Operator
+	62, // 29: nitella.proxy.MockConfig.preset:type_name -> nitella.MockPreset
 	27, // 30: nitella.proxy.AddRuleRequest.rule:type_name -> nitella.proxy.Rule
 	27, // 31: nitella.proxy.ListRulesResponse.rules:type_name -> nitella.proxy.Rule
 	24, // 32: nitella.proxy.ListProxiesResponse.proxies:type_name -> nitella.proxy.ProxyStatus
 	3,  // 33: nitella.proxy.ConnectionEvent.event_type:type_name -> nitella.proxy.EventType
-	59, // 34: nitella.proxy.ConnectionEvent.action_taken:type_name -> nitella.ActionType
-	58, // 35: nitella.proxy.ConnectionEvent.geo:type_name -> nitella.GeoInfo
-	64, // 36: nitella.proxy.ActiveConnection.start_time:type_name -> google.protobuf.Timestamp
-	58, // 37: nitella.proxy.ActiveConnection.geo:type_name -> nitella.GeoInfo
+	61, // 34: nitella.proxy.ConnectionEvent.action_taken:type_name -> nitella.ActionType
+	60, // 35: nitella.proxy.ConnectionEvent.geo:type_name -> nitella.GeoInfo
+	66, // 36: nitella.proxy.ActiveConnection.start_time:type_name -> google.protobuf.Timestamp
+	60, // 37: nitella.proxy.ActiveConnection.geo:type_name -> nitella.GeoInfo
 	43, // 38: nitella.proxy.GetActiveConnectionsResponse.connections:type_name -> nitella.proxy.ActiveConnection
-	64, // 39: nitella.proxy.IPStatsResult.first_seen:type_name -> google.protobuf.Timestamp
-	64, // 40: nitella.proxy.IPStatsResult.last_seen:type_name -> google.protobuf.Timestamp
+	66, // 39: nitella.proxy.IPStatsResult.first_seen:type_name -> google.protobuf.Timestamp
+	66, // 40: nitella.proxy.IPStatsResult.last_seen:type_name -> google.protobuf.Timestamp
 	51, // 41: nitella.proxy.GetIPStatsResponse.stats:type_name -> nitella.proxy.IPStatsResult
 	54, // 42: nitella.proxy.GetGeoStatsResponse.stats:type_name -> nitella.proxy.GeoStatsResult
-	11, // 43: nitella.proxy.ProxyControlService.CreateProxy:input_type -> nitella.proxy.CreateProxyRequest
-	14, // 44: nitella.proxy.ProxyControlService.DisableProxy:input_type -> nitella.proxy.DisableProxyRequest
-	16, // 45: nitella.proxy.ProxyControlService.EnableProxy:input_type -> nitella.proxy.EnableProxyRequest
-	18, // 46: nitella.proxy.ProxyControlService.DeleteProxy:input_type -> nitella.proxy.DeleteProxyRequest
-	20, // 47: nitella.proxy.ProxyControlService.UpdateProxy:input_type -> nitella.proxy.UpdateProxyRequest
-	65, // 48: nitella.proxy.ProxyControlService.RestartListeners:input_type -> google.protobuf.Empty
-	23, // 49: nitella.proxy.ProxyControlService.GetStatus:input_type -> nitella.proxy.GetStatusRequest
-	25, // 50: nitella.proxy.ProxyControlService.ReloadRules:input_type -> nitella.proxy.ReloadRulesRequest
-	31, // 51: nitella.proxy.ProxyControlService.AddRule:input_type -> nitella.proxy.AddRuleRequest
-	32, // 52: nitella.proxy.ProxyControlService.RemoveRule:input_type -> nitella.proxy.RemoveRuleRequest
-	33, // 53: nitella.proxy.ProxyControlService.ListRules:input_type -> nitella.proxy.ListRulesRequest
-	35, // 54: nitella.proxy.ProxyControlService.ListProxies:input_type -> nitella.proxy.ListProxiesRequest
-	37, // 55: nitella.proxy.ProxyControlService.BlockIP:input_type -> nitella.proxy.BlockIPRequest
-	38, // 56: nitella.proxy.ProxyControlService.AllowIP:input_type -> nitella.proxy.AllowIPRequest
-	39, // 57: nitella.proxy.ProxyControlService.StreamConnections:input_type -> nitella.proxy.StreamConnectionsRequest
-	41, // 58: nitella.proxy.ProxyControlService.StreamMetrics:input_type -> nitella.proxy.StreamMetricsRequest
-	44, // 59: nitella.proxy.ProxyControlService.GetActiveConnections:input_type -> nitella.proxy.GetActiveConnectionsRequest
-	46, // 60: nitella.proxy.ProxyControlService.CloseConnection:input_type -> nitella.proxy.CloseConnectionRequest
-	48, // 61: nitella.proxy.ProxyControlService.CloseAllConnections:input_type -> nitella.proxy.CloseAllConnectionsRequest
-	5,  // 62: nitella.proxy.ProxyControlService.ConfigureGeoIP:input_type -> nitella.proxy.ConfigureGeoIPRequest
-	7,  // 63: nitella.proxy.ProxyControlService.LookupIP:input_type -> nitella.proxy.LookupIPRequest
-	9,  // 64: nitella.proxy.ProxyControlService.GetGeoIPStatus:input_type -> nitella.proxy.GetGeoIPStatusRequest
-	13, // 65: nitella.proxy.ProxyControlService.CreateProxy:output_type -> nitella.proxy.CreateProxyResponse
-	15, // 66: nitella.proxy.ProxyControlService.DisableProxy:output_type -> nitella.proxy.DisableProxyResponse
-	17, // 67: nitella.proxy.ProxyControlService.EnableProxy:output_type -> nitella.proxy.EnableProxyResponse
-	19, // 68: nitella.proxy.ProxyControlService.DeleteProxy:output_type -> nitella.proxy.DeleteProxyResponse
-	21, // 69: nitella.proxy.ProxyControlService.UpdateProxy:output_type -> nitella.proxy.UpdateProxyResponse
-	22, // 70: nitella.proxy.ProxyControlService.RestartListeners:output_type -> nitella.proxy.RestartListenersResponse
-	24, // 71: nitella.proxy.ProxyControlService.GetStatus:output_type -> nitella.proxy.ProxyStatus
-	26, // 72: nitella.proxy.ProxyControlService.ReloadRules:output_type -> nitella.proxy.ReloadRulesResponse
-	27, // 73: nitella.proxy.ProxyControlService.AddRule:output_type -> nitella.proxy.Rule
-	65, // 74: nitella.proxy.ProxyControlService.RemoveRule:output_type -> google.protobuf.Empty
-	34, // 75: nitella.proxy.ProxyControlService.ListRules:output_type -> nitella.proxy.ListRulesResponse
-	36, // 76: nitella.proxy.ProxyControlService.ListProxies:output_type -> nitella.proxy.ListProxiesResponse
-	65, // 77: nitella.proxy.ProxyControlService.BlockIP:output_type -> google.protobuf.Empty
-	65, // 78: nitella.proxy.ProxyControlService.AllowIP:output_type -> google.protobuf.Empty
-	40, // 79: nitella.proxy.ProxyControlService.StreamConnections:output_type -> nitella.proxy.ConnectionEvent
-	42, // 80: nitella.proxy.ProxyControlService.StreamMetrics:output_type -> nitella.proxy.MetricsSample
-	45, // 81: nitella.proxy.ProxyControlService.GetActiveConnections:output_type -> nitella.proxy.GetActiveConnectionsResponse
-	47, // 82: nitella.proxy.ProxyControlService.CloseConnection:output_type -> nitella.proxy.CloseConnectionResponse
-	49, // 83: nitella.proxy.ProxyControlService.CloseAllConnections:output_type -> nitella.proxy.CloseAllConnectionsResponse
-	6,  // 84: nitella.proxy.ProxyControlService.ConfigureGeoIP:output_type -> nitella.proxy.ConfigureGeoIPResponse
-	8,  // 85: nitella.proxy.ProxyControlService.LookupIP:output_type -> nitella.proxy.LookupIPResponse
-	10, // 86: nitella.proxy.ProxyControlService.GetGeoIPStatus:output_type -> nitella.proxy.GetGeoIPStatusResponse
-	65, // [65:87] is the sub-list for method output_type
-	43, // [43:65] is the sub-list for method input_type
-	43, // [43:43] is the sub-list for extension type_name
-	43, // [43:43] is the sub-list for extension extendee
-	0,  // [0:43] is the sub-list for field type_name
+	67, // 43: nitella.proxy.ResolveApprovalRequest.action:type_name -> nitella.ApprovalActionType
+	68, // 44: nitella.proxy.ResolveApprovalRequest.duration:type_name -> nitella.ApprovalDuration
+	11, // 45: nitella.proxy.ProxyControlService.CreateProxy:input_type -> nitella.proxy.CreateProxyRequest
+	14, // 46: nitella.proxy.ProxyControlService.DisableProxy:input_type -> nitella.proxy.DisableProxyRequest
+	16, // 47: nitella.proxy.ProxyControlService.EnableProxy:input_type -> nitella.proxy.EnableProxyRequest
+	18, // 48: nitella.proxy.ProxyControlService.DeleteProxy:input_type -> nitella.proxy.DeleteProxyRequest
+	20, // 49: nitella.proxy.ProxyControlService.UpdateProxy:input_type -> nitella.proxy.UpdateProxyRequest
+	69, // 50: nitella.proxy.ProxyControlService.RestartListeners:input_type -> google.protobuf.Empty
+	23, // 51: nitella.proxy.ProxyControlService.GetStatus:input_type -> nitella.proxy.GetStatusRequest
+	25, // 52: nitella.proxy.ProxyControlService.ReloadRules:input_type -> nitella.proxy.ReloadRulesRequest
+	31, // 53: nitella.proxy.ProxyControlService.AddRule:input_type -> nitella.proxy.AddRuleRequest
+	32, // 54: nitella.proxy.ProxyControlService.RemoveRule:input_type -> nitella.proxy.RemoveRuleRequest
+	33, // 55: nitella.proxy.ProxyControlService.ListRules:input_type -> nitella.proxy.ListRulesRequest
+	35, // 56: nitella.proxy.ProxyControlService.ListProxies:input_type -> nitella.proxy.ListProxiesRequest
+	37, // 57: nitella.proxy.ProxyControlService.BlockIP:input_type -> nitella.proxy.BlockIPRequest
+	38, // 58: nitella.proxy.ProxyControlService.AllowIP:input_type -> nitella.proxy.AllowIPRequest
+	39, // 59: nitella.proxy.ProxyControlService.StreamConnections:input_type -> nitella.proxy.StreamConnectionsRequest
+	41, // 60: nitella.proxy.ProxyControlService.StreamMetrics:input_type -> nitella.proxy.StreamMetricsRequest
+	44, // 61: nitella.proxy.ProxyControlService.GetActiveConnections:input_type -> nitella.proxy.GetActiveConnectionsRequest
+	46, // 62: nitella.proxy.ProxyControlService.CloseConnection:input_type -> nitella.proxy.CloseConnectionRequest
+	48, // 63: nitella.proxy.ProxyControlService.CloseAllConnections:input_type -> nitella.proxy.CloseAllConnectionsRequest
+	5,  // 64: nitella.proxy.ProxyControlService.ConfigureGeoIP:input_type -> nitella.proxy.ConfigureGeoIPRequest
+	7,  // 65: nitella.proxy.ProxyControlService.LookupIP:input_type -> nitella.proxy.LookupIPRequest
+	9,  // 66: nitella.proxy.ProxyControlService.GetGeoIPStatus:input_type -> nitella.proxy.GetGeoIPStatusRequest
+	13, // 67: nitella.proxy.ProxyControlService.CreateProxy:output_type -> nitella.proxy.CreateProxyResponse
+	15, // 68: nitella.proxy.ProxyControlService.DisableProxy:output_type -> nitella.proxy.DisableProxyResponse
+	17, // 69: nitella.proxy.ProxyControlService.EnableProxy:output_type -> nitella.proxy.EnableProxyResponse
+	19, // 70: nitella.proxy.ProxyControlService.DeleteProxy:output_type -> nitella.proxy.DeleteProxyResponse
+	21, // 71: nitella.proxy.ProxyControlService.UpdateProxy:output_type -> nitella.proxy.UpdateProxyResponse
+	22, // 72: nitella.proxy.ProxyControlService.RestartListeners:output_type -> nitella.proxy.RestartListenersResponse
+	24, // 73: nitella.proxy.ProxyControlService.GetStatus:output_type -> nitella.proxy.ProxyStatus
+	26, // 74: nitella.proxy.ProxyControlService.ReloadRules:output_type -> nitella.proxy.ReloadRulesResponse
+	27, // 75: nitella.proxy.ProxyControlService.AddRule:output_type -> nitella.proxy.Rule
+	69, // 76: nitella.proxy.ProxyControlService.RemoveRule:output_type -> google.protobuf.Empty
+	34, // 77: nitella.proxy.ProxyControlService.ListRules:output_type -> nitella.proxy.ListRulesResponse
+	36, // 78: nitella.proxy.ProxyControlService.ListProxies:output_type -> nitella.proxy.ListProxiesResponse
+	69, // 79: nitella.proxy.ProxyControlService.BlockIP:output_type -> google.protobuf.Empty
+	69, // 80: nitella.proxy.ProxyControlService.AllowIP:output_type -> google.protobuf.Empty
+	40, // 81: nitella.proxy.ProxyControlService.StreamConnections:output_type -> nitella.proxy.ConnectionEvent
+	42, // 82: nitella.proxy.ProxyControlService.StreamMetrics:output_type -> nitella.proxy.MetricsSample
+	45, // 83: nitella.proxy.ProxyControlService.GetActiveConnections:output_type -> nitella.proxy.GetActiveConnectionsResponse
+	47, // 84: nitella.proxy.ProxyControlService.CloseConnection:output_type -> nitella.proxy.CloseConnectionResponse
+	49, // 85: nitella.proxy.ProxyControlService.CloseAllConnections:output_type -> nitella.proxy.CloseAllConnectionsResponse
+	6,  // 86: nitella.proxy.ProxyControlService.ConfigureGeoIP:output_type -> nitella.proxy.ConfigureGeoIPResponse
+	8,  // 87: nitella.proxy.ProxyControlService.LookupIP:output_type -> nitella.proxy.LookupIPResponse
+	10, // 88: nitella.proxy.ProxyControlService.GetGeoIPStatus:output_type -> nitella.proxy.GetGeoIPStatusResponse
+	67, // [67:89] is the sub-list for method output_type
+	45, // [45:67] is the sub-list for method input_type
+	45, // [45:45] is the sub-list for extension type_name
+	45, // [45:45] is the sub-list for extension extendee
+	0,  // [0:45] is the sub-list for field type_name
 }
 
 func init() { file_proxy_proxy_proto_init() }
@@ -4352,7 +4486,7 @@ func file_proxy_proxy_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_proxy_proxy_proto_rawDesc), len(file_proxy_proxy_proto_rawDesc)),
 			NumEnums:      5,
-			NumMessages:   53,
+			NumMessages:   55,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

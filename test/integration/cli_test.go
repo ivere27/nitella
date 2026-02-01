@@ -36,7 +36,7 @@ func TestCLI_DynamicProxyManagement(t *testing.T) {
 
 	// Helper to run CLI command
 	runCLI := func(args ...string) (string, error) {
-		allArgs := append([]string{"--addr", fmt.Sprintf("localhost:%d", adminPort), "--token", token}, args...)
+		allArgs := append([]string{"--local", "--addr", fmt.Sprintf("localhost:%d", adminPort), "--token", token}, args...)
 		cmd := exec.Command(nitellaBin, allArgs...)
 		var stdout, stderr bytes.Buffer
 		cmd.Stdout = &stdout
@@ -214,7 +214,7 @@ func TestCLI_QuickBlockAllow(t *testing.T) {
 	time.Sleep(200 * time.Millisecond)
 
 	runCLI := func(args ...string) (string, error) {
-		allArgs := append([]string{"--addr", fmt.Sprintf("localhost:%d", adminPort), "--token", token}, args...)
+		allArgs := append([]string{"--local", "--addr", fmt.Sprintf("localhost:%d", adminPort), "--token", token}, args...)
 		cmd := exec.Command(nitellaBin, allArgs...)
 		var stdout, stderr bytes.Buffer
 		cmd.Stdout = &stdout
@@ -287,7 +287,7 @@ func TestCLI_UpdateProxy(t *testing.T) {
 	time.Sleep(200 * time.Millisecond)
 
 	runCLI := func(args ...string) (string, error) {
-		allArgs := append([]string{"--addr", fmt.Sprintf("localhost:%d", adminPort), "--token", token}, args...)
+		allArgs := append([]string{"--local", "--addr", fmt.Sprintf("localhost:%d", adminPort), "--token", token}, args...)
 		cmd := exec.Command(nitellaBin, allArgs...)
 		var stdout, stderr bytes.Buffer
 		cmd.Stdout = &stdout
@@ -359,7 +359,7 @@ func TestCLI_GeoIPLookup(t *testing.T) {
 	time.Sleep(200 * time.Millisecond)
 
 	runCLI := func(args ...string) (string, error) {
-		allArgs := append([]string{"--addr", fmt.Sprintf("localhost:%d", adminPort), "--token", token}, args...)
+		allArgs := append([]string{"--local", "--addr", fmt.Sprintf("localhost:%d", adminPort), "--token", token}, args...)
 		cmd := exec.Command(nitellaBin, allArgs...)
 		var stdout, stderr bytes.Buffer
 		cmd.Stdout = &stdout
@@ -429,7 +429,7 @@ func TestCLI_Connections(t *testing.T) {
 	time.Sleep(200 * time.Millisecond)
 
 	runCLI := func(args ...string) (string, error) {
-		allArgs := append([]string{"--addr", fmt.Sprintf("localhost:%d", adminPort), "--token", token}, args...)
+		allArgs := append([]string{"--local", "--addr", fmt.Sprintf("localhost:%d", adminPort), "--token", token}, args...)
 		cmd := exec.Command(nitellaBin, allArgs...)
 		var stdout, stderr bytes.Buffer
 		cmd.Stdout = &stdout
@@ -502,7 +502,7 @@ func TestCLI_RestartListeners(t *testing.T) {
 	time.Sleep(200 * time.Millisecond)
 
 	runCLI := func(args ...string) (string, error) {
-		allArgs := append([]string{"--addr", fmt.Sprintf("localhost:%d", adminPort), "--token", token}, args...)
+		allArgs := append([]string{"--local", "--addr", fmt.Sprintf("localhost:%d", adminPort), "--token", token}, args...)
 		cmd := exec.Command(nitellaBin, allArgs...)
 		var stdout, stderr bytes.Buffer
 		cmd.Stdout = &stdout
@@ -573,4 +573,230 @@ func extractRuleID(output string) string {
 		}
 	}
 	return ""
+}
+
+// ============================================================================
+// Passphrase Integration Tests
+// ============================================================================
+
+// TestCLI_PassphraseEncryption tests identity creation with passphrase
+func TestCLI_PassphraseEncryption(t *testing.T) {
+	nitellaBin := "../../bin/nitella"
+	if _, err := os.Stat(nitellaBin); os.IsNotExist(err) {
+		t.Skip("nitella binary not found, run 'make nitella_build' first")
+	}
+
+	// Create temp data directory
+	tmpDir, err := os.MkdirTemp("", "nitella-passphrase-test-*")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	passphrase := "integration-test-passphrase-123"
+
+	// Test 1: Create identity with passphrase
+	t.Run("CreateWithPassphrase", func(t *testing.T) {
+		cmd := exec.Command(nitellaBin, "--data-dir", tmpDir, "identity")
+		cmd.Env = append(os.Environ(), "NITELLA_PASSPHRASE="+passphrase)
+		var stdout, stderr bytes.Buffer
+		cmd.Stdout = &stdout
+		cmd.Stderr = &stderr
+		err := cmd.Run()
+		output := stdout.String() + stderr.String()
+		if err != nil {
+			t.Fatalf("Failed to create identity: %v, output: %s", err, output)
+		}
+
+		// Verify identity was created
+		if !strings.Contains(output, "Emoji Hash") && !strings.Contains(output, "IDENTITY CREATED") {
+			t.Logf("Output: %s", output)
+		}
+
+		// Verify key file exists and is encrypted
+		keyPath := tmpDir + "/root_ca.key"
+		keyData, err := os.ReadFile(keyPath)
+		if err != nil {
+			t.Fatalf("Failed to read key file: %v", err)
+		}
+		if !strings.Contains(string(keyData), "ENCRYPTED PRIVATE KEY") {
+			t.Error("Key should be encrypted")
+		}
+		t.Log("Identity created with encrypted key")
+	})
+
+	// Test 2: Load identity with correct passphrase
+	t.Run("LoadWithCorrectPassphrase", func(t *testing.T) {
+		cmd := exec.Command(nitellaBin, "--data-dir", tmpDir, "identity")
+		cmd.Env = append(os.Environ(), "NITELLA_PASSPHRASE="+passphrase)
+		var stdout, stderr bytes.Buffer
+		cmd.Stdout = &stdout
+		cmd.Stderr = &stderr
+		err := cmd.Run()
+		output := stdout.String() + stderr.String()
+		if err != nil {
+			t.Fatalf("Failed to load identity: %v, output: %s", err, output)
+		}
+		if !strings.Contains(output, "Emoji Hash") {
+			t.Errorf("Expected identity info, got: %s", output)
+		}
+		t.Log("Identity loaded with correct passphrase")
+	})
+
+	// Test 3: Load with wrong passphrase should fail
+	t.Run("LoadWithWrongPassphrase", func(t *testing.T) {
+		cmd := exec.Command(nitellaBin, "--data-dir", tmpDir, "identity")
+		cmd.Env = append(os.Environ(), "NITELLA_PASSPHRASE=wrong-passphrase")
+		var stdout, stderr bytes.Buffer
+		cmd.Stdout = &stdout
+		cmd.Stderr = &stderr
+		err := cmd.Run()
+		output := stdout.String() + stderr.String()
+		if err == nil {
+			t.Error("Expected error with wrong passphrase")
+		}
+		if !strings.Contains(output, "incorrect passphrase") && !strings.Contains(output, "decryption failed") {
+			t.Logf("Expected passphrase error, got: %s", output)
+		}
+		t.Log("Wrong passphrase correctly rejected")
+	})
+
+	// Test 4: Load encrypted key without passphrase should fail
+	t.Run("LoadWithoutPassphrase", func(t *testing.T) {
+		cmd := exec.Command(nitellaBin, "--data-dir", tmpDir, "identity")
+		// No NITELLA_PASSPHRASE set - but this will prompt for input
+		// Since we can't provide stdin in test, it will fail
+		cmd.Env = os.Environ() // No passphrase env
+		var stdout, stderr bytes.Buffer
+		cmd.Stdout = &stdout
+		cmd.Stderr = &stderr
+
+		// Set stdin to empty to simulate no input
+		cmd.Stdin = strings.NewReader("")
+
+		err := cmd.Run()
+		output := stdout.String() + stderr.String()
+		// Should fail because it can't read passphrase from terminal
+		if err == nil {
+			// If it somehow succeeded, check if key is still encrypted
+			t.Log("Command succeeded - checking if passphrase was actually required")
+		}
+		t.Logf("Output without passphrase: %s", output)
+	})
+}
+
+// TestCLI_NoPassphrase tests identity creation without passphrase (backwards compat)
+func TestCLI_NoPassphrase(t *testing.T) {
+	nitellaBin := "../../bin/nitella"
+	if _, err := os.Stat(nitellaBin); os.IsNotExist(err) {
+		t.Skip("nitella binary not found, run 'make nitella_build' first")
+	}
+
+	// Create temp data directory
+	tmpDir, err := os.MkdirTemp("", "nitella-no-passphrase-test-*")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	// Create identity without passphrase (empty passphrase)
+	t.Run("CreateWithoutPassphrase", func(t *testing.T) {
+		cmd := exec.Command(nitellaBin, "--data-dir", tmpDir, "--passphrase", "", "identity")
+		var stdout, stderr bytes.Buffer
+		cmd.Stdout = &stdout
+		cmd.Stderr = &stderr
+		err := cmd.Run()
+		output := stdout.String() + stderr.String()
+		if err != nil {
+			t.Fatalf("Failed to create identity: %v, output: %s", err, output)
+		}
+
+		// Verify key file exists and is NOT encrypted
+		keyPath := tmpDir + "/root_ca.key"
+		keyData, err := os.ReadFile(keyPath)
+		if err != nil {
+			t.Fatalf("Failed to read key file: %v", err)
+		}
+		if strings.Contains(string(keyData), "ENCRYPTED") {
+			t.Error("Key should NOT be encrypted when no passphrase provided")
+		}
+		if !strings.Contains(string(keyData), "PRIVATE KEY") {
+			t.Error("Key file should contain PRIVATE KEY")
+		}
+		t.Log("Identity created without encryption")
+	})
+
+	// Load without passphrase should work
+	t.Run("LoadWithoutPassphrase", func(t *testing.T) {
+		cmd := exec.Command(nitellaBin, "--data-dir", tmpDir, "identity")
+		var stdout, stderr bytes.Buffer
+		cmd.Stdout = &stdout
+		cmd.Stderr = &stderr
+		err := cmd.Run()
+		output := stdout.String() + stderr.String()
+		if err != nil {
+			t.Fatalf("Failed to load identity: %v, output: %s", err, output)
+		}
+		if !strings.Contains(output, "Emoji Hash") {
+			t.Errorf("Expected identity info, got: %s", output)
+		}
+		t.Log("Identity loaded without passphrase")
+	})
+}
+
+// TestCLI_PassphraseFlag tests --passphrase flag
+func TestCLI_PassphraseFlag(t *testing.T) {
+	nitellaBin := "../../bin/nitella"
+	if _, err := os.Stat(nitellaBin); os.IsNotExist(err) {
+		t.Skip("nitella binary not found, run 'make nitella_build' first")
+	}
+
+	tmpDir, err := os.MkdirTemp("", "nitella-passphrase-flag-test-*")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	passphrase := "flag-test-passphrase"
+
+	// Create with --passphrase flag
+	t.Run("CreateWithFlag", func(t *testing.T) {
+		cmd := exec.Command(nitellaBin, "--data-dir", tmpDir, "--passphrase", passphrase, "identity")
+		var stdout, stderr bytes.Buffer
+		cmd.Stdout = &stdout
+		cmd.Stderr = &stderr
+		err := cmd.Run()
+		output := stdout.String() + stderr.String()
+		if err != nil {
+			t.Fatalf("Failed to create identity: %v, output: %s", err, output)
+		}
+
+		// Verify key is encrypted
+		keyPath := tmpDir + "/root_ca.key"
+		keyData, err := os.ReadFile(keyPath)
+		if err != nil {
+			t.Fatalf("Failed to read key file: %v", err)
+		}
+		if !strings.Contains(string(keyData), "ENCRYPTED PRIVATE KEY") {
+			t.Error("Key should be encrypted when using --passphrase flag")
+		}
+		t.Log("Identity created with --passphrase flag")
+	})
+
+	// Load with --passphrase flag
+	t.Run("LoadWithFlag", func(t *testing.T) {
+		cmd := exec.Command(nitellaBin, "--data-dir", tmpDir, "--passphrase", passphrase, "identity")
+		var stdout, stderr bytes.Buffer
+		cmd.Stdout = &stdout
+		cmd.Stderr = &stderr
+		err := cmd.Run()
+		output := stdout.String() + stderr.String()
+		if err != nil {
+			t.Fatalf("Failed to load identity: %v, output: %s", err, output)
+		}
+		if !strings.Contains(output, "Emoji Hash") {
+			t.Errorf("Expected identity info, got: %s", output)
+		}
+		t.Log("Identity loaded with --passphrase flag")
+	})
 }

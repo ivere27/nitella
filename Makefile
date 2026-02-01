@@ -9,6 +9,7 @@ BUILD_DATE := $(shell date +"%Y-%m-%dT%H:%M:%SZ")
 LD_FLAGS := -X main.commitHash=$(COMMIT_HASH) -X main.buildDate=$(BUILD_DATE)
 
 .PHONY: all build proto test clean deps fmt lint build_plugin
+.PHONY: hub_build hub_server hubctl_build hub_proto hub_test hub_run hub_docker_build hub_docker_run
 
 all: build
 
@@ -27,13 +28,13 @@ build_plugin:
 # Build All
 # ============================================================================
 
-build: proto geoip_build mock_build nitellad_build nitella_build
+build: proto geoip_build mock_build nitellad_build nitella_build hub_build
 
 # ============================================================================
 # Proto Generation
 # ============================================================================
 
-proto: common_proto proxy_proto process_proto geoip_proto geoip_ffi_proto
+proto: common_proto proxy_proto process_proto geoip_proto geoip_ffi_proto hub_proto
 
 common_proto:
 	@mkdir -p pkg/api/common
@@ -193,6 +194,7 @@ lint:
 
 clean:
 	rm -rf $(BUILD_DIR)
+	rm -f pkg/api/hub/*.pb.go
 
 # ============================================================================
 # Docker
@@ -311,3 +313,163 @@ mock_docker_run: mock_docker_build
 		-e PORT=$(MOCK_PORT) \
 		-e PROTOCOL=$(MOCK_PROTOCOL) \
 		nitella-mock
+
+# ============================================================================
+# Hub Server Module
+# ============================================================================
+
+.PHONY: hub_build hub_server hubctl_build hub_proto hub_test hub_test_integration
+.PHONY: hub_run hubctl_run hub_docker_build hub_docker_run hub_clean
+
+hub_build: hub_proto hub_server hubctl_build
+
+hub_server: hub_proto
+	@mkdir -p $(BUILD_DIR)
+	go build -ldflags "$(LD_FLAGS)" -o $(BUILD_DIR)/hub ./cmd/hub
+
+hubctl_build: hub_proto
+	@mkdir -p $(BUILD_DIR)
+	go build -ldflags "$(LD_FLAGS)" -o $(BUILD_DIR)/hubctl ./cmd/hubctl
+
+hub_proto: common_proto
+	@mkdir -p pkg/api/hub
+	protoc --proto_path=api \
+		--go_out=pkg/api --go_opt=paths=source_relative \
+		--go-grpc_out=pkg/api --go-grpc_opt=paths=source_relative \
+		api/hub/hub_common.proto \
+		api/hub/hub_node.proto \
+		api/hub/hub_mobile.proto \
+		api/hub/hub_admin.proto
+
+hub_test:
+	go test -v ./pkg/hub/...
+	go test -v ./pkg/hubclient/...
+
+# Comprehensive Hub integration tests
+# Covers: registration, PAKE/QR pairing, multi-tenant, persistence, crash recovery, security
+hub_test_integration: hub_build nitellad_build nitella_build
+	@echo "============================================"
+	@echo "Running Hub Integration Tests"
+	@echo "============================================"
+	@# Copy hub binary to test location
+	@cp $(BUILD_DIR)/hub cmd/hub/hub 2>/dev/null || true
+	@# Run basic integration tests
+	go test -v ./test/integration/... -run "TestHub_" -timeout 300s
+	@# Run hubctl tests
+	go test -v ./test/integration/... -run "TestHubCtl_" -timeout 300s
+	@# Run comprehensive tests
+	go test -v ./test/integration/... -run "TestComprehensive_" -timeout 600s
+	@echo "============================================"
+	@echo "All Hub integration tests completed"
+	@echo "============================================"
+
+# Docker-based E2E tests (full system with containers)
+hub_test_e2e_docker:
+	@echo "============================================"
+	@echo "Running Docker-based E2E Tests"
+	@echo "============================================"
+	cd test/e2e && docker-compose build
+	cd test/e2e && docker-compose up -d hub mock-http mock-ssh mock-mysql
+	@echo "Waiting for services..."
+	@sleep 10
+	cd test/e2e && docker-compose run --rm test-runner
+	cd test/e2e && docker-compose down -v
+	@echo "============================================"
+	@echo "Docker E2E tests completed"
+	@echo "============================================"
+
+# Quick smoke test (fast verification)
+hub_test_quick: hub_build
+	@echo "Running quick smoke tests..."
+	@cp $(BUILD_DIR)/hub cmd/hub/hub 2>/dev/null || true
+	go test -v ./test/integration/... -run "TestHub_BasicHealth|TestHub_UserRegistration" -timeout 60s
+
+# Clean up test artifacts
+hub_test_clean:
+	rm -rf /tmp/hub-test-* /tmp/nitella-test-*
+	cd test/e2e && docker-compose down -v 2>/dev/null || true
+
+# Run Hub server
+# Usage: make hub_run
+#        make hub_run HUB_PORT=50052 HUB_DB=hub.db
+#        make hub_run HUB_TLS_CERT=cert.pem HUB_TLS_KEY=key.pem
+HUB_PORT ?= 50052
+HUB_HTTP_PORT ?= 8080
+HUB_DB ?= hub.db
+HUB_TLS_CERT ?=
+HUB_TLS_KEY ?=
+HUB_TLS_CA ?=
+hub_run: hub_server
+	./$(BUILD_DIR)/hub \
+		--port $(HUB_PORT) \
+		--http-port $(HUB_HTTP_PORT) \
+		--db-path $(HUB_DB) \
+		$(if $(HUB_TLS_CERT),--tls-cert $(HUB_TLS_CERT)) \
+		$(if $(HUB_TLS_KEY),--tls-key $(HUB_TLS_KEY)) \
+		$(if $(HUB_TLS_CA),--tls-ca $(HUB_TLS_CA))
+
+# Run hubctl CLI
+# Usage: make hubctl_run CMD="users list"
+#        make hubctl_run HUB_ADDR=localhost:50052 CMD="stats"
+HUB_ADDR ?= localhost:50052
+HUB_ADMIN_KEY ?=
+CMD ?= help
+hubctl_run: hubctl_build
+	./$(BUILD_DIR)/hubctl \
+		--hub $(HUB_ADDR) \
+		$(if $(HUB_ADMIN_KEY),--admin-key $(HUB_ADMIN_KEY)) \
+		--insecure \
+		$(CMD)
+
+hub_clean:
+	rm -f $(BUILD_DIR)/hub $(BUILD_DIR)/hubctl
+	rm -f pkg/api/hub/*.pb.go
+
+# Docker
+hub_docker_build:
+	docker build -f Dockerfile.hub -t nitella-hub .
+
+# Run Hub docker container
+# Usage: make hub_docker_run
+#        make hub_docker_run HUB_PORT=50052
+#        make hub_docker_run HUB_TLS_CERT=cert.pem HUB_TLS_KEY=key.pem
+hub_docker_run: hub_docker_build
+	@mkdir -p data
+	docker run -it --rm \
+		-p $(HUB_PORT):50052 \
+		-p $(HUB_HTTP_PORT):8080 \
+		-v $(PWD)/data:/app/data \
+		$(if $(HUB_TLS_CERT),-v $(PWD)/$(HUB_TLS_CERT):/app/certs/cert.pem) \
+		$(if $(HUB_TLS_KEY),-v $(PWD)/$(HUB_TLS_KEY):/app/certs/key.pem) \
+		$(if $(HUB_TLS_CA),-v $(PWD)/$(HUB_TLS_CA):/app/certs/ca.pem) \
+		nitella-hub \
+		--db-path /app/data/hub.db \
+		$(if $(HUB_TLS_CERT),--tls-cert /app/certs/cert.pem) \
+		$(if $(HUB_TLS_KEY),--tls-key /app/certs/key.pem) \
+		$(if $(HUB_TLS_CA),--tls-ca /app/certs/ca.pem)
+
+# ============================================================================
+# Nitellad with Hub Mode
+# ============================================================================
+
+# Run nitellad with Hub registration
+# Usage: make nitellad_hub_run HUB=hub.example.com:50052 HUB_USER_ID=user123 BACKEND=localhost:3000
+HUB ?=
+HUB_USER_ID ?=
+HUB_NODE_NAME ?=
+nitellad_hub_run: nitellad_build
+	./$(BUILD_DIR)/nitellad \
+		--listen :8080 \
+		$(if $(BACKEND),--backend $(BACKEND)) \
+		$(if $(HUB),--hub $(HUB)) \
+		$(if $(HUB_USER_ID),--hub-user-id $(HUB_USER_ID)) \
+		$(if $(HUB_NODE_NAME),--hub-node-name $(HUB_NODE_NAME)) \
+		--admin-port 50051
+
+# Run nitella CLI in Hub mode
+# Usage: make nitella_hub_run HUB=hub.example.com:50052 HUB_TOKEN=xxx
+HUB_TOKEN ?=
+nitella_hub_run: nitella_build
+	./$(BUILD_DIR)/nitella \
+		$(if $(HUB),--hub $(HUB)) \
+		$(if $(HUB_TOKEN),--hub-token $(HUB_TOKEN))

@@ -393,6 +393,518 @@ func (SortOrder) EnumDescriptor() ([]byte, []int) {
 	return file_common_common_proto_rawDescGZIP(), []int{5}
 }
 
+// PemLabel defines PEM block types
+type PemLabel int32
+
+const (
+	PemLabel_PEM_LABEL_UNSPECIFIED           PemLabel = 0
+	PemLabel_PEM_LABEL_CERTIFICATE           PemLabel = 1
+	PemLabel_PEM_LABEL_PUBLIC_KEY            PemLabel = 2
+	PemLabel_PEM_LABEL_PRIVATE_KEY           PemLabel = 3
+	PemLabel_PEM_LABEL_ENCRYPTED_PRIVATE_KEY PemLabel = 4
+)
+
+// Enum value maps for PemLabel.
+var (
+	PemLabel_name = map[int32]string{
+		0: "PEM_LABEL_UNSPECIFIED",
+		1: "PEM_LABEL_CERTIFICATE",
+		2: "PEM_LABEL_PUBLIC_KEY",
+		3: "PEM_LABEL_PRIVATE_KEY",
+		4: "PEM_LABEL_ENCRYPTED_PRIVATE_KEY",
+	}
+	PemLabel_value = map[string]int32{
+		"PEM_LABEL_UNSPECIFIED":           0,
+		"PEM_LABEL_CERTIFICATE":           1,
+		"PEM_LABEL_PUBLIC_KEY":            2,
+		"PEM_LABEL_PRIVATE_KEY":           3,
+		"PEM_LABEL_ENCRYPTED_PRIVATE_KEY": 4,
+	}
+)
+
+func (x PemLabel) Enum() *PemLabel {
+	p := new(PemLabel)
+	*p = x
+	return p
+}
+
+func (x PemLabel) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (PemLabel) Descriptor() protoreflect.EnumDescriptor {
+	return file_common_common_proto_enumTypes[6].Descriptor()
+}
+
+func (PemLabel) Type() protoreflect.EnumType {
+	return &file_common_common_proto_enumTypes[6]
+}
+
+func (x PemLabel) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use PemLabel.Descriptor instead.
+func (PemLabel) EnumDescriptor() ([]byte, []int) {
+	return file_common_common_proto_rawDescGZIP(), []int{6}
+}
+
+// ApprovalDuration defines how long an approval decision lasts
+type ApprovalDuration int32
+
+const (
+	ApprovalDuration_APPROVAL_DURATION_UNSPECIFIED ApprovalDuration = 0
+	ApprovalDuration_APPROVAL_DURATION_ONCE        ApprovalDuration = 1 // Single connection only (no caching)
+	ApprovalDuration_APPROVAL_DURATION_1_MINUTE    ApprovalDuration = 2 // 60 seconds
+	ApprovalDuration_APPROVAL_DURATION_10_MINUTES  ApprovalDuration = 3 // 600 seconds
+	ApprovalDuration_APPROVAL_DURATION_1_HOUR      ApprovalDuration = 4 // 3600 seconds
+	ApprovalDuration_APPROVAL_DURATION_24_HOURS    ApprovalDuration = 5 // 86400 seconds
+)
+
+// Enum value maps for ApprovalDuration.
+var (
+	ApprovalDuration_name = map[int32]string{
+		0: "APPROVAL_DURATION_UNSPECIFIED",
+		1: "APPROVAL_DURATION_ONCE",
+		2: "APPROVAL_DURATION_1_MINUTE",
+		3: "APPROVAL_DURATION_10_MINUTES",
+		4: "APPROVAL_DURATION_1_HOUR",
+		5: "APPROVAL_DURATION_24_HOURS",
+	}
+	ApprovalDuration_value = map[string]int32{
+		"APPROVAL_DURATION_UNSPECIFIED": 0,
+		"APPROVAL_DURATION_ONCE":        1,
+		"APPROVAL_DURATION_1_MINUTE":    2,
+		"APPROVAL_DURATION_10_MINUTES":  3,
+		"APPROVAL_DURATION_1_HOUR":      4,
+		"APPROVAL_DURATION_24_HOURS":    5,
+	}
+)
+
+func (x ApprovalDuration) Enum() *ApprovalDuration {
+	p := new(ApprovalDuration)
+	*p = x
+	return p
+}
+
+func (x ApprovalDuration) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (ApprovalDuration) Descriptor() protoreflect.EnumDescriptor {
+	return file_common_common_proto_enumTypes[7].Descriptor()
+}
+
+func (ApprovalDuration) Type() protoreflect.EnumType {
+	return &file_common_common_proto_enumTypes[7]
+}
+
+func (x ApprovalDuration) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use ApprovalDuration.Descriptor instead.
+func (ApprovalDuration) EnumDescriptor() ([]byte, []int) {
+	return file_common_common_proto_rawDescGZIP(), []int{7}
+}
+
+// ApprovalActionType defines the user's decision for an approval request
+type ApprovalActionType int32
+
+const (
+	ApprovalActionType_APPROVAL_ACTION_TYPE_UNSPECIFIED    ApprovalActionType = 0
+	ApprovalActionType_APPROVAL_ACTION_TYPE_ALLOW          ApprovalActionType = 1 // Allow connection
+	ApprovalActionType_APPROVAL_ACTION_TYPE_BLOCK          ApprovalActionType = 2 // Block connection
+	ApprovalActionType_APPROVAL_ACTION_TYPE_BLOCK_ADD_RULE ApprovalActionType = 3 // Block and create permanent rule
+)
+
+// Enum value maps for ApprovalActionType.
+var (
+	ApprovalActionType_name = map[int32]string{
+		0: "APPROVAL_ACTION_TYPE_UNSPECIFIED",
+		1: "APPROVAL_ACTION_TYPE_ALLOW",
+		2: "APPROVAL_ACTION_TYPE_BLOCK",
+		3: "APPROVAL_ACTION_TYPE_BLOCK_ADD_RULE",
+	}
+	ApprovalActionType_value = map[string]int32{
+		"APPROVAL_ACTION_TYPE_UNSPECIFIED":    0,
+		"APPROVAL_ACTION_TYPE_ALLOW":          1,
+		"APPROVAL_ACTION_TYPE_BLOCK":          2,
+		"APPROVAL_ACTION_TYPE_BLOCK_ADD_RULE": 3,
+	}
+)
+
+func (x ApprovalActionType) Enum() *ApprovalActionType {
+	p := new(ApprovalActionType)
+	*p = x
+	return p
+}
+
+func (x ApprovalActionType) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (ApprovalActionType) Descriptor() protoreflect.EnumDescriptor {
+	return file_common_common_proto_enumTypes[8].Descriptor()
+}
+
+func (ApprovalActionType) Type() protoreflect.EnumType {
+	return &file_common_common_proto_enumTypes[8]
+}
+
+func (x ApprovalActionType) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use ApprovalActionType.Descriptor instead.
+func (ApprovalActionType) EnumDescriptor() ([]byte, []int) {
+	return file_common_common_proto_rawDescGZIP(), []int{8}
+}
+
+// P2PMode defines the peer-to-peer connection strategy
+type P2PMode int32
+
+const (
+	P2PMode_P2P_MODE_UNSPECIFIED P2PMode = 0
+	P2PMode_P2P_MODE_AUTO        P2PMode = 1 // Try P2P first, fallback to Hub if fails
+	P2PMode_P2P_MODE_DIRECT      P2PMode = 2 // P2P only, show error if fails (no fallback)
+	P2PMode_P2P_MODE_HUB         P2PMode = 3 // Hub relay only, no P2P
+)
+
+// Enum value maps for P2PMode.
+var (
+	P2PMode_name = map[int32]string{
+		0: "P2P_MODE_UNSPECIFIED",
+		1: "P2P_MODE_AUTO",
+		2: "P2P_MODE_DIRECT",
+		3: "P2P_MODE_HUB",
+	}
+	P2PMode_value = map[string]int32{
+		"P2P_MODE_UNSPECIFIED": 0,
+		"P2P_MODE_AUTO":        1,
+		"P2P_MODE_DIRECT":      2,
+		"P2P_MODE_HUB":         3,
+	}
+)
+
+func (x P2PMode) Enum() *P2PMode {
+	p := new(P2PMode)
+	*p = x
+	return p
+}
+
+func (x P2PMode) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (P2PMode) Descriptor() protoreflect.EnumDescriptor {
+	return file_common_common_proto_enumTypes[9].Descriptor()
+}
+
+func (P2PMode) Type() protoreflect.EnumType {
+	return &file_common_common_proto_enumTypes[9]
+}
+
+func (x P2PMode) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use P2PMode.Descriptor instead.
+func (P2PMode) EnumDescriptor() ([]byte, []int) {
+	return file_common_common_proto_rawDescGZIP(), []int{9}
+}
+
+// CryptoAlgorithm for forward compatibility
+type CryptoAlgorithm int32
+
+const (
+	CryptoAlgorithm_ALGO_UNKNOWN CryptoAlgorithm = 0
+	CryptoAlgorithm_ALGO_ED25519 CryptoAlgorithm = 1 // Ed25519 Signing + X25519 ECDH + AES-GCM Encryption
+)
+
+// Enum value maps for CryptoAlgorithm.
+var (
+	CryptoAlgorithm_name = map[int32]string{
+		0: "ALGO_UNKNOWN",
+		1: "ALGO_ED25519",
+	}
+	CryptoAlgorithm_value = map[string]int32{
+		"ALGO_UNKNOWN": 0,
+		"ALGO_ED25519": 1,
+	}
+)
+
+func (x CryptoAlgorithm) Enum() *CryptoAlgorithm {
+	p := new(CryptoAlgorithm)
+	*p = x
+	return p
+}
+
+func (x CryptoAlgorithm) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (CryptoAlgorithm) Descriptor() protoreflect.EnumDescriptor {
+	return file_common_common_proto_enumTypes[10].Descriptor()
+}
+
+func (CryptoAlgorithm) Type() protoreflect.EnumType {
+	return &file_common_common_proto_enumTypes[10]
+}
+
+func (x CryptoAlgorithm) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use CryptoAlgorithm.Descriptor instead.
+func (CryptoAlgorithm) EnumDescriptor() ([]byte, []int) {
+	return file_common_common_proto_rawDescGZIP(), []int{10}
+}
+
+// EncryptedPayload wraps E2E encrypted data using X25519 ECDH + AES-256-GCM.
+// The sender generates an ephemeral X25519 keypair, derives a shared secret
+// with the recipient's public key using ECDH, then encrypts with AES-GCM.
+type EncryptedPayload struct {
+	state             protoimpl.MessageState `protogen:"open.v1"`
+	EphemeralPubkey   []byte                 `protobuf:"bytes,1,opt,name=ephemeral_pubkey,json=ephemeralPubkey,proto3" json:"ephemeral_pubkey,omitempty"`       // X25519 ephemeral public key (32 bytes)
+	Nonce             []byte                 `protobuf:"bytes,2,opt,name=nonce,proto3" json:"nonce,omitempty"`                                                  // AES-GCM nonce (12 bytes)
+	Ciphertext        []byte                 `protobuf:"bytes,3,opt,name=ciphertext,proto3" json:"ciphertext,omitempty"`                                        // AES-256-GCM encrypted payload with auth tag
+	SenderFingerprint string                 `protobuf:"bytes,4,opt,name=sender_fingerprint,json=senderFingerprint,proto3" json:"sender_fingerprint,omitempty"` // SHA256 of sender's cert for key lookup
+	Signature         []byte                 `protobuf:"bytes,5,opt,name=signature,proto3" json:"signature,omitempty"`                                          // Ed25519 signature of ciphertext (optional)
+	Algorithm         CryptoAlgorithm        `protobuf:"varint,6,opt,name=algorithm,proto3,enum=nitella.CryptoAlgorithm" json:"algorithm,omitempty"`            // Algorithm identifier for forward compat
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
+}
+
+func (x *EncryptedPayload) Reset() {
+	*x = EncryptedPayload{}
+	mi := &file_common_common_proto_msgTypes[0]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *EncryptedPayload) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*EncryptedPayload) ProtoMessage() {}
+
+func (x *EncryptedPayload) ProtoReflect() protoreflect.Message {
+	mi := &file_common_common_proto_msgTypes[0]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use EncryptedPayload.ProtoReflect.Descriptor instead.
+func (*EncryptedPayload) Descriptor() ([]byte, []int) {
+	return file_common_common_proto_rawDescGZIP(), []int{0}
+}
+
+func (x *EncryptedPayload) GetEphemeralPubkey() []byte {
+	if x != nil {
+		return x.EphemeralPubkey
+	}
+	return nil
+}
+
+func (x *EncryptedPayload) GetNonce() []byte {
+	if x != nil {
+		return x.Nonce
+	}
+	return nil
+}
+
+func (x *EncryptedPayload) GetCiphertext() []byte {
+	if x != nil {
+		return x.Ciphertext
+	}
+	return nil
+}
+
+func (x *EncryptedPayload) GetSenderFingerprint() string {
+	if x != nil {
+		return x.SenderFingerprint
+	}
+	return ""
+}
+
+func (x *EncryptedPayload) GetSignature() []byte {
+	if x != nil {
+		return x.Signature
+	}
+	return nil
+}
+
+func (x *EncryptedPayload) GetAlgorithm() CryptoAlgorithm {
+	if x != nil {
+		return x.Algorithm
+	}
+	return CryptoAlgorithm_ALGO_UNKNOWN
+}
+
+// SecureCommandPayload is the inner structure that gets encrypted.
+// It includes anti-replay fields that are only visible after decryption.
+type SecureCommandPayload struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	RequestId     string                 `protobuf:"bytes,1,opt,name=request_id,json=requestId,proto3" json:"request_id,omitempty"` // Unique ID for this request
+	Timestamp     int64                  `protobuf:"varint,2,opt,name=timestamp,proto3" json:"timestamp,omitempty"`                 // Unix timestamp (seconds)
+	Data          []byte                 `protobuf:"bytes,3,opt,name=data,proto3" json:"data,omitempty"`                            // The actual command content
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SecureCommandPayload) Reset() {
+	*x = SecureCommandPayload{}
+	mi := &file_common_common_proto_msgTypes[1]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SecureCommandPayload) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SecureCommandPayload) ProtoMessage() {}
+
+func (x *SecureCommandPayload) ProtoReflect() protoreflect.Message {
+	mi := &file_common_common_proto_msgTypes[1]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SecureCommandPayload.ProtoReflect.Descriptor instead.
+func (*SecureCommandPayload) Descriptor() ([]byte, []int) {
+	return file_common_common_proto_rawDescGZIP(), []int{1}
+}
+
+func (x *SecureCommandPayload) GetRequestId() string {
+	if x != nil {
+		return x.RequestId
+	}
+	return ""
+}
+
+func (x *SecureCommandPayload) GetTimestamp() int64 {
+	if x != nil {
+		return x.Timestamp
+	}
+	return 0
+}
+
+func (x *SecureCommandPayload) GetData() []byte {
+	if x != nil {
+		return x.Data
+	}
+	return nil
+}
+
+// Alert (encrypted content for Zero-Trust)
+type Alert struct {
+	state  protoimpl.MessageState `protogen:"open.v1"`
+	Id     string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
+	NodeId string                 `protobuf:"bytes,2,opt,name=node_id,json=nodeId,proto3" json:"node_id,omitempty"`
+	// Plaintext fields for Hub routing only
+	Severity      string `protobuf:"bytes,3,opt,name=severity,proto3" json:"severity,omitempty"` // info, warning, critical (Hub needs this for priority)
+	TimestampUnix int64  `protobuf:"varint,4,opt,name=timestamp_unix,json=timestampUnix,proto3" json:"timestamp_unix,omitempty"`
+	Acknowledged  bool   `protobuf:"varint,5,opt,name=acknowledged,proto3" json:"acknowledged,omitempty"`
+	// Encrypted content (title, description) - only Mobile can decrypt
+	Encrypted     *EncryptedPayload `protobuf:"bytes,6,opt,name=encrypted,proto3" json:"encrypted,omitempty"`
+	Metadata      map[string]string `protobuf:"bytes,7,rep,name=metadata,proto3" json:"metadata,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"` // Routing info (e.g. type=approval, tag=production)
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *Alert) Reset() {
+	*x = Alert{}
+	mi := &file_common_common_proto_msgTypes[2]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *Alert) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*Alert) ProtoMessage() {}
+
+func (x *Alert) ProtoReflect() protoreflect.Message {
+	mi := &file_common_common_proto_msgTypes[2]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use Alert.ProtoReflect.Descriptor instead.
+func (*Alert) Descriptor() ([]byte, []int) {
+	return file_common_common_proto_rawDescGZIP(), []int{2}
+}
+
+func (x *Alert) GetId() string {
+	if x != nil {
+		return x.Id
+	}
+	return ""
+}
+
+func (x *Alert) GetNodeId() string {
+	if x != nil {
+		return x.NodeId
+	}
+	return ""
+}
+
+func (x *Alert) GetSeverity() string {
+	if x != nil {
+		return x.Severity
+	}
+	return ""
+}
+
+func (x *Alert) GetTimestampUnix() int64 {
+	if x != nil {
+		return x.TimestampUnix
+	}
+	return 0
+}
+
+func (x *Alert) GetAcknowledged() bool {
+	if x != nil {
+		return x.Acknowledged
+	}
+	return false
+}
+
+func (x *Alert) GetEncrypted() *EncryptedPayload {
+	if x != nil {
+		return x.Encrypted
+	}
+	return nil
+}
+
+func (x *Alert) GetMetadata() map[string]string {
+	if x != nil {
+		return x.Metadata
+	}
+	return nil
+}
+
 // GeoInfo contains geographical information for an IP address.
 type GeoInfo struct {
 	state   protoimpl.MessageState `protogen:"open.v1"`
@@ -418,7 +930,7 @@ type GeoInfo struct {
 
 func (x *GeoInfo) Reset() {
 	*x = GeoInfo{}
-	mi := &file_common_common_proto_msgTypes[0]
+	mi := &file_common_common_proto_msgTypes[3]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -430,7 +942,7 @@ func (x *GeoInfo) String() string {
 func (*GeoInfo) ProtoMessage() {}
 
 func (x *GeoInfo) ProtoReflect() protoreflect.Message {
-	mi := &file_common_common_proto_msgTypes[0]
+	mi := &file_common_common_proto_msgTypes[3]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -443,7 +955,7 @@ func (x *GeoInfo) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GeoInfo.ProtoReflect.Descriptor instead.
 func (*GeoInfo) Descriptor() ([]byte, []int) {
-	return file_common_common_proto_rawDescGZIP(), []int{0}
+	return file_common_common_proto_rawDescGZIP(), []int{3}
 }
 
 func (x *GeoInfo) GetCountry() string {
@@ -548,7 +1060,32 @@ var File_common_common_proto protoreflect.FileDescriptor
 
 const file_common_common_proto_rawDesc = "" +
 	"\n" +
-	"\x13common/common.proto\x12\anitella\"\xe6\x02\n" +
+	"\x13common/common.proto\x12\anitella\"\xf8\x01\n" +
+	"\x10EncryptedPayload\x12)\n" +
+	"\x10ephemeral_pubkey\x18\x01 \x01(\fR\x0fephemeralPubkey\x12\x14\n" +
+	"\x05nonce\x18\x02 \x01(\fR\x05nonce\x12\x1e\n" +
+	"\n" +
+	"ciphertext\x18\x03 \x01(\fR\n" +
+	"ciphertext\x12-\n" +
+	"\x12sender_fingerprint\x18\x04 \x01(\tR\x11senderFingerprint\x12\x1c\n" +
+	"\tsignature\x18\x05 \x01(\fR\tsignature\x126\n" +
+	"\talgorithm\x18\x06 \x01(\x0e2\x18.nitella.CryptoAlgorithmR\talgorithm\"g\n" +
+	"\x14SecureCommandPayload\x12\x1d\n" +
+	"\n" +
+	"request_id\x18\x01 \x01(\tR\trequestId\x12\x1c\n" +
+	"\ttimestamp\x18\x02 \x01(\x03R\ttimestamp\x12\x12\n" +
+	"\x04data\x18\x03 \x01(\fR\x04data\"\xc7\x02\n" +
+	"\x05Alert\x12\x0e\n" +
+	"\x02id\x18\x01 \x01(\tR\x02id\x12\x17\n" +
+	"\anode_id\x18\x02 \x01(\tR\x06nodeId\x12\x1a\n" +
+	"\bseverity\x18\x03 \x01(\tR\bseverity\x12%\n" +
+	"\x0etimestamp_unix\x18\x04 \x01(\x03R\rtimestampUnix\x12\"\n" +
+	"\facknowledged\x18\x05 \x01(\bR\facknowledged\x127\n" +
+	"\tencrypted\x18\x06 \x01(\v2\x19.nitella.EncryptedPayloadR\tencrypted\x128\n" +
+	"\bmetadata\x18\a \x03(\v2\x1c.nitella.Alert.MetadataEntryR\bmetadata\x1a;\n" +
+	"\rMetadataEntry\x12\x10\n" +
+	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\xe6\x02\n" +
 	"\aGeoInfo\x12\x18\n" +
 	"\acountry\x18\x01 \x01(\tR\acountry\x12\x12\n" +
 	"\x04city\x18\x02 \x01(\tR\x04city\x12\x10\n" +
@@ -618,7 +1155,33 @@ const file_common_common_proto_rawDesc = "" +
 	"\x12SORT_LAST_SEEN_ASC\x10\x01\x12\x1e\n" +
 	"\x1aSORT_CONNECTION_COUNT_DESC\x10\x02\x12\x19\n" +
 	"\x15SORT_BYTES_TOTAL_DESC\x10\x03\x12\x1c\n" +
-	"\x18SORT_RECENCY_WEIGHT_DESC\x10\x04B+Z)github.com/ivere27/nitella/pkg/api/commonb\x06proto3"
+	"\x18SORT_RECENCY_WEIGHT_DESC\x10\x04*\x9a\x01\n" +
+	"\bPemLabel\x12\x19\n" +
+	"\x15PEM_LABEL_UNSPECIFIED\x10\x00\x12\x19\n" +
+	"\x15PEM_LABEL_CERTIFICATE\x10\x01\x12\x18\n" +
+	"\x14PEM_LABEL_PUBLIC_KEY\x10\x02\x12\x19\n" +
+	"\x15PEM_LABEL_PRIVATE_KEY\x10\x03\x12#\n" +
+	"\x1fPEM_LABEL_ENCRYPTED_PRIVATE_KEY\x10\x04*\xd1\x01\n" +
+	"\x10ApprovalDuration\x12!\n" +
+	"\x1dAPPROVAL_DURATION_UNSPECIFIED\x10\x00\x12\x1a\n" +
+	"\x16APPROVAL_DURATION_ONCE\x10\x01\x12\x1e\n" +
+	"\x1aAPPROVAL_DURATION_1_MINUTE\x10\x02\x12 \n" +
+	"\x1cAPPROVAL_DURATION_10_MINUTES\x10\x03\x12\x1c\n" +
+	"\x18APPROVAL_DURATION_1_HOUR\x10\x04\x12\x1e\n" +
+	"\x1aAPPROVAL_DURATION_24_HOURS\x10\x05*\xa3\x01\n" +
+	"\x12ApprovalActionType\x12$\n" +
+	" APPROVAL_ACTION_TYPE_UNSPECIFIED\x10\x00\x12\x1e\n" +
+	"\x1aAPPROVAL_ACTION_TYPE_ALLOW\x10\x01\x12\x1e\n" +
+	"\x1aAPPROVAL_ACTION_TYPE_BLOCK\x10\x02\x12'\n" +
+	"#APPROVAL_ACTION_TYPE_BLOCK_ADD_RULE\x10\x03*]\n" +
+	"\aP2PMode\x12\x18\n" +
+	"\x14P2P_MODE_UNSPECIFIED\x10\x00\x12\x11\n" +
+	"\rP2P_MODE_AUTO\x10\x01\x12\x13\n" +
+	"\x0fP2P_MODE_DIRECT\x10\x02\x12\x10\n" +
+	"\fP2P_MODE_HUB\x10\x03*5\n" +
+	"\x0fCryptoAlgorithm\x12\x10\n" +
+	"\fALGO_UNKNOWN\x10\x00\x12\x10\n" +
+	"\fALGO_ED25519\x10\x01B+Z)github.com/ivere27/nitella/pkg/api/commonb\x06proto3"
 
 var (
 	file_common_common_proto_rawDescOnce sync.Once
@@ -632,23 +1195,35 @@ func file_common_common_proto_rawDescGZIP() []byte {
 	return file_common_common_proto_rawDescData
 }
 
-var file_common_common_proto_enumTypes = make([]protoimpl.EnumInfo, 6)
-var file_common_common_proto_msgTypes = make([]protoimpl.MessageInfo, 1)
+var file_common_common_proto_enumTypes = make([]protoimpl.EnumInfo, 11)
+var file_common_common_proto_msgTypes = make([]protoimpl.MessageInfo, 5)
 var file_common_common_proto_goTypes = []any{
-	(ActionType)(0),     // 0: nitella.ActionType
-	(FallbackAction)(0), // 1: nitella.FallbackAction
-	(MockPreset)(0),     // 2: nitella.MockPreset
-	(ConditionType)(0),  // 3: nitella.ConditionType
-	(Operator)(0),       // 4: nitella.Operator
-	(SortOrder)(0),      // 5: nitella.SortOrder
-	(*GeoInfo)(nil),     // 6: nitella.GeoInfo
+	(ActionType)(0),              // 0: nitella.ActionType
+	(FallbackAction)(0),          // 1: nitella.FallbackAction
+	(MockPreset)(0),              // 2: nitella.MockPreset
+	(ConditionType)(0),           // 3: nitella.ConditionType
+	(Operator)(0),                // 4: nitella.Operator
+	(SortOrder)(0),               // 5: nitella.SortOrder
+	(PemLabel)(0),                // 6: nitella.PemLabel
+	(ApprovalDuration)(0),        // 7: nitella.ApprovalDuration
+	(ApprovalActionType)(0),      // 8: nitella.ApprovalActionType
+	(P2PMode)(0),                 // 9: nitella.P2PMode
+	(CryptoAlgorithm)(0),         // 10: nitella.CryptoAlgorithm
+	(*EncryptedPayload)(nil),     // 11: nitella.EncryptedPayload
+	(*SecureCommandPayload)(nil), // 12: nitella.SecureCommandPayload
+	(*Alert)(nil),                // 13: nitella.Alert
+	(*GeoInfo)(nil),              // 14: nitella.GeoInfo
+	nil,                          // 15: nitella.Alert.MetadataEntry
 }
 var file_common_common_proto_depIdxs = []int32{
-	0, // [0:0] is the sub-list for method output_type
-	0, // [0:0] is the sub-list for method input_type
-	0, // [0:0] is the sub-list for extension type_name
-	0, // [0:0] is the sub-list for extension extendee
-	0, // [0:0] is the sub-list for field type_name
+	10, // 0: nitella.EncryptedPayload.algorithm:type_name -> nitella.CryptoAlgorithm
+	11, // 1: nitella.Alert.encrypted:type_name -> nitella.EncryptedPayload
+	15, // 2: nitella.Alert.metadata:type_name -> nitella.Alert.MetadataEntry
+	3,  // [3:3] is the sub-list for method output_type
+	3,  // [3:3] is the sub-list for method input_type
+	3,  // [3:3] is the sub-list for extension type_name
+	3,  // [3:3] is the sub-list for extension extendee
+	0,  // [0:3] is the sub-list for field type_name
 }
 
 func init() { file_common_common_proto_init() }
@@ -661,8 +1236,8 @@ func file_common_common_proto_init() {
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_common_common_proto_rawDesc), len(file_common_common_proto_rawDesc)),
-			NumEnums:      6,
-			NumMessages:   1,
+			NumEnums:      11,
+			NumMessages:   5,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

@@ -190,7 +190,7 @@ func main() {
 func generateToken() string {
 	bytes := make([]byte, 16)
 	if _, err := rand.Read(bytes); err != nil {
-		return "default-token-" + fmt.Sprintf("%d", os.Getpid())
+		panic("crypto/rand failed: " + err.Error())
 	}
 	return hex.EncodeToString(bytes)
 }

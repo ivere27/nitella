@@ -1,0 +1,249 @@
+version: '3.8'
+
+# ============================================================================
+# Nitella E2E Test Infrastructure
+# ============================================================================
+#
+# This docker-compose setup provides:
+# - 1 Hub server (multi-tenant, dumb relay)
+# - 3 nitellad nodes (proxy servers)
+# - 6 mock backend services (HTTP, SSH, MySQL, RDP, SMTP, Custom)
+# - 1 test runner
+#
+# Run: docker-compose up --build
+# Test: docker-compose run test-runner
+#
+# ============================================================================
+
+services:
+  # ==========================================================================
+  # Hub Server - Central authentication and E2E encrypted relay
+  # ==========================================================================
+  hub:
+    build:
+      context: ../..
+      dockerfile: test/e2e/Dockerfile.hub
+    container_name: nitella-hub
+    ports:
+      - "50052:50052"
+      - "8080:8080"
+    volumes:
+      - hub-data:/data
+    environment:
+      - NITELLA_LOG_LEVEL=debug
+    healthcheck:
+      test: ["CMD", "nc", "-z", "localhost", "50052"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    networks:
+      - nitella-net
+
+  # ==========================================================================
+  # Nitellad Nodes - Proxy servers (3 instances, different users)
+  # ==========================================================================
+
+  # Node 1: User Alice's node (PAKE paired)
+  node1:
+    build:
+      context: ../..
+      dockerfile: test/e2e/Dockerfile.nitellad
+    container_name: nitella-node1
+    ports:
+      - "18081:8080"
+      - "50061:50051"
+    volumes:
+      - node1-data:/data
+      - ./configs:/configs:ro
+    environment:
+      - NODE_ID=node1
+      - NODE_NAME=alice-production
+      - HUB_ADDR=hub:50052
+      - ADMIN_TOKEN=node1-admin-token
+    depends_on:
+      hub:
+        condition: service_healthy
+    networks:
+      - nitella-net
+
+  # Node 2: User Alice's second node (QR paired)
+  node2:
+    build:
+      context: ../..
+      dockerfile: test/e2e/Dockerfile.nitellad
+    container_name: nitella-node2
+    ports:
+      - "18082:8080"
+      - "50062:50051"
+    volumes:
+      - node2-data:/data
+      - ./configs:/configs:ro
+    environment:
+      - NODE_ID=node2
+      - NODE_NAME=alice-staging
+      - HUB_ADDR=hub:50052
+      - ADMIN_TOKEN=node2-admin-token
+    depends_on:
+      hub:
+        condition: service_healthy
+    networks:
+      - nitella-net
+
+  # Node 3: User Bob's node (PAKE paired)
+  node3:
+    build:
+      context: ../..
+      dockerfile: test/e2e/Dockerfile.nitellad
+    container_name: nitella-node3
+    ports:
+      - "18083:8080"
+      - "50063:50051"
+    volumes:
+      - node3-data:/data
+      - ./configs:/configs:ro
+    environment:
+      - NODE_ID=node3
+      - NODE_NAME=bob-homelab
+      - HUB_ADDR=hub:50052
+      - ADMIN_TOKEN=node3-admin-token
+    depends_on:
+      hub:
+        condition: service_healthy
+    networks:
+      - nitella-net
+
+  # ==========================================================================
+  # Mock Backend Services - 6 protocols for comprehensive testing
+  # ==========================================================================
+
+  mock-http:
+    build:
+      context: ../..
+      dockerfile: test/e2e/Dockerfile.mock
+    container_name: nitella-mock-http
+    environment:
+      - PROTOCOL=http
+      - PORT=8080
+    networks:
+      - nitella-net
+
+  mock-ssh:
+    build:
+      context: ../..
+      dockerfile: test/e2e/Dockerfile.mock
+    container_name: nitella-mock-ssh
+    environment:
+      - PROTOCOL=ssh
+      - PORT=2222
+    networks:
+      - nitella-net
+
+  mock-mysql:
+    build:
+      context: ../..
+      dockerfile: test/e2e/Dockerfile.mock
+    container_name: nitella-mock-mysql
+    environment:
+      - PROTOCOL=mysql
+      - PORT=3306
+    networks:
+      - nitella-net
+
+  mock-rdp:
+    build:
+      context: ../..
+      dockerfile: test/e2e/Dockerfile.mock
+    container_name: nitella-mock-rdp
+    environment:
+      - PROTOCOL=rdp
+      - PORT=3389
+    networks:
+      - nitella-net
+
+  mock-smtp:
+    build:
+      context: ../..
+      dockerfile: test/e2e/Dockerfile.mock
+    container_name: nitella-mock-smtp
+    environment:
+      - PROTOCOL=smtp
+      - PORT=25
+    networks:
+      - nitella-net
+
+  mock-custom:
+    build:
+      context: ../..
+      dockerfile: test/e2e/Dockerfile.mock
+    container_name: nitella-mock-custom
+    environment:
+      - PROTOCOL=custom
+      - PORT=9000
+    networks:
+      - nitella-net
+
+  # ==========================================================================
+  # Test Runner - Orchestrates E2E tests
+  # ==========================================================================
+  test-runner:
+    build:
+      context: ../..
+      dockerfile: test/e2e/Dockerfile.runner
+    container_name: nitella-test-runner
+    volumes:
+      - ./results:/results
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      - HUB_ADDR=hub:50052
+      - NODE1_ADDR=node1:8080
+      - NODE1_ADMIN=node1:50051
+      - NODE2_ADDR=node2:8080
+      - NODE2_ADMIN=node2:50051
+      - NODE3_ADDR=node3:8080
+      - NODE3_ADMIN=node3:50051
+      - MOCK_HTTP=mock-http:8080
+      - MOCK_SSH=mock-ssh:2222
+      - MOCK_MYSQL=mock-mysql:3306
+      - TEST_TIMEOUT=300s
+    depends_on:
+      - hub
+      - node1
+      - node2
+      - node3
+      - mock-http
+      - mock-ssh
+      - mock-mysql
+    networks:
+      - nitella-net
+    command: ["./run_e2e_tests.sh"]
+
+  # ==========================================================================
+  # Hub Admin CLI - For administrative operations
+  # ==========================================================================
+  hubctl:
+    build:
+      context: ../..
+      dockerfile: test/e2e/Dockerfile.hubctl
+    container_name: nitella-hubctl
+    volumes:
+      - hubctl-data:/data
+    environment:
+      - HUB_ADDR=hub:50052
+    depends_on:
+      hub:
+        condition: service_healthy
+    networks:
+      - nitella-net
+    profiles:
+      - tools
+
+volumes:
+  hub-data:
+  node1-data:
+  node2-data:
+  node3-data:
+  hubctl-data:
+
+networks:
+  nitella-net:
+    driver: bridge

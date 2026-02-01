@@ -6,7 +6,7 @@ import (
 	"net"
 	"os"
 	"os/exec"
-	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -16,14 +16,17 @@ import (
 	"github.com/ivere27/nitella/pkg/node"
 )
 
-// setupProcessTest sets NITELLA_BIN to the built binary
+// setupProcessTest validates that process mode tests can run.
+// Process mode tests require running the actual nitellad binary, not go test.
 func setupProcessTest(t *testing.T) {
-	wd, _ := os.Getwd()
-	binPath := filepath.Join(wd, "../../bin/nitellad")
-	if _, err := os.Stat(binPath); os.IsNotExist(err) {
-		t.Skipf("nitellad binary not found at %s. Run 'make build' first.", binPath)
+	exe, err := os.Executable()
+	if err != nil {
+		t.Skipf("Cannot determine executable path: %v", err)
 	}
-	os.Setenv("NITELLA_BIN", binPath)
+
+	if !strings.HasSuffix(exe, "nitellad") && !strings.Contains(exe, "nitellad") {
+		t.Skip("Process mode tests require running as nitellad binary, skipped in 'go test'.")
+	}
 }
 
 // TestProcessListener_SingleChild tests a single child process proxy

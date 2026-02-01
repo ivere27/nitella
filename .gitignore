@@ -7,10 +7,19 @@ bin/
 /mock
 /nitellad
 /nitella
+/hub
+/mockserver
+/cmd/hub/hub
+/build/
+/cmd/nitella/nitella
+/cmd/nitellad/nitellad
+
+
 
 # Test binary
 *.test
 /data/
+/test/e2e/results/
 
 # Output
 *.out

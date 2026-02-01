@@ -1,0 +1,339 @@
+syntax = "proto3";
+
+package nitella.hub;
+
+option go_package = "github.com/ivere27/nitella/pkg/api/hub";
+
+import "google/protobuf/timestamp.proto";
+import "google/protobuf/empty.proto";
+import "hub/hub_common.proto";
+import "common/common.proto";
+
+// ===========================================================================
+// MOBILE SERVICE - For CLI/App (node owners only)
+// ===========================================================================
+
+service MobileService {
+  // Node registration via CSR (Courier mode)
+  rpc RegisterNodeViaCSR(RegisterNodeViaCSRRequest) returns (google.protobuf.Empty);
+
+  // Node Management (owner's nodes only)
+  rpc ListNodes(ListNodesRequest) returns (ListNodesResponse);
+  rpc GetNode(GetNodeRequest) returns (Node);
+  rpc RegisterNode(RegisterNodeRequest) returns (RegisterNodeResponse);
+  rpc ApproveNode(ApproveNodeRequest) returns (Empty);
+  rpc DeleteNode(DeleteNodeRequest) returns (Empty);
+
+  // Commands (forwarded to owner's nodes)
+  rpc SendCommand(CommandRequest) returns (CommandResponse);
+
+  // Real-time Streams
+  rpc StreamMetrics(StreamMetricsRequest) returns (stream EncryptedMetrics);
+  rpc GetMetricsHistory(GetMetricsHistoryRequest) returns (GetMetricsHistoryResponse);
+  rpc StreamAlerts(StreamAlertsRequest) returns (stream nitella.Alert);
+  rpc StreamSignaling(stream SignalMessage) returns (stream SignalMessage);
+
+  // Proxy Management (Zero-Trust: encrypted content, Hub only sees IDs)
+  rpc CreateProxyConfig(CreateProxyConfigRequest) returns (CreateProxyConfigResponse);
+  rpc ListProxyConfigs(ListProxyConfigsRequest) returns (ListProxyConfigsResponse);
+  rpc DeleteProxyConfig(DeleteProxyConfigRequest) returns (Empty);
+
+  // Revision Management (E2E encrypted)
+  rpc PushRevision(PushRevisionRequest) returns (PushRevisionResponse);
+  rpc GetRevision(GetRevisionRequest) returns (GetRevisionResponse);
+  rpc ListRevisions(ListRevisionsRequest) returns (ListRevisionsResponse);
+  rpc FlushRevisions(FlushRevisionsRequest) returns (FlushRevisionsResponse);
+
+  // Approval Workflow
+  rpc SubmitApprovalDecision(SubmitApprovalDecisionRequest) returns (SubmitApprovalDecisionResponse);
+}
+
+// ===========================================================================
+// PAIRING SERVICE - For Node Registration (PAKE-based, Hub learns nothing)
+// ===========================================================================
+
+service PairingService {
+  // PAKE-based pairing: CLI and Node exchange encrypted messages via Hub
+  // Hub only relays - cannot derive shared secret or decrypt payloads
+  // Flow:
+  //   1. CLI generates code "7-tiger-castle", starts PakeExchange
+  //   2. User tells code to node (verbally or types)
+  //   3. Node connects with same code, joins PakeExchange
+  //   4. Both derive shared secret (Hub cannot compute)
+  //   5. Node sends CSR encrypted with shared secret
+  //   6. CLI signs CSR, sends cert encrypted with shared secret
+  rpc PakeExchange(stream PakeMessage) returns (stream PakeMessage);
+
+  // QR-based pairing (offline/air-gapped mode)
+  // Node displays QR with CSR, user scans with CLI, CLI signs and displays cert QR
+  // Hub not involved at all - fully offline
+  rpc SubmitSignedCert(SubmitSignedCertRequest) returns (Empty);
+}
+
+// ===========================================================================
+// AUTH SERVICE - Authentication for CLI/App
+// ===========================================================================
+
+service AuthService {
+  rpc RegisterUser(RegisterUserRequest) returns (RegisterUserResponse);
+  rpc RegisterDevice(RegisterDeviceRequest) returns (Empty);
+  rpc UpdateLicense(UpdateLicenseRequest) returns (UpdateLicenseResponse);
+}
+
+// ===========================================================================
+// REQUEST/RESPONSE MESSAGES
+// ===========================================================================
+
+// Node Management
+message RegisterNodeViaCSRRequest {
+  string cert_pem = 1; // Signed Cert
+  bytes encrypted_metadata = 2; // E2E Encrypted Name
+  string node_id = 3; // Optional (extracted if empty)
+}
+
+message ListNodesRequest {
+  string filter = 1;  // "online", "offline", "all"
+  repeated string routing_tokens = 2;  // Zero-Trust: Client provides tokens for nodes they own
+}
+
+message ListNodesResponse {
+  repeated Node nodes = 1;
+  int32 total_count = 2;
+}
+
+message GetNodeRequest {
+  string node_id = 1;
+  string routing_token = 2;  // Required for authorization
+}
+
+message RegisterNodeRequest {
+  string registration_code = 1;
+}
+
+message RegisterNodeResponse {
+  string node_id = 1;
+  bytes encrypted_metadata = 2;
+  string csr_pem = 3;
+}
+
+message ApproveNodeRequest {
+  string registration_code = 1;
+  string cert_pem = 2;
+  string ca_pem = 3;
+  string routing_token = 4;  // Zero-Trust: HMAC(node_id, user_secret) - blind identifier
+}
+
+message DeleteNodeRequest {
+  string node_id = 1;
+  string routing_token = 2;  // Required for authorization
+}
+
+// Commands (E2E encrypted only)
+message CommandRequest {
+  string node_id = 1;
+  nitella.EncryptedPayload encrypted = 2;  // Always encrypted
+  string routing_token = 3;  // Zero-Trust: required to route to this node
+}
+// CommandResponse defined in hub_common.proto
+
+// Metrics
+message StreamMetricsRequest {
+  string node_id = 1;
+  string routing_token = 2;  // Required for authorization
+}
+
+message GetMetricsHistoryRequest {
+  string node_id = 1;                          // Optional: filter by node
+  string routing_token = 2;                    // Zero-Trust: required for retrieval
+  google.protobuf.Timestamp start_time = 3;
+  google.protobuf.Timestamp end_time = 4;
+  int32 limit = 5;                             // Max samples to return (default 100)
+}
+
+message GetMetricsHistoryResponse {
+  repeated EncryptedMetrics samples = 1;       // Zero-Trust: encrypted blobs only
+}
+
+// Alerts
+message StreamAlertsRequest {
+  string node_id = 1;
+}
+
+// QR-based pairing (for offline/air-gapped mode)
+// After CLI signs node's CSR offline via QR, node submits the signed cert
+message SubmitSignedCertRequest {
+  string node_id = 1;
+  string cert_pem = 2;       // Signed certificate
+  string ca_pem = 3;         // CLI's Root CA certificate
+  string fingerprint = 4;    // Emoji fingerprint for audit
+}
+
+// PAKE (Password-Authenticated Key Exchange) Messages
+// Uses SPAKE2 protocol - Hub relays but cannot derive shared secret
+message PakeMessage {
+  string session_code = 1;       // Human-readable code: "7-tiger-castle"
+
+  enum MessageType {
+    MESSAGE_TYPE_UNSPECIFIED = 0;
+    MESSAGE_TYPE_SPAKE2_INIT = 1;   // Initial SPAKE2 message (X or Y)
+    MESSAGE_TYPE_SPAKE2_REPLY = 2;  // SPAKE2 reply
+    MESSAGE_TYPE_ENCRYPTED = 3;      // After key exchange, encrypted payload
+    MESSAGE_TYPE_ERROR = 4;
+  }
+  MessageType type = 2;
+
+  bytes spake2_data = 3;            // SPAKE2 protocol bytes
+  bytes encrypted_payload = 4;      // AES-GCM encrypted with derived key
+  bytes nonce = 5;                  // AES-GCM nonce
+
+  string role = 6;                  // "cli" or "node"
+  string error_message = 7;
+}
+
+// Auth
+message RegisterUserRequest {
+  string root_cert_pem = 1;
+  string blind_index = 2; // Hash(Email + Salt)
+  string invite_code = 3;
+  bytes biometric_public_key = 4;
+  bytes encrypted_profile = 5; // Encrypted Email, Avatar, etc.
+}
+
+message RegisterUserResponse {
+  string user_id = 1;
+  string tier = 2;
+  int32 max_nodes = 3;
+  string jwt_token = 4;              // JWT token for authenticated API calls
+  string refresh_token = 5;          // Token to refresh jwt_token when expired
+}
+
+message RegisterDeviceRequest {
+  string user_id = 1;
+  string fcm_token = 2;
+  string device_type = 3;
+}
+
+message UpdateLicenseRequest {
+  string user_id = 1;
+  string license_key = 2;
+}
+
+message UpdateLicenseResponse {
+  string tier = 1;
+  int32 max_nodes = 2;
+  bool valid = 3;
+}
+
+// Approval
+message SubmitApprovalDecisionRequest {
+  string request_id = 1;      // ID from the Alert metadata
+  bool allowed = 2;
+  int64 duration_seconds = 3; // How long to cache this decision
+  string reason = 4;          // Optional reason
+}
+
+message SubmitApprovalDecisionResponse {
+  bool success = 1;
+}
+
+// ===========================================================================
+// PROXY MANAGEMENT MESSAGES (Zero-Trust: encrypted content)
+// ===========================================================================
+
+// Create new proxy config (just ID, no content yet)
+message CreateProxyConfigRequest {
+  string proxy_id = 1;           // Client-generated UUID
+  string routing_token = 2;      // HMAC for blind routing
+}
+
+message CreateProxyConfigResponse {
+  bool success = 1;
+  string error = 2;
+}
+
+// List proxy configs (returns IDs only - names are encrypted in revisions)
+message ListProxyConfigsRequest {
+  string routing_token = 1;      // Filter by routing token
+}
+
+message ListProxyConfigsResponse {
+  repeated ProxyConfigInfo proxies = 1;
+}
+
+message ProxyConfigInfo {
+  string proxy_id = 1;
+  int64 revision_count = 2;
+  int64 latest_revision = 3;
+  google.protobuf.Timestamp created_at = 4;
+  google.protobuf.Timestamp updated_at = 5;
+  int32 total_size_bytes = 6;
+}
+
+// Delete proxy config
+message DeleteProxyConfigRequest {
+  string proxy_id = 1;
+  string routing_token = 2;      // Required for authorization
+}
+
+// Push new revision
+message PushRevisionRequest {
+  string proxy_id = 1;
+  string routing_token = 2;
+  bytes encrypted_blob = 3;      // E2E encrypted payload
+  int32 size_bytes = 4;          // For quota check
+}
+
+message PushRevisionResponse {
+  bool success = 1;
+  int64 revision_num = 2;        // Assigned revision number
+  int32 revisions_kept = 3;      // After pruning
+  int32 revisions_limit = 4;     // Tier limit
+  int32 storage_used_kb = 5;
+  int32 storage_limit_kb = 6;
+  string error = 7;
+}
+
+// Get specific revision
+message GetRevisionRequest {
+  string proxy_id = 1;
+  string routing_token = 2;
+  int64 revision_num = 3;        // 0 = latest
+}
+
+message GetRevisionResponse {
+  bytes encrypted_blob = 1;
+  int64 revision_num = 2;
+  google.protobuf.Timestamp created_at = 3;
+  int32 size_bytes = 4;
+}
+
+// List revisions (metadata only - no content)
+message ListRevisionsRequest {
+  string proxy_id = 1;
+  string routing_token = 2;
+}
+
+message ListRevisionsResponse {
+  repeated RevisionMeta revisions = 1;
+}
+
+message RevisionMeta {
+  int64 revision_num = 1;
+  int32 size_bytes = 2;
+  google.protobuf.Timestamp created_at = 3;
+  // NOTE: commit_message is inside encrypted_blob
+}
+
+// Flush old revisions
+message FlushRevisionsRequest {
+  string proxy_id = 1;
+  string routing_token = 2;
+  int32 keep_count = 3;          // Keep N most recent (0 = keep only latest)
+}
+
+message FlushRevisionsResponse {
+  bool success = 1;
+  int32 deleted_count = 2;
+  int32 remaining_count = 3;
+  string error = 4;
+}

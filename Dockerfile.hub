@@ -1,0 +1,23 @@
+FROM golang:1.24-alpine AS builder
+
+RUN apk add --no-cache gcc musl-dev sqlite-dev
+
+WORKDIR /app
+COPY go.mod go.sum ./
+RUN go mod download
+
+COPY . .
+RUN CGO_ENABLED=1 go build -tags release -o hub ./cmd/hub
+
+FROM alpine:3.19
+RUN apk add --no-cache ca-certificates sqlite netcat-openbsd
+WORKDIR /app
+COPY --from=builder /app/hub .
+
+# Data directory for persistence
+VOLUME /data
+
+EXPOSE 50052 8080
+
+ENTRYPOINT ["./hub"]
+CMD ["--port", "50052", "--http-port", "8080", "--db-path", "/data/hub.db", "--auto-cert", "--cert-data-dir", "/data"]

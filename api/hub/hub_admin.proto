@@ -1,0 +1,688 @@
+syntax = "proto3";
+
+package nitella.hub;
+
+option go_package = "github.com/ivere27/nitella/pkg/api/hub";
+
+import "google/protobuf/timestamp.proto";
+import "hub/hub_common.proto";
+
+// ===========================================================================
+// ADMIN SERVICE - For hubctl CLI and Web Dashboard (separate gRPC server on admin port)
+// ===========================================================================
+
+service AdminService {
+  // ===========================================================================
+  // SYSTEM OVERVIEW
+  // ===========================================================================
+  rpc GetSystemStats(GetSystemStatsRequest) returns (SystemStats);
+  rpc GetAuditLog(GetAuditLogRequest) returns (GetAuditLogResponse);
+  rpc GetDatabaseStats(GetDatabaseStatsRequest) returns (DatabaseStats);
+
+  // ===========================================================================
+  // USER MANAGEMENT
+  // ===========================================================================
+  rpc ListAllUsers(ListAllUsersRequest) returns (ListAllUsersResponse);
+  rpc GetUserDetails(GetUserDetailsRequest) returns (UserDetails);
+  rpc SetUserTier(SetUserTierRequest) returns (User);
+  rpc BanUser(BanUserRequest) returns (Empty);
+  rpc UnbanUser(UnbanUserRequest) returns (Empty);
+  rpc DeleteUser(DeleteUserRequest) returns (Empty);
+
+  // ===========================================================================
+  // NODE MANAGEMENT
+  // ===========================================================================
+  rpc ListAllNodes(ListAllNodesRequest) returns (ListAllNodesResponse);
+  rpc GetNodeDetails(GetNodeDetailsRequest) returns (NodeDetails);
+  rpc ForceDisconnectNode(ForceDisconnectNodeRequest) returns (Empty);
+  rpc DeleteNode(AdminDeleteNodeRequest) returns (Empty);
+
+  // ===========================================================================
+  // PENDING REGISTRATION MANAGEMENT
+  // ===========================================================================
+  rpc ListPendingRegistrations(ListPendingRegistrationsRequest) returns (ListPendingRegistrationsResponse);
+  rpc ForceApproveRegistration(ForceApproveRegistrationRequest) returns (Empty);
+  rpc RejectRegistration(RejectRegistrationRequest) returns (Empty);
+  rpc ClearStalePairings(ClearStalePairingsRequest) returns (ClearStalePairingsResponse);
+
+  // ===========================================================================
+  // DEVICE MANAGEMENT (FCM/Push)
+  // ===========================================================================
+  rpc ListDevices(ListDevicesRequest) returns (ListDevicesResponse);
+  rpc GetUserDevices(GetUserDevicesRequest) returns (ListDevicesResponse);
+  rpc RemoveDevice(RemoveDeviceRequest) returns (Empty);
+
+  // ===========================================================================
+  // TEMPLATE MANAGEMENT (Encrypted blobs - metadata only)
+  // ===========================================================================
+  rpc ListUserTemplates(ListUserTemplatesRequest) returns (ListUserTemplatesResponse);
+  rpc GetTemplateStats(GetTemplateStatsRequest) returns (TemplateStats);
+  rpc DeleteUserTemplates(DeleteUserTemplatesRequest) returns (Empty);
+
+  // ===========================================================================
+  // LICENSE/BILLING MANAGEMENT
+  // ===========================================================================
+  rpc ListLicenses(ListLicensesRequest) returns (ListLicensesResponse);
+  rpc RevokeLicense(RevokeLicenseRequest) returns (Empty);
+  rpc CreatePromoCode(CreatePromoCodeRequest) returns (PromoCode);
+  rpc ListPromoCodes(ListPromoCodesRequest) returns (ListPromoCodesResponse);
+
+  // ===========================================================================
+  // SYSTEM CONFIGURATION
+  // ===========================================================================
+  rpc GetConfig(GetConfigRequest) returns (HubConfig);
+  rpc UpdateConfig(UpdateConfigRequest) returns (HubConfig);
+
+  // ===========================================================================
+  // MAINTENANCE & ANNOUNCEMENTS
+  // ===========================================================================
+  rpc GetMaintenanceStatus(GetMaintenanceStatusRequest) returns (MaintenanceStatus);
+  rpc SetMaintenanceMode(SetMaintenanceModeRequest) returns (MaintenanceStatus);
+  rpc BroadcastAnnouncement(BroadcastAnnouncementRequest) returns (BroadcastAnnouncementResponse);
+
+  // ===========================================================================
+  // ACTIVE STREAMS & CONNECTIONS
+  // ===========================================================================
+  rpc GetActiveStreams(GetActiveStreamsRequest) returns (GetActiveStreamsResponse);
+  rpc GetRateLimitStatus(GetRateLimitStatusRequest) returns (GetRateLimitStatusResponse);
+
+  // ===========================================================================
+  // CERTIFICATE MANAGEMENT
+  // ===========================================================================
+  rpc ListAllRevocations(ListAllRevocationsRequest) returns (ListAllRevocationsResponse);
+  rpc GetHubCertInfo(GetHubCertInfoRequest) returns (HubCertInfo);
+  rpc RotateHubLeafCert(RotateHubLeafCertRequest) returns (HubCertInfo);
+  rpc RevokeCertificate(RevokeCertificateRequest) returns (Empty);
+
+  // ===========================================================================
+  // INVITE CODE MANAGEMENT
+  // ===========================================================================
+  rpc ListInviteCodes(ListInviteCodesRequest) returns (ListInviteCodesResponse);
+  rpc UpsertInviteCode(InviteCode) returns (Empty);
+  rpc DeleteInviteCode(DeleteInviteCodeRequest) returns (Empty);
+  rpc RecalculateInviteCodeUsage(RecalculateInviteCodeUsageRequest) returns (InviteCode);
+
+  // ===========================================================================
+  // LOGS MANAGEMENT (Encrypted logs - metadata only, Hub cannot decrypt)
+  // ===========================================================================
+  rpc GetLogsStats(GetLogsStatsRequest) returns (LogsStats);
+  rpc ListLogs(ListLogsRequest) returns (ListLogsResponse);
+  rpc DeleteLogs(DeleteLogsRequest) returns (DeleteLogsResponse);
+  rpc CleanupOldLogs(CleanupOldLogsRequest) returns (CleanupOldLogsResponse);
+}
+
+// ===========================================================================
+// SYSTEM STATS
+// ===========================================================================
+
+message GetSystemStatsRequest {}
+
+message SystemStats {
+  int32 total_users = 1;
+  int32 total_nodes = 2;
+  int32 online_nodes = 3;
+  int64 total_connections_today = 4;
+  int64 total_bytes_today = 5;
+  int64 blocked_requests_today = 6;
+  map<string, int32> users_by_tier = 7;  // "free": 100, "pro": 20, etc.
+}
+
+// ===========================================================================
+// AUDIT LOG
+// ===========================================================================
+
+message GetAuditLogRequest {
+  int32 page_size = 1;
+  string page_token = 2;
+  string filter_user_id = 3;
+  string filter_action = 4;
+  google.protobuf.Timestamp start_time = 5;
+  google.protobuf.Timestamp end_time = 6;
+}
+
+message GetAuditLogResponse {
+  repeated AuditEntry entries = 1;
+  string next_page_token = 2;
+}
+
+message AuditEntry {
+  string id = 1;
+  google.protobuf.Timestamp timestamp = 2;
+  string user_id = 3;
+  string action = 4;       // "login", "create_rule", "register_node", etc.
+  string target_type = 5;  // "node", "rule", "user"
+  string target_id = 6;
+  string ip_address = 7;
+  string details = 8;      // JSON blob with additional details
+}
+
+// ===========================================================================
+// DATABASE STATS
+// ===========================================================================
+
+message GetDatabaseStatsRequest {}
+
+message DatabaseStats {
+  int64 db_size_bytes = 1;
+  int32 user_count = 2;
+  int32 node_count = 3;
+  int32 device_count = 4;
+  int32 template_count = 5;
+  int32 revocation_count = 6;
+  int32 invite_code_count = 7;
+  int32 license_count = 8;
+  int32 pending_registration_count = 9;
+  int32 audit_entry_count = 10;
+  google.protobuf.Timestamp oldest_audit_entry = 11;
+  google.protobuf.Timestamp newest_audit_entry = 12;
+}
+
+// ===========================================================================
+// USER MANAGEMENT
+// ===========================================================================
+
+message ListAllUsersRequest {
+  int32 page_size = 1;
+  string page_token = 2;
+  string filter_tier = 3;
+  string filter_status = 4;  // "active", "banned"
+}
+
+message ListAllUsersResponse {
+  repeated User users = 1;
+  string next_page_token = 2;
+  int32 total_count = 3;
+}
+
+message GetUserDetailsRequest {
+  string user_id = 1;
+}
+
+message UserDetails {
+  User user = 1;
+  int32 node_count = 2;
+  int64 total_bytes_month = 3;
+  google.protobuf.Timestamp registration_date = 4;
+  repeated Node nodes = 5;
+}
+
+message SetUserTierRequest {
+  string user_id = 1;
+  string tier = 2;
+  int32 max_nodes = 3;
+  google.protobuf.Timestamp expires_at = 4;  // For trial/promo
+}
+
+message BanUserRequest {
+  string user_id = 1;
+  string reason = 2;
+}
+
+message UnbanUserRequest {
+  string user_id = 1;
+}
+
+message DeleteUserRequest {
+  string user_id = 1;
+  bool cascade = 2;  // Also delete nodes, templates, etc.
+}
+
+// ===========================================================================
+// NODE MANAGEMENT
+// ===========================================================================
+
+message ListAllNodesRequest {
+  int32 page_size = 1;
+  string page_token = 2;
+  string filter_status = 3;
+  string filter_owner_id = 4;
+}
+
+message ListAllNodesResponse {
+  repeated Node nodes = 1;
+  string next_page_token = 2;
+  int32 total_count = 3;
+}
+
+message GetNodeDetailsRequest {
+  string node_id = 1;
+}
+
+message NodeDetails {
+  Node node = 1;
+  string owner_id = 2;
+  string owner_tier = 3;
+  int64 total_bytes_month = 4;
+  int64 total_connections_month = 5;
+  google.protobuf.Timestamp registration_date = 6;
+  string cert_serial = 7;
+  string cert_fingerprint = 8;
+  google.protobuf.Timestamp cert_expires_at = 9;
+  int32 encrypted_metadata_size = 10;  // Size of encrypted blob
+}
+
+message ForceDisconnectNodeRequest {
+  string node_id = 1;
+  string reason = 2;
+}
+
+message AdminDeleteNodeRequest {
+  string node_id = 1;
+  string reason = 2;
+  bool revoke_cert = 3;  // Also revoke the node's certificate
+}
+
+// ===========================================================================
+// PENDING REGISTRATION MANAGEMENT
+// ===========================================================================
+
+message PendingRegistration {
+  string registration_code = 1;
+  string csr_pem = 2;
+  bytes encrypted_metadata = 3;
+  int32 encrypted_metadata_size = 4;
+  repeated int32 listen_ports = 5;
+  string version = 6;
+  string invite_code = 7;
+  string pairing_code = 8;
+  RegistrationStatus status = 9;
+  google.protobuf.Timestamp created_at = 10;
+  google.protobuf.Timestamp expires_at = 11;
+  string source_ip = 12;
+}
+
+message ListPendingRegistrationsRequest {
+  int32 page_size = 1;
+  string page_token = 2;
+  string filter_status = 3;  // "pending", "approved", "rejected"
+}
+
+message ListPendingRegistrationsResponse {
+  repeated PendingRegistration registrations = 1;
+  string next_page_token = 2;
+  int32 total_count = 3;
+}
+
+message ForceApproveRegistrationRequest {
+  string registration_code = 1;
+  string cert_pem = 2;   // Admin-provided cert (optional, Hub can generate)
+  string ca_pem = 3;
+  string assigned_owner_id = 4;  // Assign to specific user
+}
+
+message RejectRegistrationRequest {
+  string registration_code = 1;
+  string reason = 2;
+}
+
+message ClearStalePairingsRequest {
+  int32 older_than_minutes = 1;  // Clear pairings older than X minutes
+}
+
+message ClearStalePairingsResponse {
+  int32 cleared_count = 1;
+}
+
+// ===========================================================================
+// DEVICE MANAGEMENT
+// ===========================================================================
+
+message Device {
+  string id = 1;
+  string user_id = 2;
+  string fcm_token = 3;  // Truncated for security
+  string device_type = 4;  // "android", "ios"
+  google.protobuf.Timestamp registered_at = 5;
+  google.protobuf.Timestamp last_push_at = 6;
+  int32 push_success_count = 7;
+  int32 push_failure_count = 8;
+}
+
+message ListDevicesRequest {
+  int32 page_size = 1;
+  string page_token = 2;
+  string filter_type = 3;  // "android", "ios"
+}
+
+message ListDevicesResponse {
+  repeated Device devices = 1;
+  string next_page_token = 2;
+  int32 total_count = 3;
+}
+
+message GetUserDevicesRequest {
+  string user_id = 1;
+}
+
+message RemoveDeviceRequest {
+  string device_id = 1;
+  string reason = 2;
+}
+
+// ===========================================================================
+// TEMPLATE MANAGEMENT
+// ===========================================================================
+
+message TemplateBlob {
+  string id = 1;
+  string user_id = 2;
+  int32 encrypted_size_bytes = 3;
+  int64 version = 4;
+  google.protobuf.Timestamp created_at = 5;
+  google.protobuf.Timestamp expires_at = 6;
+  bool expired = 7;
+}
+
+message ListUserTemplatesRequest {
+  string user_id = 1;  // Empty = all users
+  int32 page_size = 2;
+  string page_token = 3;
+}
+
+message ListUserTemplatesResponse {
+  repeated TemplateBlob templates = 1;
+  string next_page_token = 2;
+  int32 total_count = 3;
+}
+
+message GetTemplateStatsRequest {}
+
+message TemplateStats {
+  int32 total_templates = 1;
+  int64 total_storage_bytes = 2;
+  int32 expired_templates = 3;
+  map<string, int32> templates_by_user = 4;  // user_id -> count
+}
+
+message DeleteUserTemplatesRequest {
+  string user_id = 1;
+  bool expired_only = 2;  // Only delete expired templates
+}
+
+// ===========================================================================
+// LICENSE MANAGEMENT
+// ===========================================================================
+
+message License {
+  string key = 1;
+  string user_id = 2;
+  string tier = 3;
+  string status = 4;  // active, expired, revoked
+  google.protobuf.Timestamp created_at = 5;
+  google.protobuf.Timestamp expires_at = 6;
+}
+
+message ListLicensesRequest {
+  int32 page_size = 1;
+  string page_token = 2;
+}
+
+message ListLicensesResponse {
+  repeated License licenses = 1;
+  string next_page_token = 2;
+}
+
+message RevokeLicenseRequest {
+  string license_key = 1;
+  string reason = 2;
+}
+
+message CreatePromoCodeRequest {
+  string code = 1;
+  string tier = 2;
+  int32 duration_days = 3;
+  int32 max_uses = 4;
+}
+
+message PromoCode {
+  string code = 1;
+  string tier = 2;
+  int32 duration_days = 3;
+  int32 max_uses = 4;
+  int32 current_uses = 5;
+  google.protobuf.Timestamp expires_at = 6;
+}
+
+message ListPromoCodesRequest {
+  int32 page_size = 1;
+  string page_token = 2;
+  bool include_expired = 3;
+}
+
+message ListPromoCodesResponse {
+  repeated PromoCode codes = 1;
+  string next_page_token = 2;
+  int32 total_count = 3;
+}
+
+// ===========================================================================
+// SYSTEM CONFIG
+// ===========================================================================
+
+message GetConfigRequest {}
+
+message UpdateConfigRequest {
+  HubConfig config = 1;
+}
+
+message HubConfig {
+  int32 free_tier_rate_limit = 1;
+  int32 pro_tier_rate_limit = 2;
+  int32 business_tier_rate_limit = 3;
+  int32 free_tier_max_nodes = 4;
+  int32 pro_tier_max_nodes = 5;
+  bool registration_enabled = 6;
+  bool require_invite_code = 7;
+}
+
+// ===========================================================================
+// MAINTENANCE & ANNOUNCEMENTS
+// ===========================================================================
+
+message GetMaintenanceStatusRequest {}
+
+message MaintenanceStatus {
+  bool enabled = 1;
+  string message = 2;
+  google.protobuf.Timestamp started_at = 3;
+  google.protobuf.Timestamp expected_end = 4;
+  bool reject_new_connections = 5;
+  bool allow_admin_access = 6;
+}
+
+message SetMaintenanceModeRequest {
+  bool enabled = 1;
+  string message = 2;
+  int32 duration_minutes = 3;  // 0 = indefinite
+  bool reject_new_connections = 4;
+}
+
+message BroadcastAnnouncementRequest {
+  string title = 1;
+  string message = 2;
+  string severity = 3;  // "info", "warning", "critical"
+  repeated string target_user_ids = 4;  // Empty = all users
+  repeated string target_node_ids = 5;  // Empty = all nodes
+  bool persistent = 6;  // Show until dismissed
+}
+
+message BroadcastAnnouncementResponse {
+  int32 nodes_notified = 1;
+  int32 users_notified = 2;
+  int32 devices_pushed = 3;
+}
+
+// ===========================================================================
+// ACTIVE STREAMS & RATE LIMITING
+// ===========================================================================
+
+message GetActiveStreamsRequest {}
+
+message ActiveStream {
+  string stream_id = 1;
+  string user_id = 2;
+  string node_id = 3;
+  string stream_type = 4;  // "metrics", "commands", "alerts", "signaling"
+  google.protobuf.Timestamp started_at = 5;
+  int64 messages_sent = 6;
+  int64 messages_received = 7;
+  string source_ip = 8;
+}
+
+message GetActiveStreamsResponse {
+  repeated ActiveStream streams = 1;
+  int32 total_count = 2;
+  map<string, int32> streams_by_type = 3;
+}
+
+message GetRateLimitStatusRequest {
+  string filter_user_id = 1;
+  string filter_tier = 2;
+}
+
+message RateLimitEntry {
+  string user_id = 1;
+  string tier = 2;
+  int32 requests_per_second = 3;
+  int32 burst_size = 4;
+  int32 current_tokens = 5;
+  int32 requests_last_minute = 6;
+  int32 throttled_count = 7;
+  google.protobuf.Timestamp last_request = 8;
+}
+
+message GetRateLimitStatusResponse {
+  repeated RateLimitEntry entries = 1;
+  int32 total_throttled_today = 2;
+}
+
+// ===========================================================================
+// CERTIFICATE MANAGEMENT
+// ===========================================================================
+
+message ListAllRevocationsRequest {
+  int32 page_size = 1;
+  string page_token = 2;
+}
+
+message ListAllRevocationsResponse {
+  repeated RevocationEvent revocations = 1;
+  string next_page_token = 2;
+}
+
+message GetHubCertInfoRequest {}
+
+message RotateHubLeafCertRequest {
+  repeated string additional_sans = 1;
+}
+
+message HubCertInfo {
+  string ca_fingerprint = 1;
+  string ca_emoji = 2;
+  google.protobuf.Timestamp ca_expires_at = 3;
+  string leaf_serial = 4;
+  google.protobuf.Timestamp leaf_expires_at = 5;
+  google.protobuf.Timestamp leaf_not_before = 6;
+  repeated string leaf_dns_names = 7;
+  repeated string leaf_ip_addresses = 8;
+}
+
+message RevokeCertificateRequest {
+  string serial_number = 1;
+  string reason = 2;
+  bool notify_nodes = 3;  // Push revocation to all nodes
+}
+
+// ===========================================================================
+// INVITE CODE MANAGEMENT
+// ===========================================================================
+
+message InviteCode {
+  string code = 1;
+  int32 limit = 2;
+  int32 used = 3;
+  string tier = 4;  // Tier to assign to users who use this code
+  google.protobuf.Timestamp created_at = 5;
+  google.protobuf.Timestamp expires_at = 6;
+}
+
+message ListInviteCodesRequest {
+  int32 page_size = 1;
+  string page_token = 2;
+}
+
+message ListInviteCodesResponse {
+  repeated InviteCode codes = 1;
+  string next_page_token = 2;
+  int32 total_count = 3;
+}
+
+message DeleteInviteCodeRequest {
+  string code = 1;
+}
+
+message RecalculateInviteCodeUsageRequest {
+  string code = 1;
+}
+
+// ===========================================================================
+// LOGS MANAGEMENT
+// ===========================================================================
+
+message GetLogsStatsRequest {}
+
+message LogsStats {
+  int64 total_logs = 1;
+  int64 total_storage_bytes = 2;
+  map<string, int64> logs_by_routing_token = 3;  // routing_token -> count
+  map<string, int64> storage_by_routing_token = 4;  // routing_token -> bytes
+  google.protobuf.Timestamp oldest_log = 5;
+  google.protobuf.Timestamp newest_log = 6;
+}
+
+message ListLogsRequest {
+  string routing_token = 1;  // Required: filter by routing token
+  string node_id = 2;        // Optional: filter by node
+  google.protobuf.Timestamp start_time = 3;
+  google.protobuf.Timestamp end_time = 4;
+  int32 page_size = 5;
+  string page_token = 6;
+}
+
+message AdminLogEntry {
+  int64 id = 1;
+  string node_id = 2;
+  string routing_token = 3;
+  google.protobuf.Timestamp timestamp = 4;
+  int32 encrypted_size_bytes = 5;  // Size of encrypted blob
+  string sender_key_id = 6;        // Key fingerprint for decryption
+}
+
+message ListLogsResponse {
+  repeated AdminLogEntry logs = 1;
+  string next_page_token = 2;
+  int32 total_count = 3;
+}
+
+message DeleteLogsRequest {
+  string routing_token = 1;           // Required
+  string node_id = 2;                 // Optional: delete only for specific node
+  google.protobuf.Timestamp before = 3;  // Optional: delete logs before this time
+  bool delete_all = 4;                // If true, delete all logs for routing_token
+}
+
+message DeleteLogsResponse {
+  int64 deleted_count = 1;
+  int64 freed_bytes = 2;
+}
+
+message CleanupOldLogsRequest {
+  int32 older_than_days = 1;  // Delete logs older than X days
+  bool dry_run = 2;           // If true, only report what would be deleted
+}
+
+message CleanupOldLogsResponse {
+  int64 deleted_count = 1;
+  int64 freed_bytes = 2;
+  map<string, int64> deleted_by_routing_token = 3;
+}

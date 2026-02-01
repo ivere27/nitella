@@ -1,7 +1,6 @@
 package mockproto
 
 import (
-	"fmt"
 	"net"
 	"strings"
 	"time"
@@ -121,7 +120,7 @@ func smtpTarpit(conn net.Conn) error {
 			conn.Write([]byte("250-SIZE 52428800\r\n"))
 			conn.Write([]byte("250-8BITMIME\r\n"))
 			conn.Write([]byte("250-PIPELINING\r\n"))
-			conn.Write([]byte("250-AUTH PLAIN LOGIN CRAM-MD5\r\n"))
+			conn.Write([]byte("250-AUTH PLAIN LOGIN XOAUTH2\r\n"))
 			conn.Write([]byte("250-STARTTLS\r\n"))
 			conn.Write([]byte("250 SMTPUTF8\r\n"))
 
@@ -169,10 +168,8 @@ func smtpTarpit(conn net.Conn) error {
 			return nil
 
 		default:
-			// Sanitize command before echoing to prevent SMTP response injection
-			cmdWord := strings.Split(cmd, " ")[0]
-			cmdWord = sanitizeSMTPResponse(cmdWord)
-			conn.Write([]byte(fmt.Sprintf("500 5.5.1 Error: unknown command '%s'\r\n", cmdWord)))
+			// Generic error - don't echo user input
+			conn.Write([]byte("500 5.5.1 Error: command not recognized\r\n"))
 		}
 	}
 }

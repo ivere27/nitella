@@ -212,6 +212,9 @@ func (c *L2Cache) Close() {
 
 func (c *L2Cache) Size() int64 {
 	var count int64
-	c.db.QueryRow("SELECT COUNT(*) FROM geoip_cache").Scan(&count)
+	if err := c.db.QueryRow("SELECT COUNT(*) FROM geoip_cache").Scan(&count); err != nil {
+		log.Printf("L2 Cache Size Error: %v", err)
+		return 0
+	}
 	return count
 }

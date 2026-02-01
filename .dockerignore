@@ -24,9 +24,12 @@ docs/
 *.md
 !README.md
 
-# Test files
-test/
-*_test.go
+# Test files (allow test/e2e/ for E2E tests, exclude other test directories)
+test/integration/
+# Exclude test results but keep the directory structure
+test/e2e/results/
+# Keep general test exclusion for package-level tests
+pkg/**/*_test.go
 
 # Local config
 *.yaml

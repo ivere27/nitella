@@ -164,11 +164,6 @@ var _ synurang.Invoker = (*ffiInvoker)(nil)
 // FFI Client - convenience wrapper for synurang.FfiClientConn
 // =============================================================================
 
-// NewFfiClientConn creates a new FFI client connection that implements
-// grpc.ClientConnInterface. This allows using standard generated gRPC clients
-// with embedded FFI calls instead of network transport.
-// Supports unary and all streaming patterns (server, client, bidi).
-// Uses zero-copy mode for Go-to-Go FFI (no serialization overhead).
 func NewFfiClientConn(server FfiServer) grpc.ClientConnInterface {
 	return synurang.NewFfiClientConn(&ffiInvoker{server: server})
 }

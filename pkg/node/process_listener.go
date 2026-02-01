@@ -2,6 +2,8 @@ package node
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"os"
 	"os/exec"
@@ -48,9 +50,8 @@ type ProcessListener struct {
 	client process_pb.ProcessControlClient
 	socket string
 
-	// Subscription management
-	subsMu sync.RWMutex
-	subs   map[chan *pb.ConnectionEvent]context.CancelFunc
+	// Subscription management (sync.Map eliminates lock ordering concerns)
+	subs sync.Map // map[chan *pb.ConnectionEvent]context.CancelFunc
 
 	// Start time for uptime calculation
 	startTime time.Time
@@ -70,7 +71,7 @@ func NewProcessListener(id, name, listenAddr, defaultBackend string, defaultActi
 		CaPEM:          caPEM,
 		ClientAuthType: clientAuth,
 		quit:           make(chan struct{}),
-		subs:           make(map[chan *pb.ConnectionEvent]context.CancelFunc),
+		// subs is sync.Map, zero value is ready to use
 	}
 }
 
@@ -83,19 +84,19 @@ func (p *ProcessListener) Start() error {
 		return fmt.Errorf("already running")
 	}
 
-	// Get executable path - NITELLA_BIN env overrides for testing
-	exe := os.Getenv("NITELLA_BIN")
-	if exe == "" {
-		var err error
-		exe, err = os.Executable()
-		if err != nil {
-			return fmt.Errorf("failed to get executable path: %w", err)
-		}
+	// Get executable path (no env override - security risk)
+	exe, err := os.Executable()
+	if err != nil {
+		return fmt.Errorf("failed to get executable path: %w", err)
 	}
 
-	// Generate unique socket path
-	p.socket = filepath.Join(os.TempDir(), fmt.Sprintf("nitella_child_%s.sock", p.ID))
-	// Cleanup old socket
+	// Generate unpredictable socket path (random suffix prevents symlink attacks)
+	randomBytes := make([]byte, 16)
+	if _, err := rand.Read(randomBytes); err != nil {
+		return fmt.Errorf("failed to generate random socket name: %w", err)
+	}
+	p.socket = filepath.Join(os.TempDir(), fmt.Sprintf("nitella_%s.sock", hex.EncodeToString(randomBytes)))
+	// Cleanup old socket (unlikely to exist with random name, but just in case)
 	os.Remove(p.socket)
 
 	// Build child arguments
@@ -194,13 +195,14 @@ func (p *ProcessListener) Start() error {
 
 // Stop terminates the child process.
 func (p *ProcessListener) Stop() error {
-	// Cancel all subscriptions first (acquire subsMu before mu to avoid deadlock)
-	p.subsMu.Lock()
-	for ch, cancel := range p.subs {
-		cancel()
-		delete(p.subs, ch)
-	}
-	p.subsMu.Unlock()
+	// Cancel all subscriptions
+	p.subs.Range(func(key, value any) bool {
+		if cancel, ok := value.(context.CancelFunc); ok {
+			cancel()
+		}
+		p.subs.Delete(key)
+		return true
+	})
 
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -331,15 +333,11 @@ func (p *ProcessListener) Subscribe() chan *pb.ConnectionEvent {
 	ch := make(chan *pb.ConnectionEvent, 100)
 	ctx, cancel := context.WithCancel(context.Background())
 
-	p.subsMu.Lock()
-	p.subs[ch] = cancel
-	p.subsMu.Unlock()
+	p.subs.Store(ch, cancel)
 
 	go func() {
 		defer func() {
-			p.subsMu.Lock()
-			delete(p.subs, ch)
-			p.subsMu.Unlock()
+			p.subs.Delete(ch)
 			close(ch)
 		}()
 
@@ -386,12 +384,11 @@ func (p *ProcessListener) Subscribe() chan *pb.ConnectionEvent {
 
 // Unsubscribe stops receiving events on the channel.
 func (p *ProcessListener) Unsubscribe(ch chan *pb.ConnectionEvent) {
-	p.subsMu.Lock()
-	if cancel, ok := p.subs[ch]; ok {
-		cancel()
-		delete(p.subs, ch)
+	if value, ok := p.subs.LoadAndDelete(ch); ok {
+		if cancel, ok := value.(context.CancelFunc); ok {
+			cancel()
+		}
 	}
-	p.subsMu.Unlock()
 }
 
 // GetConnectionBytes returns byte counts for a connection.
@@ -448,7 +445,7 @@ func (p *ProcessListener) CloseConnection(proxyID, connID string) error {
 		return err
 	}
 	if !resp.Success {
-		return fmt.Errorf(resp.ErrorMessage)
+		return fmt.Errorf("%s", resp.ErrorMessage)
 	}
 	return nil
 }
@@ -468,7 +465,7 @@ func (p *ProcessListener) CloseAllConnections() error {
 		return err
 	}
 	if !resp.Success {
-		return fmt.Errorf(resp.ErrorMessage)
+		return fmt.Errorf("%s", resp.ErrorMessage)
 	}
 	return nil
 }

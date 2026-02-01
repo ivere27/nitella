@@ -214,6 +214,7 @@ func main() {
 	var listeners []listenerConfig
 
 	if yamlConfig != nil {
+		// YAML config mode: use listeners from config
 		for name, ep := range yamlConfig.EntryPoints {
 			lc := listenerConfig{
 				name:          name,
@@ -237,22 +238,25 @@ func main() {
 			listeners = append(listeners, lc)
 		}
 		log.Printf("Configured %d listeners from YAML", len(listeners))
-	} else {
-		// Command-line mode
-		be := *backendTarget
-		if be == "" {
-			log.Fatal("No backend specified. Use --backend or provide a config file.")
-		}
+	} else if *backendTarget != "" {
+		// CLI proxy mode: --backend specified, create listener
 		listeners = append(listeners, listenerConfig{
 			name:          "default",
 			listenAddr:    *listenAddr,
-			defaultBackend: be,
+			defaultBackend: *backendTarget,
 			defaultAction: "allow",
 			certPEM:       certPEM,
 			keyPEM:        keyPEM,
 			caPEM:         caPEM,
 			clientAuth:    clientAuth,
 		})
+	} else if isHubPairingMode() || isHubOnlyMode() {
+		// Hub-only mode: pairing or waiting for commands
+		// No local listeners - proxies created via Hub commands
+		log.Printf("[Hub] Hub-only mode: no local listeners (waiting for commands)")
+	} else {
+		// No config provided
+		log.Fatal("No backend specified. Use --backend, --config, or --hub with pairing.")
 	}
 
 	// Start proxies
@@ -320,6 +324,14 @@ func main() {
 		}
 	}
 
+	// Initialize Hub connection (if configured)
+	hubActive, err := initHub(pm)
+	if err != nil {
+		log.Printf("[Hub] Failed to initialize Hub: %v", err)
+		// Continue without Hub - standalone mode
+	}
+	_ = hubActive // Hub mode active - node can receive commands even without proxies
+
 	// Start Admin API Server
 	var adminServer *grpc.Server
 	if *adminPort > 0 {
@@ -358,6 +370,8 @@ func main() {
 	if adminServer != nil {
 		adminServer.GracefulStop()
 	}
+	// Close Hub connection
+	closeHub()
 	// Close ProxyManager (stops all listeners, health checks, GeoIP)
 	pm.Close()
 	if statsService != nil {
@@ -379,7 +393,7 @@ func containsString(slice []string, s string) bool {
 func generateToken() string {
 	bytes := make([]byte, 16)
 	if _, err := rand.Read(bytes); err != nil {
-		return "default-token-" + fmt.Sprintf("%d", os.Getpid())
+		panic("crypto/rand failed: " + err.Error())
 	}
 	return hex.EncodeToString(bytes)
 }
@@ -403,6 +417,15 @@ Admin API Options:
   -admin-port int      Port for Admin gRPC API (0 = disabled)
   -admin-token string  Authentication token (env: NITELLA_TOKEN)
 
+Hub Mode Options:
+  -hub string          Hub server address (env: NITELLA_HUB)
+  -hub-user-id string  User ID for Hub registration (env: NITELLA_HUB_USER_ID)
+  -hub-node-name str   Node name for Hub (default: hostname)
+  -hub-data-dir string Hub data directory for identity storage
+  -hub-p2p             Enable P2P connections via Hub (default: true)
+  -hub-qr-mode         Use QR code pairing mode (air-gapped)
+  -hub-ca string       Path to Hub CA certificate for verification
+
 TLS Options:
   -tls-cert string     Path to TLS Certificate
   -tls-key string      Path to TLS Private Key
@@ -419,14 +442,17 @@ GeoIP Options:
   -geoip-addr string   External GeoIP service address (optional)
 
 Examples:
-  # Basic proxy
+  # Basic proxy (standalone mode)
   nitellad --listen :8080 --backend localhost:3000
 
   # With admin API (generates token if not provided)
   nitellad --listen :8080 --backend localhost:3000 --admin-port 50051
 
-  # With admin API and custom token
-  nitellad --listen :8080 --backend localhost:3000 --admin-port 50051 --admin-token mytoken
+  # Hub mode (register with Hub server)
+  nitellad --listen :8080 --backend localhost:3000 --hub hub.example.com:50052 --hub-user-id user123
+
+  # Hub mode with QR pairing (for air-gapped registration)
+  nitellad --listen :8080 --backend localhost:3000 --hub hub.example.com:50052 --hub-qr-mode
 
   # Using YAML config
   nitellad --config proxy.yaml
@@ -473,6 +499,12 @@ func runChild() {
 		log.Fatalf("[child] Failed to create Unix socket: %v", err)
 	}
 	defer listener.Close()
+
+	// Secure socket immediately after creation (closes TOCTOU race window)
+	// Critical on Linux where /tmp is world-writable; harmless on macOS/Windows
+	if err := os.Chmod(*socketPath, 0600); err != nil {
+		log.Printf("[child] Warning: failed to secure socket permissions: %v", err)
+	}
 
 	grpcServer := grpc.NewServer()
 	processServer := server.NewProcessServer(pm)

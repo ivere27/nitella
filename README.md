@@ -114,6 +114,48 @@ nitella> list
 - `lookup <ip>` - GeoIP lookup for an IP
 - `stream` - Stream connection events (Ctrl+C to stop)
 
+**Identity & Security:**
+
+The CLI creates a cryptographic identity (Ed25519 keypair with BIP-39 mnemonic) on first launch. You can protect the private key with a passphrase:
+
+```bash
+# First launch - will prompt for optional passphrase
+./bin/nitella
+
+# Or provide passphrase via flag/env (for automation)
+./bin/nitella --passphrase "your-secret"
+NITELLA_PASSPHRASE="your-secret" ./bin/nitella
+
+# Use different KDF security profiles
+./bin/nitella --kdf-profile secure --passphrase "your-secret"
+NITELLA_KDF_PROFILE=secure ./bin/nitella
+```
+
+**Passphrase Strength Analysis:**
+
+When setting a passphrase, the CLI analyzes its strength and shows:
+- Entropy in bits
+- Estimated crack time against realistic GPU clusters
+- Attack scenario (up to all hyperscalers combined with 1M H100 GPUs)
+
+```
+Passphrase Security Analysis:
+  ✓  STRONG: very strong
+     Entropy:    133.1 bits
+     Crack time: heat death of universe
+     Scenario:   all hyperscalers combined (1M H100s) @ 500000000 hashes/sec
+```
+
+**KDF Profiles:**
+
+| Profile | Memory | Iterations | Use Case |
+|---------|--------|------------|----------|
+| `server` | 32 MB | 1 | High-throughput servers |
+| `default` | 64 MB | 2 | CLI tools (OWASP recommended) |
+| `secure` | 128 MB | 3 | Password managers, wallets |
+
+The key is encrypted with Argon2id + AES-256-GCM. KDF parameters are stored in the encrypted file for future compatibility.
+
 **Keyboard Shortcuts:**
 - `Tab` - Auto-complete commands
 - `Up/Down` - Navigate command history

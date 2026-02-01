@@ -1,0 +1,90 @@
+# Nitella Service Tiers
+# This file defines the limits for each subscription tier.
+# Source of truth for:
+#   - RPC: pkg/hub/server/rate_limiter.go
+#   - Streaming: pkg/hub/server/server.go
+#   - Audit Logs: pkg/hub/store/audit.go
+
+tiers:
+  - id: "free"
+    name: "Starter"
+    max_nodes: 3
+    max_proxies: 5
+    monthly_push_limit: 10
+    license_prefix: ""
+    # RPC Rate Limits
+    rpc:
+      requests_per_second: 10
+      burst_size: 20
+      max_streams: 2
+    # Streaming Rate Limits (Hub Relay)
+    streaming:
+      interval_seconds: 5  # Conflation: only latest value every 5s
+      mode: "conflation"
+    # Proxy Management (Hub storage for proxy configs with revisions)
+    proxy_management:
+      enabled: true
+      max_proxies: 3
+      max_revisions_per_proxy: 1   # Only latest revision kept
+      max_storage_kb: 100
+      ttl_days: 7
+    # Audit Logs
+    audit:
+      max_logs: 1000           # Max audit logs per routing_token
+      retention_days: 7        # Auto-delete after 7 days
+    # Encrypted Logs (Node → Hub relay)
+    logs:
+      max_logs: 10000          # ~5 MB storage
+      retention_days: 7
+
+  - id: "pro"
+    name: "Pro"
+    max_nodes: 20
+    max_proxies: 20
+    monthly_push_limit: 500
+    license_prefix: "PRO"
+    rpc:
+      requests_per_second: 100
+      burst_size: 200
+      max_streams: 10
+    streaming:
+      interval_seconds: 1
+      mode: "conflation"
+    proxy_management:
+      enabled: true
+      max_proxies: 20
+      max_revisions_per_proxy: 5   # Keep last 5 revisions
+      max_storage_kb: 1024
+      ttl_days: 30
+    audit:
+      max_logs: 100000
+      retention_days: 90
+    logs:
+      max_logs: 1000000        # ~500 MB storage
+      retention_days: 30
+
+  - id: "business"
+    name: "Business"
+    max_nodes: 0  # Unlimited
+    max_proxies: 0  # Unlimited
+    monthly_push_limit: 0  # Unlimited
+    license_prefix: "BIZ"
+    rpc:
+      requests_per_second: 1000
+      burst_size: 2000
+      max_streams: 100
+    streaming:
+      interval_seconds: 0  # Realtime
+      mode: "realtime"
+    proxy_management:
+      enabled: true
+      max_proxies: 0                # Unlimited
+      max_revisions_per_proxy: 0    # Unlimited while proxy exists
+      max_storage_kb: 0             # Unlimited (fair use)
+      ttl_days: 365
+    audit:
+      max_logs: 0          # Unlimited
+      retention_days: 365
+    logs:
+      max_logs: 0          # Unlimited
+      retention_days: 365
