@@ -36,7 +36,7 @@ func TestRuleEnforcement(t *testing.T) {
 	}()
 
 	// 2. Create ProxyManager
-	pm := node.NewProxyManager(true)
+	pm := node.NewProxyManagerWithBool(true)
 
 	// 3. Create Proxy with default ALLOW
 	resp, err := pm.CreateProxy(&pb.CreateProxyRequest{
@@ -183,7 +183,7 @@ func TestDefaultBlockAction(t *testing.T) {
 	}()
 
 	// 2. Create ProxyManager
-	pm := node.NewProxyManager(true)
+	pm := node.NewProxyManagerWithBool(true)
 
 	// 3. Create Proxy with default BLOCK
 	resp, err := pm.CreateProxy(&pb.CreateProxyRequest{
@@ -237,7 +237,7 @@ func TestDefaultBlockAction(t *testing.T) {
 
 // TestMockFallbackOnBackendFailure tests fallback to mock when backend is unavailable
 func TestMockFallbackOnBackendFailure(t *testing.T) {
-	pm := node.NewProxyManager(true)
+	pm := node.NewProxyManagerWithBool(true)
 
 	// Create Proxy with unreachable backend and mock fallback
 	resp, err := pm.CreateProxy(&pb.CreateProxyRequest{
@@ -268,7 +268,7 @@ func TestMockFallbackOnBackendFailure(t *testing.T) {
 
 // TestEmptyBackendFallback tests fallback when no backend is configured
 func TestEmptyBackendFallback(t *testing.T) {
-	pm := node.NewProxyManager(true)
+	pm := node.NewProxyManagerWithBool(true)
 
 	// Create Proxy with no backend
 	resp, err := pm.CreateProxy(&pb.CreateProxyRequest{
@@ -320,7 +320,7 @@ func TestRulePriority(t *testing.T) {
 		}
 	}()
 
-	pm := node.NewProxyManager(true)
+	pm := node.NewProxyManagerWithBool(true)
 
 	resp, err := pm.CreateProxy(&pb.CreateProxyRequest{
 		Name:           "test-priority",
@@ -412,7 +412,7 @@ func TestCIDRCondition(t *testing.T) {
 		}
 	}()
 
-	pm := node.NewProxyManager(true)
+	pm := node.NewProxyManagerWithBool(true)
 
 	resp, err := pm.CreateProxy(&pb.CreateProxyRequest{
 		Name:           "test-cidr",
@@ -498,15 +498,4 @@ func testConnectionData(t *testing.T, addr string, expected string) bool {
 	return false
 }
 
-func containsString(s, substr string) bool {
-	return len(substr) == 0 || (len(s) >= len(substr) && findSubstring(s, substr))
-}
-
-func findSubstring(s, substr string) bool {
-	for i := 0; i <= len(s)-len(substr); i++ {
-		if s[i:i+len(substr)] == substr {
-			return true
-		}
-	}
-	return false
-}
+// containsString is defined in helpers_test.go or process_test.go

@@ -2,11 +2,14 @@ package integration
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"fmt"
 	"io"
 	"net"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -15,7 +18,7 @@ import (
 	"github.com/ivere27/nitella/pkg/api/common"
 	pb "github.com/ivere27/nitella/pkg/api/proxy"
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/metadata"
 )
 
@@ -29,14 +32,14 @@ func TestAdminAPI_FullLifecycle(t *testing.T) {
 	adminPort := getFreePort(t)
 	token := "test-admin-token-123"
 
-	daemon := startNitelladWithAdmin(t, adminPort, token)
+	daemon, caPath := startNitelladWithAdmin(t, adminPort, token)
 	defer daemon.Process.Kill()
 
 	// Wait for daemon to start
 	time.Sleep(100 * time.Millisecond)
 
 	// 3. Connect to admin API
-	client, conn := connectAdminAPI(t, adminPort, token)
+	client, conn := connectAdminAPI(t, adminPort, token, caPath)
 	defer conn.Close()
 
 	ctx := authContext(token)
@@ -248,12 +251,12 @@ func TestAdminAPI_ConnectionManagement(t *testing.T) {
 	adminPort := getFreePort(t)
 	token := "test-conn-token"
 
-	daemon := startNitelladWithAdmin(t, adminPort, token)
+	daemon, caPath := startNitelladWithAdmin(t, adminPort, token)
 	defer daemon.Process.Kill()
 	time.Sleep(100 * time.Millisecond)
 
 	// 3. Connect to admin API
-	client, conn := connectAdminAPI(t, adminPort, token)
+	client, conn := connectAdminAPI(t, adminPort, token, caPath)
 	defer conn.Close()
 
 	ctx := authContext(token)
@@ -390,11 +393,11 @@ func TestAdminAPI_MultipleProxies(t *testing.T) {
 	// Start daemon
 	adminPort := getFreePort(t)
 	token := "multi-proxy-token"
-	daemon := startNitelladWithAdmin(t, adminPort, token)
+	daemon, caPath := startNitelladWithAdmin(t, adminPort, token)
 	defer daemon.Process.Kill()
 	time.Sleep(100 * time.Millisecond)
 
-	client, conn := connectAdminAPI(t, adminPort, token)
+	client, conn := connectAdminAPI(t, adminPort, token, caPath)
 	defer conn.Close()
 
 	ctx := authContext(token)
@@ -529,11 +532,11 @@ func TestAdminAPI_QuickActions(t *testing.T) {
 
 	adminPort := getFreePort(t)
 	token := "quick-action-token"
-	daemon := startNitelladWithAdmin(t, adminPort, token)
+	daemon, caPath := startNitelladWithAdmin(t, adminPort, token)
 	defer daemon.Process.Kill()
 	time.Sleep(100 * time.Millisecond)
 
-	client, conn := connectAdminAPI(t, adminPort, token)
+	client, conn := connectAdminAPI(t, adminPort, token, caPath)
 	defer conn.Close()
 
 	ctx := authContext(token)
@@ -592,11 +595,11 @@ func TestAdminAPI_QuickActions(t *testing.T) {
 func TestAdminAPI_MockPresets(t *testing.T) {
 	adminPort := getFreePort(t)
 	token := "mock-preset-token"
-	daemon := startNitelladWithAdmin(t, adminPort, token)
+	daemon, caPath := startNitelladWithAdmin(t, adminPort, token)
 	defer daemon.Process.Kill()
 	time.Sleep(100 * time.Millisecond)
 
-	client, conn := connectAdminAPI(t, adminPort, token)
+	client, conn := connectAdminAPI(t, adminPort, token, caPath)
 	defer conn.Close()
 
 	ctx := authContext(token)
@@ -653,11 +656,11 @@ func TestAdminAPI_CIDRRules(t *testing.T) {
 
 	adminPort := getFreePort(t)
 	token := "cidr-token"
-	daemon := startNitelladWithAdmin(t, adminPort, token)
+	daemon, caPath := startNitelladWithAdmin(t, adminPort, token)
 	defer daemon.Process.Kill()
 	time.Sleep(100 * time.Millisecond)
 
-	client, conn := connectAdminAPI(t, adminPort, token)
+	client, conn := connectAdminAPI(t, adminPort, token, caPath)
 	defer conn.Close()
 
 	ctx := authContext(token)
@@ -729,11 +732,11 @@ func TestAdminAPI_StreamConnections(t *testing.T) {
 
 	adminPort := getFreePort(t)
 	token := "stream-token"
-	daemon := startNitelladWithAdmin(t, adminPort, token)
+	daemon, caPath := startNitelladWithAdmin(t, adminPort, token)
 	defer daemon.Process.Kill()
 	time.Sleep(100 * time.Millisecond)
 
-	client, conn := connectAdminAPI(t, adminPort, token)
+	client, conn := connectAdminAPI(t, adminPort, token, caPath)
 	defer conn.Close()
 
 	ctx := authContext(token)
@@ -813,15 +816,23 @@ loop:
 func TestAdminAPI_AuthenticationRequired(t *testing.T) {
 	adminPort := getFreePort(t)
 	token := "real-token"
-	daemon := startNitelladWithAdmin(t, adminPort, token)
+	daemon, caPath := startNitelladWithAdmin(t, adminPort, token)
 	defer daemon.Process.Kill()
 	time.Sleep(100 * time.Millisecond)
 
-	// Connect without token
+	// Connect without token (but with TLS)
 	t.Log("=== Test: No Token ===")
+	// Load CA
+	caPEM, err := os.ReadFile(caPath)
+	if err != nil {
+		t.Fatalf("Failed to read CA: %v", err)
+	}
+	caPool := x509.NewCertPool()
+	caPool.AppendCertsFromPEM(caPEM)
+	
 	conn, err := grpc.Dial(
 		fmt.Sprintf("localhost:%d", adminPort),
-		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		grpc.WithTransportCredentials(credentials.NewTLS(&tls.Config{RootCAs: caPool, MinVersion: tls.VersionTLS13})),
 	)
 	if err != nil {
 		t.Fatalf("Failed to connect: %v", err)
@@ -912,7 +923,7 @@ func startEchoBackend(t *testing.T, response string) net.Listener {
 	return ln
 }
 
-func startNitelladWithAdmin(t *testing.T, adminPort int, token string) *exec.Cmd {
+func startNitelladWithAdmin(t *testing.T, adminPort int, token string) (*exec.Cmd, string) {
 	binPath := "../../bin/nitellad"
 	if _, err := os.Stat(binPath); os.IsNotExist(err) {
 		t.Skip("nitellad binary not found, run 'make nitellad_build' first")
@@ -933,6 +944,7 @@ func startNitelladWithAdmin(t *testing.T, adminPort int, token string) *exec.Cmd
 		"--admin-token", token,
 		"--db-path", dbPath,
 		"--stats-db", statsDB,
+		"--admin-data-dir", tempDir, // Store certs here
 	)
 	cmd.Stdout = io.Discard
 	cmd.Stderr = io.Discard
@@ -941,18 +953,38 @@ func startNitelladWithAdmin(t *testing.T, adminPort int, token string) *exec.Cmd
 		t.Fatalf("Failed to start nitellad: %v", err)
 	}
 
-	return cmd
+	// Return cmd and CA path
+	return cmd, filepath.Join(tempDir, "admin_ca.crt")
 }
 
-func connectAdminAPI(t *testing.T, port int, token string) (pb.ProxyControlServiceClient, *grpc.ClientConn) {
+func connectAdminAPI(t *testing.T, port int, token, caPath string) (pb.ProxyControlServiceClient, *grpc.ClientConn) {
 	var conn *grpc.ClientConn
 	var err error
+
+	// Wait for CA cert to be generated
+	for i := 0; i < 50; i++ {
+		if _, err := os.Stat(caPath); err == nil {
+			break
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+
+	// Load CA
+	caPEM, err := os.ReadFile(caPath)
+	if err != nil {
+		t.Fatalf("Failed to read CA: %v", err)
+	}
+	caPool := x509.NewCertPool()
+	if !caPool.AppendCertsFromPEM(caPEM) {
+		t.Fatalf("Failed to parse CA")
+	}
+	tlsConfig := &tls.Config{RootCAs: caPool, MinVersion: tls.VersionTLS13}
 
 	// Retry connection with exponential backoff
 	for i := 0; i < 15; i++ {
 		conn, err = grpc.Dial(
 			fmt.Sprintf("localhost:%d", port),
-			grpc.WithTransportCredentials(insecure.NewCredentials()),
+			grpc.WithTransportCredentials(credentials.NewTLS(tlsConfig)),
 		)
 		if err == nil {
 			// Verify connection is actually working by making a test call
@@ -991,11 +1023,11 @@ func TestAdminAPI_RateLimiting(t *testing.T) {
 
 	adminPort := getFreePort(t)
 	token := "rate-limit-token"
-	daemon := startNitelladWithAdmin(t, adminPort, token)
+	daemon, caPath := startNitelladWithAdmin(t, adminPort, token)
 	defer daemon.Process.Kill()
 	time.Sleep(100 * time.Millisecond)
 
-	client, conn := connectAdminAPI(t, adminPort, token)
+	client, conn := connectAdminAPI(t, adminPort, token, caPath)
 	defer conn.Close()
 
 	ctx := authContext(token)
@@ -1087,11 +1119,11 @@ func TestAdminAPI_AutoBlockFail2Ban(t *testing.T) {
 
 	adminPort := getFreePort(t)
 	token := "fail2ban-token"
-	daemon := startNitelladWithAdmin(t, adminPort, token)
+	daemon, caPath := startNitelladWithAdmin(t, adminPort, token)
 	defer daemon.Process.Kill()
 	time.Sleep(100 * time.Millisecond)
 
-	client, conn := connectAdminAPI(t, adminPort, token)
+	client, conn := connectAdminAPI(t, adminPort, token, caPath)
 	defer conn.Close()
 
 	ctx := authContext(token)
@@ -1168,11 +1200,11 @@ func TestAdminAPI_DefaultFallbackMock(t *testing.T) {
 	adminPort := getFreePort(t)
 	proxyPort := getFreePort(t)
 	token := "fallback-token"
-	daemon := startNitelladWithAdmin(t, adminPort, token)
+	daemon, caPath := startNitelladWithAdmin(t, adminPort, token)
 	defer daemon.Process.Kill()
 	time.Sleep(100 * time.Millisecond)
 
-	client, conn := connectAdminAPI(t, adminPort, token)
+	client, conn := connectAdminAPI(t, adminPort, token, caPath)
 	defer conn.Close()
 
 	ctx := authContext(token)
@@ -1233,11 +1265,11 @@ func TestAdminAPI_EmptyBackendMock(t *testing.T) {
 	adminPort := getFreePort(t)
 	proxyPort := getFreePort(t)
 	token := "empty-backend-token"
-	daemon := startNitelladWithAdmin(t, adminPort, token)
+	daemon, caPath := startNitelladWithAdmin(t, adminPort, token)
 	defer daemon.Process.Kill()
 	time.Sleep(100 * time.Millisecond)
 
-	client, conn := connectAdminAPI(t, adminPort, token)
+	client, conn := connectAdminAPI(t, adminPort, token, caPath)
 	defer conn.Close()
 
 	ctx := authContext(token)
@@ -1297,11 +1329,11 @@ func TestAdminAPI_DDoSProtection(t *testing.T) {
 
 	adminPort := getFreePort(t)
 	token := "ddos-token"
-	daemon := startNitelladWithAdmin(t, adminPort, token)
+	daemon, caPath := startNitelladWithAdmin(t, adminPort, token)
 	defer daemon.Process.Kill()
 	time.Sleep(100 * time.Millisecond)
 
-	client, conn := connectAdminAPI(t, adminPort, token)
+	client, conn := connectAdminAPI(t, adminPort, token, caPath)
 	defer conn.Close()
 
 	ctx := authContext(token)
@@ -1366,11 +1398,11 @@ func TestAdminAPI_RulePriorityMixed(t *testing.T) {
 
 	adminPort := getFreePort(t)
 	token := "priority-mixed-token"
-	daemon := startNitelladWithAdmin(t, adminPort, token)
+	daemon, caPath := startNitelladWithAdmin(t, adminPort, token)
 	defer daemon.Process.Kill()
 	time.Sleep(100 * time.Millisecond)
 
-	client, conn := connectAdminAPI(t, adminPort, token)
+	client, conn := connectAdminAPI(t, adminPort, token, caPath)
 	defer conn.Close()
 
 	ctx := authContext(token)
@@ -1477,11 +1509,11 @@ func TestAdminAPI_RuleEnableDisable(t *testing.T) {
 
 	adminPort := getFreePort(t)
 	token := "enable-disable-token"
-	daemon := startNitelladWithAdmin(t, adminPort, token)
+	daemon, caPath := startNitelladWithAdmin(t, adminPort, token)
 	defer daemon.Process.Kill()
 	time.Sleep(100 * time.Millisecond)
 
-	client, conn := connectAdminAPI(t, adminPort, token)
+	client, conn := connectAdminAPI(t, adminPort, token, caPath)
 	defer conn.Close()
 
 	ctx := authContext(token)
@@ -1534,11 +1566,11 @@ func TestAdminAPI_StatsAccumulation(t *testing.T) {
 
 	adminPort := getFreePort(t)
 	token := "stats-token"
-	daemon := startNitelladWithAdmin(t, adminPort, token)
+	daemon, caPath := startNitelladWithAdmin(t, adminPort, token)
 	defer daemon.Process.Kill()
 	time.Sleep(100 * time.Millisecond)
 
-	client, conn := connectAdminAPI(t, adminPort, token)
+	client, conn := connectAdminAPI(t, adminPort, token, caPath)
 	defer conn.Close()
 
 	ctx := authContext(token)
@@ -1583,11 +1615,11 @@ func TestAdminAPI_StatsAccumulation(t *testing.T) {
 func TestAdminAPI_GeoIPLookup(t *testing.T) {
 	adminPort := getFreePort(t)
 	token := "geoip-token"
-	daemon := startNitelladWithAdmin(t, adminPort, token)
+	daemon, caPath := startNitelladWithAdmin(t, adminPort, token)
 	defer daemon.Process.Kill()
 	time.Sleep(100 * time.Millisecond)
 
-	client, conn := connectAdminAPI(t, adminPort, token)
+	client, conn := connectAdminAPI(t, adminPort, token, caPath)
 	defer conn.Close()
 
 	ctx := authContext(token)

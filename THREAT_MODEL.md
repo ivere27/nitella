@@ -68,7 +68,24 @@ The attacker is an internal or external entity who operates the Hub.
     *   **Modification:** The Hub can overwrite the blob with garbage. The Client will fail to decrypt/verify signature.
 *   **Protection:** Confidentiality is maintained. The Hub cannot read the proxy rules.
 
-### Scenario 5: Proxy Configuration & P2P Signaling
+### Scenario 5: Approval Workflow
+*   **Context:** Connection arrives at Node with `REQUIRE_APPROVAL` action. Node requests user approval via Hub or P2P.
+*   **Hub Mode Flow:**
+    *   **Data Exposed:** `EncryptedPayload` containing approval request details (source IP, destination, geo info).
+    *   **Attacker Capability:**
+        *   **Relay/Drop:** Hub can delay or drop approval requests (DoS).
+        *   **Cannot Read:** Hub cannot see which IP is requesting access or the destination.
+        *   **Cannot Forge:** Hub cannot forge approval decisions (signed by Client).
+    *   **Protection:** E2E encryption ensures Hub sees only opaque blobs.
+*   **P2P Mode Flow:**
+    *   **Data Exposed:** DTLS-encrypted DataChannel messages.
+    *   **Protection:** Hub is completely bypassed - no visibility into approval traffic.
+*   **Decision Integrity:**
+    *   Approval decisions are cryptographically signed by the Client.
+    *   Node verifies signature before accepting any decision.
+    *   Hub cannot forge, modify, or replay decisions.
+
+### Scenario 6: Proxy Configuration & P2P Signaling
 *   **Context:** CLI adds a rule to Nitellad.
 *   **Path A: Via Hub Relay (Command)**
     *   **Data Exposed:** `EncryptedPayload` (Command).
@@ -90,6 +107,8 @@ The attacker is an internal or external entity who operates the Hub.
 | **User Credentials** | ✅ Secure (Blind Index) | ⚠️ Deletable | ❌ Hub can deny login |
 | **User Profile** | ✅ Secure (E2E Encrypted) | ⚠️ Deletable | ❌ Hub can deny access |
 | **Proxy Rules** | ✅ Secure (E2E Encrypted) | ⚠️ Deletable | ❌ Hub can deny sync |
+| **Approval Requests** | ✅ Secure (E2E Encrypted) | ✅ Secure (Signed) | ❌ Hub can delay/drop |
+| **Approval Decisions** | ✅ Secure (E2E Encrypted) | ✅ Secure (Signed) | ❌ Hub can delay/drop |
 | **Node Traffic** | ✅ Secure (DTLS/E2E) | ✅ Secure (Signed) | ❌ Hub can stop relay |
 | **User/Node Public IP** | ❌ **KNOWN** (Layer 3/4) | N/A | N/A |
 | **P2P Data** | ✅ Secure (DTLS) | ✅ Secure (DTLS) | ❌ Hub can stop signal |

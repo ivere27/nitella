@@ -2,6 +2,8 @@ package integration
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"fmt"
 	"os"
 	"os/exec"
@@ -12,7 +14,7 @@ import (
 	pbCommon "github.com/ivere27/nitella/pkg/api/common"
 	pb "github.com/ivere27/nitella/pkg/api/geoip"
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/protobuf/types/known/emptypb"
 )
@@ -37,7 +39,7 @@ func TestGeoIPServer(t *testing.T) {
 	adminPort := getFreePort(t)
 	adminToken := "test-token-12345"
 
-	// Create temp db file
+	// Create temp db file and cert data dir
 	tmpDB, err := os.CreateTemp("", "geoip_test_*.db")
 	if err != nil {
 		t.Fatal(err)
@@ -45,12 +47,19 @@ func TestGeoIPServer(t *testing.T) {
 	tmpDB.Close()
 	defer os.Remove(tmpDB.Name())
 
-	// Start server
+	certDataDir, err := os.MkdirTemp("", "geoip_certs_*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(certDataDir)
+
+	// Start server with TLS
 	cmd := exec.Command(serverBin,
 		"-port", fmt.Sprintf("%d", publicPort),
 		"-admin-port", fmt.Sprintf("%d", adminPort),
 		"-admin-token", adminToken,
 		"-db", tmpDB.Name(),
+		"-cert-data-dir", certDataDir,
 		"-remote", "ipwhois=https://ipwhois.app/json/%s",
 	)
 	cmd.Stdout = os.Stdout
@@ -66,16 +75,17 @@ func TestGeoIPServer(t *testing.T) {
 		}
 	}()
 
-	// Wait for server to start
+	// Wait for server to start and generate certs
 	publicAddr := fmt.Sprintf("localhost:%d", publicPort)
 	adminAddr := fmt.Sprintf("localhost:%d", adminPort)
-	waitForGrpc(t, publicAddr, 10*time.Second)
+	caPath := filepath.Join(certDataDir, "geoip_certs", "admin_ca.crt")
+	waitForCertAndGrpc(t, publicAddr, caPath, 15*time.Second)
 
-	// Create clients
-	publicClient, publicConn := createPublicClient(t, publicAddr)
+	// Create TLS clients with proper CA verification
+	publicClient, publicConn := createPublicClientTLS(t, publicAddr, caPath)
 	defer publicConn.Close()
 
-	adminClient, adminConn := createAdminClient(t, adminAddr)
+	adminClient, adminConn := createAdminClientTLS(t, adminAddr, caPath)
 	defer adminConn.Close()
 
 	ctx := context.Background()
@@ -297,11 +307,15 @@ func TestGeoIPCLI(t *testing.T) {
 	tmpDB.Close()
 	defer os.Remove(tmpDB.Name())
 
+	certDataDir, _ := os.MkdirTemp("", "geoip_cli_certs_*")
+	defer os.RemoveAll(certDataDir)
+
 	serverCmd := exec.Command(serverBin,
 		"-port", fmt.Sprintf("%d", publicPort),
 		"-admin-port", fmt.Sprintf("%d", adminPort),
 		"-admin-token", adminToken,
 		"-db", tmpDB.Name(),
+		"-cert-data-dir", certDataDir,
 		"-remote", "ipwhois=https://ipwhois.app/json/%s",
 	)
 	serverCmd.Start()
@@ -312,7 +326,9 @@ func TestGeoIPCLI(t *testing.T) {
 		}
 	}()
 
-	waitForGrpc(t, fmt.Sprintf("localhost:%d", publicPort), 10*time.Second)
+	caPath := filepath.Join(certDataDir, "geoip_certs", "admin_ca.crt")
+	waitForCertAndGrpc(t, fmt.Sprintf("localhost:%d", publicPort), caPath, 10*time.Second)
+
 
 	// Test CLI commands (CLI only connects to admin service)
 	adminAddr := fmt.Sprintf("localhost:%d", adminPort)
@@ -321,6 +337,7 @@ func TestGeoIPCLI(t *testing.T) {
 		cmd := exec.Command(cliBin,
 			"--addr", adminAddr,
 			"--token", adminToken,
+			"--tls-ca", caPath,
 			"lookup", "8.8.8.8",
 		)
 		out, err := cmd.CombinedOutput()
@@ -334,6 +351,7 @@ func TestGeoIPCLI(t *testing.T) {
 		cmd := exec.Command(cliBin,
 			"--addr", adminAddr,
 			"--token", adminToken,
+			"--tls-ca", caPath,
 			"status",
 		)
 		out, err := cmd.CombinedOutput()
@@ -347,6 +365,7 @@ func TestGeoIPCLI(t *testing.T) {
 		cmd := exec.Command(cliBin,
 			"--addr", adminAddr,
 			"--token", adminToken,
+			"--tls-ca", caPath,
 			"provider", "list",
 		)
 		out, err := cmd.CombinedOutput()
@@ -360,6 +379,7 @@ func TestGeoIPCLI(t *testing.T) {
 		cmd := exec.Command(cliBin,
 			"--addr", adminAddr,
 			"--token", adminToken,
+			"--tls-ca", caPath,
 			"cache", "stats",
 		)
 		out, err := cmd.CombinedOutput()
@@ -373,6 +393,7 @@ func TestGeoIPCLI(t *testing.T) {
 		cmd := exec.Command(cliBin,
 			"--addr", adminAddr,
 			"--token", adminToken,
+			"--tls-ca", caPath,
 			"strategy", "show",
 		)
 		out, err := cmd.CombinedOutput()
@@ -387,6 +408,7 @@ func TestGeoIPCLI(t *testing.T) {
 		cmd := exec.Command(cliBin,
 			"--addr", adminAddr,
 			"--token", adminToken,
+			"--tls-ca", caPath,
 			"help",
 		)
 		out, err := cmd.CombinedOutput()
@@ -411,10 +433,14 @@ func TestLookupResult(t *testing.T) {
 	tmpDB.Close()
 	defer os.Remove(tmpDB.Name())
 
+	certDataDir, _ := os.MkdirTemp("", "geoip_result_certs_*")
+	defer os.RemoveAll(certDataDir)
+
 	cmd := exec.Command(serverBin,
 		"-port", fmt.Sprintf("%d", publicPort),
 		"-admin-port", "0",
 		"-db", tmpDB.Name(),
+		"-cert-data-dir", certDataDir,
 		"-remote", "ipwhois=https://ipwhois.app/json/%s",
 	)
 	cmd.Start()
@@ -426,9 +452,10 @@ func TestLookupResult(t *testing.T) {
 	}()
 
 	addr := fmt.Sprintf("localhost:%d", publicPort)
-	waitForGrpc(t, addr, 10*time.Second)
+	caPath := filepath.Join(certDataDir, "geoip_certs", "admin_ca.crt")
+	waitForCertAndGrpc(t, addr, caPath, 10*time.Second)
 
-	client, conn := createPublicClient(t, addr)
+	client, conn := createPublicClientTLS(t, addr, caPath)
 	defer conn.Close()
 
 	// Test various IPs and verify GeoInfo fields
@@ -483,11 +510,36 @@ func verifyGeoInfo(t *testing.T, info *pbCommon.GeoInfo, ip, expectedCountry str
 
 // Helper functions
 
-func waitForGrpc(t *testing.T, addr string, timeout time.Duration) {
+// waitForCertAndGrpc waits for CA file to be generated and gRPC to be ready
+func waitForCertAndGrpc(t *testing.T, addr, caPath string, timeout time.Duration) {
 	t.Helper()
 	deadline := time.Now().Add(timeout)
+	
+	// First wait for CA file
 	for time.Now().Before(deadline) {
-		conn, err := grpc.Dial(addr, grpc.WithTransportCredentials(insecure.NewCredentials()), grpc.WithBlock(), grpc.FailOnNonTempDialError(true))
+		if _, err := os.Stat(caPath); err == nil {
+			break
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	
+	// Then test gRPC connection with TLS
+	for time.Now().Before(deadline) {
+		caPEM, err := os.ReadFile(caPath)
+		if err != nil {
+			time.Sleep(100 * time.Millisecond)
+			continue
+		}
+		caPool := x509.NewCertPool()
+		if !caPool.AppendCertsFromPEM(caPEM) {
+			time.Sleep(100 * time.Millisecond)
+			continue
+		}
+		tlsConfig := &tls.Config{
+			RootCAs:    caPool,
+			MinVersion: tls.VersionTLS13,
+		}
+		conn, err := grpc.Dial(addr, grpc.WithTransportCredentials(credentials.NewTLS(tlsConfig)), grpc.WithBlock(), grpc.FailOnNonTempDialError(true))
 		if err == nil {
 			conn.Close()
 			return
@@ -497,18 +549,37 @@ func waitForGrpc(t *testing.T, addr string, timeout time.Duration) {
 	t.Fatalf("gRPC server at %s not ready after %v", addr, timeout)
 }
 
-func createPublicClient(t *testing.T, addr string) (pb.GeoIPServiceClient, *grpc.ClientConn) {
+// loadTLSConfig loads CA certificate and returns TLS config
+func loadTLSConfig(t *testing.T, caPath string) *tls.Config {
 	t.Helper()
-	conn, err := grpc.Dial(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	caPEM, err := os.ReadFile(caPath)
+	if err != nil {
+		t.Fatalf("Failed to read CA: %v", err)
+	}
+	caPool := x509.NewCertPool()
+	if !caPool.AppendCertsFromPEM(caPEM) {
+		t.Fatalf("Failed to parse CA")
+	}
+	return &tls.Config{
+		RootCAs:    caPool,
+		MinVersion: tls.VersionTLS13,
+	}
+}
+
+func createPublicClientTLS(t *testing.T, addr, caPath string) (pb.GeoIPServiceClient, *grpc.ClientConn) {
+	t.Helper()
+	tlsConfig := loadTLSConfig(t, caPath)
+	conn, err := grpc.Dial(addr, grpc.WithTransportCredentials(credentials.NewTLS(tlsConfig)))
 	if err != nil {
 		t.Fatalf("Failed to dial %s: %v", addr, err)
 	}
 	return pb.NewGeoIPServiceClient(conn), conn
 }
 
-func createAdminClient(t *testing.T, addr string) (pb.GeoIPAdminServiceClient, *grpc.ClientConn) {
+func createAdminClientTLS(t *testing.T, addr, caPath string) (pb.GeoIPAdminServiceClient, *grpc.ClientConn) {
 	t.Helper()
-	conn, err := grpc.Dial(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	tlsConfig := loadTLSConfig(t, caPath)
+	conn, err := grpc.Dial(addr, grpc.WithTransportCredentials(credentials.NewTLS(tlsConfig)))
 	if err != nil {
 		t.Fatalf("Failed to dial %s: %v", addr, err)
 	}

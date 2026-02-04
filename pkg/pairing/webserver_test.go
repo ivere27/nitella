@@ -3,6 +3,7 @@ package pairing
 import (
 	"bytes"
 	"crypto/tls"
+	"crypto/x509"
 	"encoding/base64"
 	"encoding/json"
 	"io"
@@ -284,12 +285,22 @@ BgNVHREEFDASggp0ZXN0LW5vZGWHBH8AAAEwBQYDK2VwA0EAdGVzdA==
 	// Give server time to start
 	time.Sleep(200 * time.Millisecond)
 
-	// Create HTTP client that accepts self-signed certs
+	// Get server certificate for verification
+	serverCert := server.GetCertificate()
+	if serverCert == nil {
+		t.Fatal("Failed to get server certificate")
+	}
+	certPool := x509.NewCertPool()
+	certPool.AddCert(serverCert)
+
+	// Create HTTP client that trusts the self-signed cert
 	jar, _ := cookiejar.New(nil)
 	client := &http.Client{
 		Jar: jar,
 		Transport: &http.Transport{
-			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+			TLSClientConfig: &tls.Config{
+				RootCAs: certPool,
+			},
 		},
 	}
 

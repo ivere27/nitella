@@ -51,6 +51,7 @@ type PairingWebConfig struct {
 	CSR        []byte
 	NodeID     string
 	Timeout    time.Duration
+	Certificate *tls.Certificate // Optional: Use this cert instead of generating temp one
 	OnComplete func(certPEM, caCertPEM []byte) error
 }
 
@@ -66,10 +67,16 @@ func NewPairingWebServer(cfg PairingWebConfig) (*PairingWebServer, error) {
 		return nil, fmt.Errorf("failed to generate CPACE words: %w", err)
 	}
 
-	// Generate temporary self-signed TLS certificate
-	tempCert, err := generateTempTLSCert()
-	if err != nil {
-		return nil, fmt.Errorf("failed to generate temp TLS cert: %w", err)
+	// Use provided certificate or generate temporary self-signed TLS certificate
+	var tempCert tls.Certificate
+	if cfg.Certificate != nil {
+		tempCert = *cfg.Certificate
+	} else {
+		var err error
+		tempCert, err = generateTempTLSCert()
+		if err != nil {
+			return nil, fmt.Errorf("failed to generate temp TLS cert: %w", err)
+		}
 	}
 
 	fingerprint := DeriveFingerprint(cfg.CSR)
@@ -100,6 +107,15 @@ func (s *PairingWebServer) GetFingerprint() string {
 // GetCSRPEM returns the CSR in PEM format
 func (s *PairingWebServer) GetCSRPEM() []byte {
 	return s.csrPEM
+}
+
+// GetCertificate returns the server's TLS certificate (Leaf)
+func (s *PairingWebServer) GetCertificate() *x509.Certificate {
+	if len(s.tempCert.Certificate) == 0 {
+		return nil
+	}
+	cert, _ := x509.ParseCertificate(s.tempCert.Certificate[0])
+	return cert
 }
 
 // Start starts the pairing web server and blocks until complete or timeout

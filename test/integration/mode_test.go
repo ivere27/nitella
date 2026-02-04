@@ -138,7 +138,7 @@ func TestMode_ProxyCreate(t *testing.T) {
 			backend, backendAddr := createEchoBackend(t, "CREATE_TEST_OK")
 			defer backend.Close()
 
-			pm := node.NewProxyManager(mode.useEmbedded)
+			pm := node.NewProxyManagerWithBool(mode.useEmbedded)
 
 			resp, err := pm.CreateProxy(&pb.CreateProxyRequest{
 				Name:           "test-create-" + mode.name,
@@ -173,7 +173,7 @@ func TestMode_ProxyEnableDisable(t *testing.T) {
 			backend, backendAddr := createEchoBackend(t, "ENABLE_DISABLE_OK")
 			defer backend.Close()
 
-			pm := node.NewProxyManager(mode.useEmbedded)
+			pm := node.NewProxyManagerWithBool(mode.useEmbedded)
 
 			resp, err := pm.CreateProxy(&pb.CreateProxyRequest{
 				Name:           "test-enable-" + mode.name,
@@ -233,7 +233,7 @@ func TestMode_ProxyList(t *testing.T) {
 			backend, backendAddr := createEchoBackend(t, "LIST_OK")
 			defer backend.Close()
 
-			pm := node.NewProxyManager(mode.useEmbedded)
+			pm := node.NewProxyManagerWithBool(mode.useEmbedded)
 
 			// Create multiple proxies
 			var proxyIDs []string
@@ -286,7 +286,7 @@ func TestMode_RuleAddRemove(t *testing.T) {
 			backend, backendAddr := createEchoBackend(t, "RULE_TEST_OK")
 			defer backend.Close()
 
-			pm := node.NewProxyManager(mode.useEmbedded)
+			pm := node.NewProxyManagerWithBool(mode.useEmbedded)
 
 			resp, err := pm.CreateProxy(&pb.CreateProxyRequest{
 				Name:           "test-rule-" + mode.name,
@@ -372,7 +372,7 @@ func TestMode_RuleList(t *testing.T) {
 			backend, backendAddr := createEchoBackend(t, "RULE_LIST_OK")
 			defer backend.Close()
 
-			pm := node.NewProxyManager(mode.useEmbedded)
+			pm := node.NewProxyManagerWithBool(mode.useEmbedded)
 
 			resp, err := pm.CreateProxy(&pb.CreateProxyRequest{
 				Name:           "test-rulelist-" + mode.name,
@@ -442,7 +442,7 @@ func TestMode_RulePriority(t *testing.T) {
 			backend, backendAddr := createEchoBackend(t, "PRIORITY_OK")
 			defer backend.Close()
 
-			pm := node.NewProxyManager(mode.useEmbedded)
+			pm := node.NewProxyManagerWithBool(mode.useEmbedded)
 
 			resp, err := pm.CreateProxy(&pb.CreateProxyRequest{
 				Name:           "test-priority-" + mode.name,
@@ -507,7 +507,7 @@ func TestMode_GetActiveConnections(t *testing.T) {
 			backend, backendAddr := createLongLivedBackend(t)
 			defer backend.Close()
 
-			pm := node.NewProxyManager(mode.useEmbedded)
+			pm := node.NewProxyManagerWithBool(mode.useEmbedded)
 
 			resp, err := pm.CreateProxy(&pb.CreateProxyRequest{
 				Name:           "test-conns-" + mode.name,
@@ -573,7 +573,7 @@ func TestMode_GetAllActiveConnections(t *testing.T) {
 			defer backend1.Close()
 			defer backend2.Close()
 
-			pm := node.NewProxyManager(mode.useEmbedded)
+			pm := node.NewProxyManagerWithBool(mode.useEmbedded)
 
 			// Create 2 proxies
 			resp1, _ := pm.CreateProxy(&pb.CreateProxyRequest{
@@ -625,7 +625,7 @@ func TestMode_CloseConnection(t *testing.T) {
 			backend, backendAddr := createLongLivedBackend(t)
 			defer backend.Close()
 
-			pm := node.NewProxyManager(mode.useEmbedded)
+			pm := node.NewProxyManagerWithBool(mode.useEmbedded)
 
 			resp, err := pm.CreateProxy(&pb.CreateProxyRequest{
 				Name:           "test-closeconn-" + mode.name,
@@ -667,14 +667,24 @@ func TestMode_CloseConnection(t *testing.T) {
 				t.Fatalf("CloseConnection failed: %v", err)
 			}
 
-			time.Sleep(200 * time.Millisecond)
-
-			// Verify connection is gone
-			activeConns = pm.GetActiveConnections(proxyID)
-			for _, c := range activeConns {
-				if c.ID == connID {
-					t.Error("Connection should have been closed")
+			// Wait and retry to verify connection is gone (may take time to propagate)
+			var connFound bool
+			for attempt := 0; attempt < 10; attempt++ {
+				time.Sleep(200 * time.Millisecond)
+				activeConns = pm.GetActiveConnections(proxyID)
+				connFound = false
+				for _, c := range activeConns {
+					if c.ID == connID {
+						connFound = true
+						break
+					}
 				}
+				if !connFound {
+					break
+				}
+			}
+			if connFound {
+				t.Error("Connection should have been closed")
 			}
 		})
 	}
@@ -688,7 +698,7 @@ func TestMode_CloseAllConnections(t *testing.T) {
 			backend, backendAddr := createLongLivedBackend(t)
 			defer backend.Close()
 
-			pm := node.NewProxyManager(mode.useEmbedded)
+			pm := node.NewProxyManagerWithBool(mode.useEmbedded)
 
 			resp, err := pm.CreateProxy(&pb.CreateProxyRequest{
 				Name:           "test-closeall-" + mode.name,
@@ -737,12 +747,18 @@ func TestMode_CloseAllConnections(t *testing.T) {
 				t.Fatalf("CloseAllConnections failed: %v", err)
 			}
 
-			time.Sleep(300 * time.Millisecond)
-
-			// Verify all connections are gone
-			activeConns = pm.GetActiveConnections(proxyID)
-			if len(activeConns) != 0 {
-				t.Errorf("Expected 0 connections after closeall, got %d", len(activeConns))
+			// Wait and retry to verify all connections are gone (may take time to propagate)
+			var connCount int
+			for attempt := 0; attempt < 10; attempt++ {
+				time.Sleep(200 * time.Millisecond)
+				activeConns = pm.GetActiveConnections(proxyID)
+				connCount = len(activeConns)
+				if connCount == 0 {
+					break
+				}
+			}
+			if connCount != 0 {
+				t.Errorf("Expected 0 connections after closeall, got %d", connCount)
 			}
 		})
 	}
@@ -760,7 +776,7 @@ func TestMode_GetStatus(t *testing.T) {
 			backend, backendAddr := createEchoBackend(t, "STATUS_OK")
 			defer backend.Close()
 
-			pm := node.NewProxyManager(mode.useEmbedded)
+			pm := node.NewProxyManagerWithBool(mode.useEmbedded)
 
 			resp, err := pm.CreateProxy(&pb.CreateProxyRequest{
 				Name:           "test-status-" + mode.name,
@@ -817,7 +833,7 @@ func TestMode_MockFallback(t *testing.T) {
 		t.Run(mode.name, func(t *testing.T) {
 			setupMode(t, mode)
 
-			pm := node.NewProxyManager(mode.useEmbedded)
+			pm := node.NewProxyManagerWithBool(mode.useEmbedded)
 
 			// Create proxy with unreachable backend and mock fallback
 			resp, err := pm.CreateProxy(&pb.CreateProxyRequest{
@@ -857,7 +873,7 @@ func TestMode_ConcurrentConnections(t *testing.T) {
 			backend, backendAddr := createEchoBackend(t, "CONCURRENT_OK")
 			defer backend.Close()
 
-			pm := node.NewProxyManager(mode.useEmbedded)
+			pm := node.NewProxyManagerWithBool(mode.useEmbedded)
 
 			resp, err := pm.CreateProxy(&pb.CreateProxyRequest{
 				Name:           "test-concurrent-" + mode.name,
@@ -906,7 +922,7 @@ func TestMode_ConcurrentRuleModification(t *testing.T) {
 			backend, backendAddr := createEchoBackend(t, "CONC_RULE_OK")
 			defer backend.Close()
 
-			pm := node.NewProxyManager(mode.useEmbedded)
+			pm := node.NewProxyManagerWithBool(mode.useEmbedded)
 
 			resp, err := pm.CreateProxy(&pb.CreateProxyRequest{
 				Name:           "test-concrule-" + mode.name,

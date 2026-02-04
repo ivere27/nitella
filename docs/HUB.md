@@ -495,8 +495,8 @@ nitellad --hub hub.example.com:50052 --pair-offline
 ### 2. Create Admin Token
 
 ```bash
-# Using hubctl (requires initial setup)
-./hubctl --hub localhost:50052 --insecure token generate-admin
+# Using hubctl with self-signed Hub CA (auto-generated in data dir)
+./hubctl --hub localhost:50052 --tls-ca ./hub_ca.crt token generate-admin
 
 # Or check Hub server logs for auto-generated token
 ```
@@ -532,14 +532,14 @@ nitellad --hub hub.example.com:50052 --config proxies.yaml
 
 ```bash
 # Configure Hub connection
-./nitella hub config set hub hub.example.com:50052
-./nitella hub login
+nitella config set hub hub.example.com:50052
+nitella login
 
 # List nodes
-./nitella hub nodes
+nitella nodes
 
 # Send command to node
-./nitella hub send <node-id> status
+nitella send <node-id> status
 ```
 
 ## Hub Server Configuration
@@ -579,7 +579,7 @@ Logging:
 
 ### TLS Behavior
 
-Hub always runs with TLS enabled. There is no insecure mode.
+Hub always runs with TLS enabled. TLS only.
 
 | Configuration | Behavior |
 |---------------|----------|
@@ -809,7 +809,7 @@ P2P connections use STUN (Session Traversal Utilities for NAT) servers to discov
 ./nitellad --hub hub.example.com:50052 --stun stun:stun.twilio.com:3478
 
 # On CLI - use custom STUN server
-./nitella hub --stun stun:global.stun.twilio.com:3478 node <node-id>
+nitella --stun stun:global.stun.twilio.com:3478 node <node-id>
 
 # Via environment variable (works for both)
 export NITELLA_STUN="stun:stun.cloudflare.com:3478"
@@ -830,8 +830,8 @@ export NITELLA_STUN="stun:stun.cloudflare.com:3478"
 # On nitellad
 ./nitellad --hub hub.example.com:50052 --hub-p2p=false
 
-# On CLI
-./nitella --hub-mode hub node <node-id> --no-p2p
+# On CLI (Hub relay mode is used when P2P fails, no CLI flag needed)
+nitella node <node-id> status
 ```
 
 ### P2P Authentication
@@ -870,6 +870,38 @@ P2P connections use certificate-based mutual authentication:
 - MITM attacks are prevented because attackers cannot forge CA-signed certificates
 - Both peers must possess certificates signed by the user's CA (established during pairing)
 - Authentication is required by default (`requireAuth: true`)
+
+## Connection Approval
+
+Nodes can require real-time user approval for incoming connections using `ACTION_TYPE_REQUIRE_APPROVAL`. Approval requests flow through Hub (E2E encrypted) or P2P.
+
+### CLI Commands
+
+```bash
+# Alerts stream automatically in background when CLI starts
+
+# List pending approval requests
+nitella pending
+
+# Approve a connection (with duration)
+nitella approve <request_id> 1h      # Allow for 1 hour
+nitella approve <request_id> 24h     # Allow for 24 hours
+
+# Deny a connection
+nitella deny <request_id>
+nitella deny <request_id> "Suspicious source"
+```
+
+**Note:** Global IP blocking/allowing (`block`, `allow`, `global-rules`) commands work locally on nitellad, not via Hub. Use `nitella send <node-id> block <ip>` to send commands to remote nodes.
+
+### E2E Encryption
+
+Approval requests and decisions are E2E encrypted:
+- Hub cannot read which IP is requesting access
+- Hub cannot forge or modify approval decisions
+- Decisions are cryptographically signed by the CLI
+
+For detailed documentation, see [APPROVAL_SYSTEM.md](APPROVAL_SYSTEM.md).
 
 ## Tiers
 
@@ -965,22 +997,22 @@ service NodeService {
 
 ```bash
 # View logs statistics
-./nitella hub logs stats
+nitella logs stats
 
 # List logs (encrypted metadata)
-./nitella hub logs list
+nitella logs list
 
 # List logs for specific node
-./nitella hub logs list --node <node-id>
+nitella logs list --node <node-id>
 
 # Delete logs by routing token
-./nitella hub logs delete --token <routing-token>
+nitella logs delete --token <routing-token>
 
 # Delete logs for specific node
-./nitella hub logs delete --node <node-id>
+nitella logs delete --node <node-id>
 
 # Cleanup old logs (admin operation)
-./nitella hub logs cleanup --days 30
+nitella logs cleanup --days 30
 ```
 
 ### Admin API for Logs
@@ -1022,7 +1054,7 @@ Hub automatically manages log storage:
 
 ```bash
 # View current log storage status
-./nitella hub logs stats
+nitella logs stats
 
 # Example output:
 # Total Logs:     45,231
@@ -1070,9 +1102,9 @@ hub_commands_errors
 
 ### Commands not reaching node
 
-1. Verify node is online: `./nitella hub nodes`
+1. Verify node is online: `nitella nodes`
 2. Check node certificate hasn't expired
-3. Try P2P mode: `./nitella hub node <id> --p2p`
+3. Try P2P mode: `nitella node <id> --p2p`
 4. Check Hub logs for relay errors
 
 ### P2P connection failing
@@ -1081,6 +1113,88 @@ hub_commands_errors
 2. Try a different STUN server: `--stun stun:stun.cloudflare.com:3478`
 3. If behind restrictive NAT, some STUN servers may work better than others
 4. Try Hub relay mode: `--no-p2p`
+
+## Hub Migration
+
+Migrating to a new Hub provider is straightforward because Nitella uses a zero-trust architecture where the Hub is just a "dumb relay" - your cryptographic identity (keys and certificates) stays on your devices and is fully portable.
+
+### Why Migration Works
+
+| Component | Stored Location | Portable? |
+|-----------|----------------|-----------|
+| CLI Root CA (private key) | Your machine (`~/.nitella/`) | ✅ Yes |
+| CLI Root Certificate | Your machine | ✅ Yes |
+| Node Private Key | Node server (`~/.nitella/`) | ✅ Yes |
+| Node Certificate (signed by your CA) | Node server | ✅ Yes |
+| Proxy Templates (encrypted) | Hub storage | ✅ Export & re-push |
+| Routing Tokens | Derived from your keys | ✅ Auto-generated |
+| Hub CA Certificate | Hub-specific | ❌ Replaced by new Hub |
+
+### CLI Migration
+
+```bash
+# 1. Export your proxy templates from the old Hub first
+nitella proxy list
+nitella proxy export <proxy-id> --output backup.yaml
+
+# 2. Configure new Hub address
+nitella config set hub newhub.example.com:50052
+
+# 3. Register with the new Hub (uses your existing identity)
+nitella register
+# Verify the new Hub's fingerprint when prompted!
+
+# 4. Push your templates to the new Hub
+nitella proxy push <proxy-id>
+```
+
+Your CLI identity (Root CA) stays the same - you're just telling the new Hub about your public key.
+
+### Node Migration
+
+**No re-pairing required!** Nodes with valid certificates can connect to any Hub:
+
+```bash
+# On each node server - just restart with the new Hub address
+nitellad --hub newhub.example.com:50052
+```
+
+The node will:
+1. Use its existing certificate (already signed by your CA)
+2. Connect to the new Hub with mTLS
+3. Register its routing token automatically
+
+### Proxy Template Migration
+
+```bash
+# Export all templates locally (before switching)
+for proxy in $(nitella proxy list --ids); do
+    nitella proxy export $proxy --output "$proxy.yaml"
+done
+
+# After switching to new Hub, push each one
+for file in *.yaml; do
+    nitella proxy import $file
+    nitella proxy push $(basename $file .yaml)
+done
+```
+
+### Migration Checklist
+
+```
+[ ] Export all proxy templates from old Hub
+[ ] Configure CLI with new Hub address
+[ ] Register CLI with new Hub (verify fingerprint!)
+[ ] Push templates to new Hub
+[ ] Restart each nitellad node with new Hub address
+[ ] Test commands work end-to-end
+```
+
+### What You DON'T Need to Do
+
+- ❌ Re-pair nodes with PAKE/QR code (certificates are portable)
+- ❌ Generate new keys (your identity is preserved)
+- ❌ Transfer any secrets (the new Hub never sees them)
 
 ## Development
 

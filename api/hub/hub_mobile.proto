@@ -43,9 +43,6 @@ service MobileService {
   rpc GetRevision(GetRevisionRequest) returns (GetRevisionResponse);
   rpc ListRevisions(ListRevisionsRequest) returns (ListRevisionsResponse);
   rpc FlushRevisions(FlushRevisionsRequest) returns (FlushRevisionsResponse);
-
-  // Approval Workflow
-  rpc SubmitApprovalDecision(SubmitApprovalDecisionRequest) returns (SubmitApprovalDecisionResponse);
 }
 
 // ===========================================================================
@@ -216,24 +213,13 @@ message RegisterDeviceRequest {
 message UpdateLicenseRequest {
   string user_id = 1;
   string license_key = 2;
+  string routing_token = 3;  // Required: routing token to update tier for
 }
 
 message UpdateLicenseResponse {
   string tier = 1;
   int32 max_nodes = 2;
   bool valid = 3;
-}
-
-// Approval
-message SubmitApprovalDecisionRequest {
-  string request_id = 1;      // ID from the Alert metadata
-  bool allowed = 2;
-  int64 duration_seconds = 3; // How long to cache this decision
-  string reason = 4;          // Optional reason
-}
-
-message SubmitApprovalDecisionResponse {
-  bool success = 1;
 }
 
 // ===========================================================================

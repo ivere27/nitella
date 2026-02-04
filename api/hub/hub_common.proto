@@ -126,6 +126,9 @@ enum CommandType {
   COMMAND_TYPE_UNAPPLY_PROXY = 21;   // Remove proxy config from node
   COMMAND_TYPE_GET_APPLIED = 22;     // List applied proxy configs
   COMMAND_TYPE_PROXY_UPDATE = 23;    // Notification: proxy config updated
+
+  // Approval Workflow
+  COMMAND_TYPE_RESOLVE_APPROVAL = 30; // Resolve a pending approval request
 }
 
 message EncryptedCommandPayload {

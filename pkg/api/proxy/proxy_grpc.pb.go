@@ -34,6 +34,8 @@ const (
 	ProxyControlService_ListProxies_FullMethodName          = "/nitella.proxy.ProxyControlService/ListProxies"
 	ProxyControlService_BlockIP_FullMethodName              = "/nitella.proxy.ProxyControlService/BlockIP"
 	ProxyControlService_AllowIP_FullMethodName              = "/nitella.proxy.ProxyControlService/AllowIP"
+	ProxyControlService_ListGlobalRules_FullMethodName      = "/nitella.proxy.ProxyControlService/ListGlobalRules"
+	ProxyControlService_RemoveGlobalRule_FullMethodName     = "/nitella.proxy.ProxyControlService/RemoveGlobalRule"
 	ProxyControlService_StreamConnections_FullMethodName    = "/nitella.proxy.ProxyControlService/StreamConnections"
 	ProxyControlService_StreamMetrics_FullMethodName        = "/nitella.proxy.ProxyControlService/StreamMetrics"
 	ProxyControlService_GetActiveConnections_FullMethodName = "/nitella.proxy.ProxyControlService/GetActiveConnections"
@@ -42,6 +44,9 @@ const (
 	ProxyControlService_ConfigureGeoIP_FullMethodName       = "/nitella.proxy.ProxyControlService/ConfigureGeoIP"
 	ProxyControlService_LookupIP_FullMethodName             = "/nitella.proxy.ProxyControlService/LookupIP"
 	ProxyControlService_GetGeoIPStatus_FullMethodName       = "/nitella.proxy.ProxyControlService/GetGeoIPStatus"
+	ProxyControlService_ListActiveApprovals_FullMethodName  = "/nitella.proxy.ProxyControlService/ListActiveApprovals"
+	ProxyControlService_CancelApproval_FullMethodName       = "/nitella.proxy.ProxyControlService/CancelApproval"
+	ProxyControlService_ResolveApproval_FullMethodName      = "/nitella.proxy.ProxyControlService/ResolveApproval"
 )
 
 // ProxyControlServiceClient is the client API for ProxyControlService service.
@@ -65,6 +70,8 @@ type ProxyControlServiceClient interface {
 	// Quick Actions (Ephemeral, runtime only)
 	BlockIP(ctx context.Context, in *BlockIPRequest, opts ...grpc.CallOption) (*empty.Empty, error)
 	AllowIP(ctx context.Context, in *AllowIPRequest, opts ...grpc.CallOption) (*empty.Empty, error)
+	ListGlobalRules(ctx context.Context, in *ListGlobalRulesRequest, opts ...grpc.CallOption) (*ListGlobalRulesResponse, error)
+	RemoveGlobalRule(ctx context.Context, in *RemoveGlobalRuleRequest, opts ...grpc.CallOption) (*RemoveGlobalRuleResponse, error)
 	// Observability
 	StreamConnections(ctx context.Context, in *StreamConnectionsRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[ConnectionEvent], error)
 	StreamMetrics(ctx context.Context, in *StreamMetricsRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[MetricsSample], error)
@@ -77,6 +84,10 @@ type ProxyControlServiceClient interface {
 	// GeoIP Lookup
 	LookupIP(ctx context.Context, in *LookupIPRequest, opts ...grpc.CallOption) (*LookupIPResponse, error)
 	GetGeoIPStatus(ctx context.Context, in *GetGeoIPStatusRequest, opts ...grpc.CallOption) (*GetGeoIPStatusResponse, error)
+	// Active Approval Management
+	ListActiveApprovals(ctx context.Context, in *ListActiveApprovalsRequest, opts ...grpc.CallOption) (*ListActiveApprovalsResponse, error)
+	CancelApproval(ctx context.Context, in *CancelApprovalRequest, opts ...grpc.CallOption) (*CancelApprovalResponse, error)
+	ResolveApproval(ctx context.Context, in *ResolveApprovalRequest, opts ...grpc.CallOption) (*ResolveApprovalResponse, error)
 }
 
 type proxyControlServiceClient struct {
@@ -227,6 +238,26 @@ func (c *proxyControlServiceClient) AllowIP(ctx context.Context, in *AllowIPRequ
 	return out, nil
 }
 
+func (c *proxyControlServiceClient) ListGlobalRules(ctx context.Context, in *ListGlobalRulesRequest, opts ...grpc.CallOption) (*ListGlobalRulesResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListGlobalRulesResponse)
+	err := c.cc.Invoke(ctx, ProxyControlService_ListGlobalRules_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *proxyControlServiceClient) RemoveGlobalRule(ctx context.Context, in *RemoveGlobalRuleRequest, opts ...grpc.CallOption) (*RemoveGlobalRuleResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(RemoveGlobalRuleResponse)
+	err := c.cc.Invoke(ctx, ProxyControlService_RemoveGlobalRule_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *proxyControlServiceClient) StreamConnections(ctx context.Context, in *StreamConnectionsRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[ConnectionEvent], error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	stream, err := c.cc.NewStream(ctx, &ProxyControlService_ServiceDesc.Streams[0], ProxyControlService_StreamConnections_FullMethodName, cOpts...)
@@ -325,6 +356,36 @@ func (c *proxyControlServiceClient) GetGeoIPStatus(ctx context.Context, in *GetG
 	return out, nil
 }
 
+func (c *proxyControlServiceClient) ListActiveApprovals(ctx context.Context, in *ListActiveApprovalsRequest, opts ...grpc.CallOption) (*ListActiveApprovalsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListActiveApprovalsResponse)
+	err := c.cc.Invoke(ctx, ProxyControlService_ListActiveApprovals_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *proxyControlServiceClient) CancelApproval(ctx context.Context, in *CancelApprovalRequest, opts ...grpc.CallOption) (*CancelApprovalResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(CancelApprovalResponse)
+	err := c.cc.Invoke(ctx, ProxyControlService_CancelApproval_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *proxyControlServiceClient) ResolveApproval(ctx context.Context, in *ResolveApprovalRequest, opts ...grpc.CallOption) (*ResolveApprovalResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ResolveApprovalResponse)
+	err := c.cc.Invoke(ctx, ProxyControlService_ResolveApproval_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // ProxyControlServiceServer is the server API for ProxyControlService service.
 // All implementations must embed UnimplementedProxyControlServiceServer
 // for forward compatibility.
@@ -346,6 +407,8 @@ type ProxyControlServiceServer interface {
 	// Quick Actions (Ephemeral, runtime only)
 	BlockIP(context.Context, *BlockIPRequest) (*empty.Empty, error)
 	AllowIP(context.Context, *AllowIPRequest) (*empty.Empty, error)
+	ListGlobalRules(context.Context, *ListGlobalRulesRequest) (*ListGlobalRulesResponse, error)
+	RemoveGlobalRule(context.Context, *RemoveGlobalRuleRequest) (*RemoveGlobalRuleResponse, error)
 	// Observability
 	StreamConnections(*StreamConnectionsRequest, grpc.ServerStreamingServer[ConnectionEvent]) error
 	StreamMetrics(*StreamMetricsRequest, grpc.ServerStreamingServer[MetricsSample]) error
@@ -358,6 +421,10 @@ type ProxyControlServiceServer interface {
 	// GeoIP Lookup
 	LookupIP(context.Context, *LookupIPRequest) (*LookupIPResponse, error)
 	GetGeoIPStatus(context.Context, *GetGeoIPStatusRequest) (*GetGeoIPStatusResponse, error)
+	// Active Approval Management
+	ListActiveApprovals(context.Context, *ListActiveApprovalsRequest) (*ListActiveApprovalsResponse, error)
+	CancelApproval(context.Context, *CancelApprovalRequest) (*CancelApprovalResponse, error)
+	ResolveApproval(context.Context, *ResolveApprovalRequest) (*ResolveApprovalResponse, error)
 	mustEmbedUnimplementedProxyControlServiceServer()
 }
 
@@ -410,6 +477,12 @@ func (UnimplementedProxyControlServiceServer) BlockIP(context.Context, *BlockIPR
 func (UnimplementedProxyControlServiceServer) AllowIP(context.Context, *AllowIPRequest) (*empty.Empty, error) {
 	return nil, status.Error(codes.Unimplemented, "method AllowIP not implemented")
 }
+func (UnimplementedProxyControlServiceServer) ListGlobalRules(context.Context, *ListGlobalRulesRequest) (*ListGlobalRulesResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ListGlobalRules not implemented")
+}
+func (UnimplementedProxyControlServiceServer) RemoveGlobalRule(context.Context, *RemoveGlobalRuleRequest) (*RemoveGlobalRuleResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method RemoveGlobalRule not implemented")
+}
 func (UnimplementedProxyControlServiceServer) StreamConnections(*StreamConnectionsRequest, grpc.ServerStreamingServer[ConnectionEvent]) error {
 	return status.Error(codes.Unimplemented, "method StreamConnections not implemented")
 }
@@ -433,6 +506,15 @@ func (UnimplementedProxyControlServiceServer) LookupIP(context.Context, *LookupI
 }
 func (UnimplementedProxyControlServiceServer) GetGeoIPStatus(context.Context, *GetGeoIPStatusRequest) (*GetGeoIPStatusResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetGeoIPStatus not implemented")
+}
+func (UnimplementedProxyControlServiceServer) ListActiveApprovals(context.Context, *ListActiveApprovalsRequest) (*ListActiveApprovalsResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ListActiveApprovals not implemented")
+}
+func (UnimplementedProxyControlServiceServer) CancelApproval(context.Context, *CancelApprovalRequest) (*CancelApprovalResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method CancelApproval not implemented")
+}
+func (UnimplementedProxyControlServiceServer) ResolveApproval(context.Context, *ResolveApprovalRequest) (*ResolveApprovalResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ResolveApproval not implemented")
 }
 func (UnimplementedProxyControlServiceServer) mustEmbedUnimplementedProxyControlServiceServer() {}
 func (UnimplementedProxyControlServiceServer) testEmbeddedByValue()                             {}
@@ -707,6 +789,42 @@ func _ProxyControlService_AllowIP_Handler(srv interface{}, ctx context.Context, 
 	return interceptor(ctx, in, info, handler)
 }
 
+func _ProxyControlService_ListGlobalRules_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListGlobalRulesRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ProxyControlServiceServer).ListGlobalRules(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ProxyControlService_ListGlobalRules_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ProxyControlServiceServer).ListGlobalRules(ctx, req.(*ListGlobalRulesRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _ProxyControlService_RemoveGlobalRule_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RemoveGlobalRuleRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ProxyControlServiceServer).RemoveGlobalRule(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ProxyControlService_RemoveGlobalRule_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ProxyControlServiceServer).RemoveGlobalRule(ctx, req.(*RemoveGlobalRuleRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _ProxyControlService_StreamConnections_Handler(srv interface{}, stream grpc.ServerStream) error {
 	m := new(StreamConnectionsRequest)
 	if err := stream.RecvMsg(m); err != nil {
@@ -837,6 +955,60 @@ func _ProxyControlService_GetGeoIPStatus_Handler(srv interface{}, ctx context.Co
 	return interceptor(ctx, in, info, handler)
 }
 
+func _ProxyControlService_ListActiveApprovals_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListActiveApprovalsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ProxyControlServiceServer).ListActiveApprovals(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ProxyControlService_ListActiveApprovals_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ProxyControlServiceServer).ListActiveApprovals(ctx, req.(*ListActiveApprovalsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _ProxyControlService_CancelApproval_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(CancelApprovalRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ProxyControlServiceServer).CancelApproval(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ProxyControlService_CancelApproval_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ProxyControlServiceServer).CancelApproval(ctx, req.(*CancelApprovalRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _ProxyControlService_ResolveApproval_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ResolveApprovalRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ProxyControlServiceServer).ResolveApproval(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ProxyControlService_ResolveApproval_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ProxyControlServiceServer).ResolveApproval(ctx, req.(*ResolveApprovalRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // ProxyControlService_ServiceDesc is the grpc.ServiceDesc for ProxyControlService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -901,6 +1073,14 @@ var ProxyControlService_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _ProxyControlService_AllowIP_Handler,
 		},
 		{
+			MethodName: "ListGlobalRules",
+			Handler:    _ProxyControlService_ListGlobalRules_Handler,
+		},
+		{
+			MethodName: "RemoveGlobalRule",
+			Handler:    _ProxyControlService_RemoveGlobalRule_Handler,
+		},
+		{
 			MethodName: "GetActiveConnections",
 			Handler:    _ProxyControlService_GetActiveConnections_Handler,
 		},
@@ -923,6 +1103,18 @@ var ProxyControlService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GetGeoIPStatus",
 			Handler:    _ProxyControlService_GetGeoIPStatus_Handler,
+		},
+		{
+			MethodName: "ListActiveApprovals",
+			Handler:    _ProxyControlService_ListActiveApprovals_Handler,
+		},
+		{
+			MethodName: "CancelApproval",
+			Handler:    _ProxyControlService_CancelApproval_Handler,
+		},
+		{
+			MethodName: "ResolveApproval",
+			Handler:    _ProxyControlService_ResolveApproval_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{

@@ -9,6 +9,7 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/hex"
+	"encoding/json"
 	"encoding/pem"
 	"fmt"
 	"log"
@@ -29,6 +30,9 @@ import (
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
+
+// CommandIDCacheExpirySeconds is how long command IDs are cached for deduplication (5 minutes)
+const CommandIDCacheExpirySeconds = 300
 
 // MetricsProvider is the interface that nitellad should implement to provide metrics
 type MetricsProvider interface {
@@ -95,10 +99,13 @@ type Client struct {
 	// External providers
 	metricsProvider MetricsProvider
 	commandHandler  CommandHandler
+
+	// Approval resolution callback (called when P2P decision received)
+	onApprovalDecision func(reqID string, allowed bool, durationSeconds int64, reason string)
 }
 
 // NewClient creates a Hub client with TLS enabled (production-ready).
-// All connections require TLS - there is no insecure mode.
+// All connections require TLS only.
 func NewClient(hubAddr, authToken, userID, inviteCode, pairingCode string, qrMode bool, appDataDir string) *Client {
 	store := NewStorage(appDataDir)
 	return &Client{
@@ -118,9 +125,18 @@ func NewClient(hubAddr, authToken, userID, inviteCode, pairingCode string, qrMod
 
 // NewClientWithConn creates a Client with an existing gRPC connection.
 // Used when the connection is established externally (e.g., after PAKE pairing).
+// hubAddr is needed for reconnection if the connection drops.
 func NewClientWithConn(conn *grpc.ClientConn, appDataDir string) *Client {
 	store := NewStorage(appDataDir)
+
+	// Extract hubAddr from connection target for reconnection
+	hubAddr := ""
+	if conn != nil {
+		hubAddr = conn.Target()
+	}
+
 	c := &Client{
+		hubAddr:        hubAddr,
 		conn:           conn,
 		storage:        store,
 		verifyCommands: true,
@@ -142,6 +158,12 @@ func NewClientWithConn(conn *grpc.ClientConn, appDataDir string) *Client {
 func (c *Client) SetTransportCA(certPEM []byte) {
 	c.transportCAPEM = certPEM
 	log.Printf("[HubClient] Custom Transport CA set (len=%d)", len(certPEM))
+}
+
+// SetHubAddr sets the Hub address for reconnection
+func (c *Client) SetHubAddr(addr string) {
+	c.hubAddr = addr
+	log.Printf("[HubClient] Hub address set to: %s", addr)
 }
 
 // SetHubCertPin enforces strict certificate pinning for the Hub connection
@@ -202,6 +224,11 @@ func (c *Client) SetSTUNServer(url string) {
 	c.stunURL = url
 }
 
+// SetApprovalDecisionHandler sets the callback for P2P approval decisions
+func (c *Client) SetApprovalDecisionHandler(handler func(reqID string, allowed bool, durationSeconds int64, reason string)) {
+	c.onApprovalDecision = handler
+}
+
 // Stop stops the client's retry loop
 func (c *Client) Stop() {
 	if c.running {
@@ -219,16 +246,22 @@ func (c *Client) Stop() {
 	}
 }
 
-// SendAlert sends an alert to the Hub
+// SendAlert sends an alert to the Hub (or via P2P if connected)
 func (c *Client) SendAlert(alert *common.Alert, info string) error {
+	// Try P2P first if enabled and connected
+	if c.useP2P && c.p2pManager != nil && c.p2pManager.HasConnectedSessions() {
+		if c.trySendAlertViaP2P(alert, info) {
+			log.Printf("[HubClient] Alert %s sent via P2P", alert.Id)
+			return nil
+		}
+		// P2P failed, fall through to Hub
+		log.Printf("[HubClient] P2P send failed, falling back to Hub for alert %s", alert.Id)
+	}
+
 	// Zero-Trust: Encrypt info with viewer's public key (owner's key)
 	// This ensures Hub cannot decrypt alert details - only the owner can
-	encryptKey := c.viewerPubKey
-	if encryptKey == nil {
-		// Fallback to CA key for backward compatibility (less secure)
-		encryptKey = c.caPubKey
-	}
-	if encryptKey != nil && alert.Encrypted == nil {
+	if c.viewerPubKey != nil && alert.Encrypted == nil {
+		encryptKey := c.viewerPubKey
 		payloadData := []byte(info)
 
 		if enc, err := nitellacrypto.Encrypt(payloadData, encryptKey); err == nil {
@@ -241,6 +274,8 @@ func (c *Client) SendAlert(alert *common.Alert, info string) error {
 		} else {
 			log.Printf("[HubClient] Failed to encrypt alert info: %v", err)
 		}
+	} else if alert.Encrypted == nil {
+		log.Printf("[HubClient] WARNING: Viewer public key not set, alert sent without E2E encryption")
 	}
 
 	select {
@@ -249,6 +284,49 @@ func (c *Client) SendAlert(alert *common.Alert, info string) error {
 	default:
 		return fmt.Errorf("alert channel full")
 	}
+}
+
+// trySendAlertViaP2P attempts to send an approval request via P2P
+// Returns true if successfully sent to at least one peer
+func (c *Client) trySendAlertViaP2P(alert *common.Alert, info string) bool {
+	// Parse info JSON to extract approval request details
+	var infoMap map[string]interface{}
+	if err := json.Unmarshal([]byte(info), &infoMap); err != nil {
+		log.Printf("[HubClient] Failed to parse alert info for P2P: %v", err)
+		return false
+	}
+
+	// Build P2P ApprovalRequest
+	req := &p2p.ApprovalRequest{
+		RequestID: alert.Id,
+		NodeID:    alert.NodeId,
+		Severity:  alert.Severity,
+	}
+
+	if v, ok := infoMap["source_ip"].(string); ok {
+		req.SourceIP = v
+	}
+	if v, ok := infoMap["dest"].(string); ok {
+		req.DestAddr = v
+	}
+	if v, ok := infoMap["proxy_id"].(string); ok {
+		req.ProxyID = v
+	}
+	if v, ok := infoMap["rule_id"].(string); ok {
+		req.RuleID = v
+	}
+	if v, ok := infoMap["geo_country"].(string); ok {
+		req.GeoCountry = v
+	}
+	if v, ok := infoMap["geo_city"].(string); ok {
+		req.GeoCity = v
+	}
+	if v, ok := infoMap["geo_isp"].(string); ok {
+		req.GeoISP = v
+	}
+
+	// Send to all connected P2P sessions
+	return c.p2pManager.SendApprovalRequest(req) > 0
 }
 
 // Start begins the Hub connection loop with automatic reconnection
@@ -318,6 +396,26 @@ func (c *Client) connect() error {
 
 	var conn *grpc.ClientConn
 	var err error
+
+	// Check if we already have a valid connection
+	c.connMu.Lock()
+	existingConn := c.conn
+	c.connMu.Unlock()
+
+	if existingConn != nil {
+		// Test if the existing connection is still usable
+		state := existingConn.GetState()
+		if state == 0 || state == 1 || state == 2 { // Idle, Connecting, Ready
+			conn = existingConn
+			log.Printf("[HubClient] Reusing existing connection (state: %v)", state)
+		} else {
+			// Connection is broken, close it and create a new one
+			existingConn.Close()
+			c.connMu.Lock()
+			c.conn = nil
+			c.connMu.Unlock()
+		}
+	}
 
 	// SECURE: Always use TLS with certificate verification
 	tlsConfig := &tls.Config{
@@ -398,14 +496,20 @@ func (c *Client) connect() error {
 		}
 	}
 
-	conn, err = grpc.Dial(c.hubAddr, grpc.WithTransportCredentials(credentials.NewTLS(tlsConfig)))
-	if err != nil {
-		return err
-	}
+	// Only create new connection if we don't have a reused one
+	if conn == nil {
+		if c.hubAddr == "" {
+			return fmt.Errorf("failed to exit idle mode: failed to start resolver: passthrough: received empty target in Build()")
+		}
+		conn, err = grpc.Dial(c.hubAddr, grpc.WithTransportCredentials(credentials.NewTLS(tlsConfig)))
+		if err != nil {
+			return err
+		}
 
-	c.connMu.Lock()
-	c.conn = conn
-	c.connMu.Unlock()
+		c.connMu.Lock()
+		c.conn = conn
+		c.connMu.Unlock()
+	}
 
 	// Close connection on exit
 	defer func() {
@@ -651,14 +755,9 @@ func (c *Client) gatherEncryptedMetrics() *pb.EncryptedMetrics {
 	// Zero-Trust: Encrypt with viewer's public key (owner's key)
 	// This ensures Hub cannot decrypt metrics - only the owner can
 	var encrypted *common.EncryptedPayload
-	encryptKey := c.viewerPubKey
-	if encryptKey == nil {
-		// Fallback to CA key for backward compatibility (less secure)
-		encryptKey = c.caPubKey
-	}
-	if encryptKey != nil {
+	if c.viewerPubKey != nil {
 		data, _ := proto.Marshal(plainMetrics)
-		if enc, err := nitellacrypto.Encrypt(data, encryptKey); err == nil {
+		if enc, err := nitellacrypto.Encrypt(data, c.viewerPubKey); err == nil {
 			encrypted = &common.EncryptedPayload{
 				EphemeralPubkey:   enc.EphemeralPubKey,
 				Nonce:             enc.Nonce,
@@ -796,7 +895,7 @@ func (c *Client) replayCacheCleanupLoop() {
 			// Remove entries older than 5 minutes
 			c.cmdIDCache.Range(func(key, value interface{}) bool {
 				if ts, ok := value.(int64); ok {
-					if now-ts > 300 { // 5 minutes
+					if now-ts > CommandIDCacheExpirySeconds {
 						c.cmdIDCache.Delete(key)
 					}
 				}
@@ -835,6 +934,16 @@ func (c *Client) startSignalingLoop(ctx context.Context, client pb.NodeServiceCl
 		// Hook up Metrics Callback
 		c.p2pManager.GetMetrics = func() *pb.EncryptedMetrics {
 			return c.gatherEncryptedMetrics()
+		}
+
+		// Hook up P2P Approval Decision Handler
+		c.p2pManager.OnApprovalDecision = func(sessionID string, decision *p2p.ApprovalDecision) {
+			log.Printf("[P2P] Received approval decision for %s: action=%d, duration=%d",
+				decision.RequestID, decision.Action, decision.DurationSeconds)
+			if c.onApprovalDecision != nil {
+				allowed := decision.Action == 1 // 1=allow, 2=block
+				c.onApprovalDecision(decision.RequestID, allowed, decision.DurationSeconds, decision.Reason)
+			}
 		}
 
 		// Send Loop
@@ -973,13 +1082,8 @@ func (c *Client) encryptCommandResult(cmdID, status, errMsg string, payload []by
 
 	// Zero-Trust: Encrypt with viewer's public key (owner's key)
 	// This ensures Hub cannot decrypt command responses - only the owner can
-	encryptKey := c.viewerPubKey
-	if encryptKey == nil {
-		// Fallback to CA key for backward compatibility (less secure)
-		encryptKey = c.caPubKey
-	}
-	if encryptKey != nil {
-		if enc, err := nitellacrypto.Encrypt(resultBytes, encryptKey); err == nil {
+	if c.viewerPubKey != nil {
+		if enc, err := nitellacrypto.Encrypt(resultBytes, c.viewerPubKey); err == nil {
 			encryptedData := &common.EncryptedPayload{
 				EphemeralPubkey:   enc.EphemeralPubKey,
 				Nonce:             enc.Nonce,
@@ -991,10 +1095,10 @@ func (c *Client) encryptCommandResult(cmdID, status, errMsg string, payload []by
 				EncryptedData: encryptedData,
 			}
 		} else {
-			log.Printf("Failed to encrypt CommandResult: %v", err)
+			log.Printf("[HubClient] Failed to encrypt CommandResult: %v", err)
 		}
 	} else {
-		log.Printf("WARNING: CA Public Key not available, sending empty CommandResponse")
+		log.Printf("[HubClient] WARNING: Viewer public key not set, sending empty CommandResponse")
 	}
 
 	return &pb.CommandResponse{

@@ -4,19 +4,23 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
+	"crypto/tls"
 	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/pem"
+	"math/big"
 	"net"
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	pb "github.com/ivere27/nitella/pkg/api/hub"
 	"github.com/ivere27/nitella/pkg/hub/auth"
 	"github.com/ivere27/nitella/pkg/hub/model"
 	"github.com/ivere27/nitella/pkg/hub/store"
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/metadata"
 )
 
@@ -44,6 +48,7 @@ type testServer struct {
 	tokenManager *auth.TokenManager
 	addr         string
 	cleanup      func()
+	caPEM        []byte
 }
 
 func setupTestServer(t *testing.T) *testServer {
@@ -81,8 +86,19 @@ func setupTestServer(t *testing.T) *testServer {
 	// Create Hub server
 	hubServer := NewHubServer(tokenManager, adminTokenManager, testStore, nil, nil)
 
-	// Create gRPC server
+	// Generate TLS certs for the server
+	serverCertPEM, serverKeyPEM, err := generateSelfSignedCert(t)
+	if err != nil {
+		t.Fatalf("Failed to generate test certs: %v", err)
+	}
+	serverCert, err := tls.X509KeyPair(serverCertPEM, serverKeyPEM)
+	if err != nil {
+		t.Fatalf("Failed to load key pair: %v", err)
+	}
+
+	// Create gRPC server with TLS
 	grpcServer := grpc.NewServer(
+		grpc.Creds(credentials.NewServerTLSFromCert(&serverCert)),
 		grpc.ChainUnaryInterceptor(hubServer.AuthInterceptor),
 	)
 	hubServer.RegisterServices(grpcServer)
@@ -103,6 +119,7 @@ func setupTestServer(t *testing.T) *testServer {
 		store:        testStore,
 		tokenManager: tokenManager,
 		addr:         listener.Addr().String(),
+		caPEM:        serverCertPEM, // Self-signed leaf acts as its own CA
 		cleanup: func() {
 			grpcServer.Stop()
 			testStore.Close()
@@ -111,8 +128,54 @@ func setupTestServer(t *testing.T) *testServer {
 	}
 }
 
+// generateSelfSignedCert generates a self-signed certificate for localhost
+func generateSelfSignedCert(t *testing.T) ([]byte, []byte, error) {
+	_, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	template := x509.Certificate{
+		SerialNumber: big.NewInt(1),
+		Subject: pkix.Name{
+			Organization: []string{"Test Hub"},
+		},
+		NotBefore:             time.Now(),
+		NotAfter:              time.Now().Add(time.Hour),
+		KeyUsage:              x509.KeyUsageKeyEncipherment | x509.KeyUsageDigitalSignature | x509.KeyUsageCertSign,
+		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		BasicConstraintsValid: true,
+		IsCA:                  true, // Self-signed, so it must be CA to sign itself (or just be a leaf that we trust as root)
+		IPAddresses:           []net.IP{net.ParseIP("127.0.0.1")},
+		DNSNames:              []string{"localhost"},
+	}
+
+	derBytes, err := x509.CreateCertificate(rand.Reader, &template, &template, priv.Public(), priv)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: derBytes})
+	
+	privBytes, err := x509.MarshalPKCS8PrivateKey(priv)
+	if err != nil {
+		return nil, nil, err
+	}
+	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: privBytes})
+
+	return certPEM, keyPEM, nil
+}
+
 func (ts *testServer) dial(t *testing.T) *grpc.ClientConn {
-	conn, err := grpc.NewClient(ts.addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	pool := x509.NewCertPool()
+	pool.AppendCertsFromPEM(ts.caPEM)
+	
+	tlsConfig := &tls.Config{
+		RootCAs:    pool,
+		MinVersion: tls.VersionTLS13,
+	}
+
+	conn, err := grpc.NewClient(ts.addr, grpc.WithTransportCredentials(credentials.NewTLS(tlsConfig)))
 	if err != nil {
 		t.Fatalf("Failed to dial: %v", err)
 	}

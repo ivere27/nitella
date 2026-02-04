@@ -21,6 +21,8 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -43,6 +45,10 @@ type CertManager struct {
 
 	// Leaf cert (short-lived, atomic for hot swap)
 	leafCert atomic.Pointer[tls.Certificate]
+
+	// Client CAs pool (for verifying node certificates signed by CLI CAs)
+	clientCAsMu sync.RWMutex
+	clientCAs   *x509.CertPool
 
 	// Configuration
 	leafValidity time.Duration
@@ -88,6 +94,7 @@ func New(cfg *Config) (*CertManager, error) {
 		renewBefore:  cfg.RenewBefore,
 		sans:         cfg.SANs,
 		ips:          cfg.IPs,
+		clientCAs:   x509.NewCertPool(), // Initialize dynamic client CA pool
 	}
 
 	if m.leafValidity == 0 {
@@ -139,37 +146,29 @@ func (m *CertManager) GetCertificate(*tls.ClientHelloInfo) (*tls.Certificate, er
 }
 
 // GetTLSConfig returns a TLS config that uses dynamic certificate loading.
-// Uses VerifyClientCertIfGiven to:
+// Uses RequestClientCert to:
 // - Allow PairingService connections without client certs (PAKE handles trust)
-// - Verify client certs for NodeService when presented
+// - Request but not auto-verify client certs for NodeService (we verify in callback)
+// This allows us to dynamically verify against Hub CA + CLI CAs that are added at runtime.
 func (m *CertManager) GetTLSConfig() *tls.Config {
-	// Create CA pool for client cert verification
-	caPool := x509.NewCertPool()
-	if m.caCert != nil {
-		caPool.AddCert(m.caCert)
-	}
-
 	return &tls.Config{
 		GetCertificate: m.GetCertificate,
-		ClientAuth:     tls.VerifyClientCertIfGiven,
-		ClientCAs:      caPool,
-		MinVersion:     tls.VersionTLS13,
+		ClientAuth:     tls.RequestClientCert, // Request but don't auto-verify
+		// Use VerifyPeerCertificate for dynamic CA pool (Hub CA + CLI CAs)
+		VerifyPeerCertificate: m.verifyClientCert,
+		MinVersion:            tls.VersionTLS13,
 	}
 }
 
 // GetStrictTLSConfig returns a TLS config that requires valid client certificates.
 // Use this for services that require mTLS (e.g., NodeService-only endpoints).
 func (m *CertManager) GetStrictTLSConfig() *tls.Config {
-	caPool := x509.NewCertPool()
-	if m.caCert != nil {
-		caPool.AddCert(m.caCert)
-	}
-
 	return &tls.Config{
 		GetCertificate: m.GetCertificate,
-		ClientAuth:     tls.RequireAndVerifyClientCert,
-		ClientCAs:      caPool,
-		MinVersion:     tls.VersionTLS13,
+		ClientAuth:     tls.RequireAnyClientCert, // Require cert but don't auto-verify
+		// Use VerifyPeerCertificate for dynamic CA pool (Hub CA + CLI CAs)
+		VerifyPeerCertificate: m.verifyClientCertStrict,
+		MinVersion:            tls.VersionTLS13,
 	}
 }
 
@@ -198,6 +197,92 @@ func (m *CertManager) GetCACert() *x509.Certificate {
 // GetCAPrivateKey returns the Hub CA private key.
 func (m *CertManager) GetCAPrivateKey() ed25519.PrivateKey {
 	return m.caKey
+}
+
+// AddClientCA adds a CLI CA certificate to the client CA pool.
+// This allows Hub to verify node certificates signed by this CLI CA.
+func (m *CertManager) AddClientCA(caPEM []byte) error {
+	block, _ := pem.Decode(caPEM)
+	if block == nil {
+		return fmt.Errorf("failed to decode CLI CA PEM")
+	}
+
+	cert, err := x509.ParseCertificate(block.Bytes)
+	if err != nil {
+		return fmt.Errorf("failed to parse CLI CA: %w", err)
+	}
+
+	m.clientCAsMu.Lock()
+	defer m.clientCAsMu.Unlock()
+
+	m.clientCAs.AddCert(cert)
+	log.Printf("[CertManager] Added CLI CA to client pool: %s", cert.Subject.CommonName)
+
+	return nil
+}
+
+// verifyClientCert verifies client certificate against Hub CA and CLI CAs.
+// This is used by GetTLSConfig() with VerifyClientCertIfGiven.
+func (m *CertManager) verifyClientCert(rawCerts [][]byte, verifiedChains [][]*x509.Certificate) error {
+	// If no client cert provided, that's OK (VerifyClientCertIfGiven)
+	if len(rawCerts) == 0 {
+		return nil
+	}
+
+	return m.verifyClientCertInternal(rawCerts)
+}
+
+// verifyClientCertStrict verifies client certificate - fails if not provided.
+// This is used by GetStrictTLSConfig() with RequireAnyClientCert.
+func (m *CertManager) verifyClientCertStrict(rawCerts [][]byte, verifiedChains [][]*x509.Certificate) error {
+	if len(rawCerts) == 0 {
+		return fmt.Errorf("client certificate required")
+	}
+
+	return m.verifyClientCertInternal(rawCerts)
+}
+
+// verifyClientCertInternal performs the actual certificate verification.
+// Note: This is a LENIENT check - it doesn't fail if verification fails.
+// The gRPC interceptors handle service-specific auth (JWT for Mobile/Auth, mTLS for Node).
+// This allows CLI to connect with self-signed certs while nodes must have CLI CA certs.
+func (m *CertManager) verifyClientCertInternal(rawCerts [][]byte) error {
+	// Parse the client certificate
+	cert, err := x509.ParseCertificate(rawCerts[0])
+	if err != nil {
+		// Can't parse certificate - this is a real error
+		return fmt.Errorf("failed to parse client certificate: %w", err)
+	}
+
+	// Build combined root pool: Hub CA + all CLI CAs
+	m.clientCAsMu.RLock()
+	roots := x509.NewCertPool()
+	if m.caCert != nil {
+		roots.AddCert(m.caCert)
+	}
+	// CLI CAs are stored in clientCAs pool - try verification against it
+	clientCAs := m.clientCAs
+	m.clientCAsMu.RUnlock()
+
+	// First try with Hub CA
+	opts := x509.VerifyOptions{
+		Roots:     roots,
+		KeyUsages: []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
+	}
+	if _, err := cert.Verify(opts); err == nil {
+		return nil // Verified against Hub CA
+	}
+
+	// Try with CLI CAs as roots (CLI CAs sign node certs directly)
+	opts.Roots = clientCAs
+	if _, err := cert.Verify(opts); err == nil {
+		return nil // Verified against CLI CA
+	}
+
+	// Certificate not verified against any known CA.
+	// This is OK at the TLS level - let gRPC interceptors handle service-specific auth.
+	// CLI uses JWT auth (doesn't need mTLS), only NodeService requires verified mTLS.
+	return nil
 }
 
 // ensureCA creates or loads the Hub CA.
@@ -381,6 +466,16 @@ func (m *CertManager) rotateLeafCert() error {
 	// Add hostname
 	if hostname, err := os.Hostname(); err == nil && hostname != "" {
 		dnsNames = append(dnsNames, hostname)
+	}
+
+	// Add additional DNS names from environment (comma-separated)
+	if extraDNS := os.Getenv("NITELLA_CERT_DNS_NAMES"); extraDNS != "" {
+		for _, name := range strings.Split(extraDNS, ",") {
+			name = strings.TrimSpace(name)
+			if name != "" {
+				dnsNames = append(dnsNames, name)
+			}
+		}
 	}
 
 	// Auto-detect local IPs

@@ -34,6 +34,8 @@ service ProxyControlService {
   // Quick Actions (Ephemeral, runtime only)
   rpc BlockIP(BlockIPRequest) returns (google.protobuf.Empty);
   rpc AllowIP(AllowIPRequest) returns (google.protobuf.Empty);
+  rpc ListGlobalRules(ListGlobalRulesRequest) returns (ListGlobalRulesResponse);
+  rpc RemoveGlobalRule(RemoveGlobalRuleRequest) returns (RemoveGlobalRuleResponse);
 
   // Observability
   rpc StreamConnections(StreamConnectionsRequest) returns (stream ConnectionEvent);
@@ -50,6 +52,11 @@ service ProxyControlService {
   // GeoIP Lookup
   rpc LookupIP(LookupIPRequest) returns (LookupIPResponse);
   rpc GetGeoIPStatus(GetGeoIPStatusRequest) returns (GetGeoIPStatusResponse);
+
+  // Active Approval Management
+  rpc ListActiveApprovals(ListActiveApprovalsRequest) returns (ListActiveApprovalsResponse);
+  rpc CancelApproval(CancelApprovalRequest) returns (CancelApprovalResponse);
+  rpc ResolveApproval(ResolveApprovalRequest) returns (ResolveApprovalResponse);
 }
 
 // ---------------------------------------------------------------------------
@@ -343,6 +350,30 @@ message AllowIPRequest {
   int64 duration_seconds = 2;
 }
 
+message GlobalRule {
+  string id = 1;
+  string name = 2;                    // Human-readable description
+  string source_ip = 3;               // IP or CIDR
+  nitella.ActionType action = 4;      // ALLOW or BLOCK
+  google.protobuf.Timestamp expires_at = 5;  // Zero means permanent
+  google.protobuf.Timestamp created_at = 6;
+}
+
+message ListGlobalRulesRequest {}
+
+message ListGlobalRulesResponse {
+  repeated GlobalRule rules = 1;
+}
+
+message RemoveGlobalRuleRequest {
+  string rule_id = 1;
+}
+
+message RemoveGlobalRuleResponse {
+  bool success = 1;
+  string error_message = 2;
+}
+
 // ---------------------------------------------------------------------------
 // Observability
 // ---------------------------------------------------------------------------
@@ -377,6 +408,8 @@ enum EventType {
   EVENT_TYPE_CONNECTED = 1;
   EVENT_TYPE_CLOSED = 2;
   EVENT_TYPE_BLOCKED = 3;
+  EVENT_TYPE_PENDING_APPROVAL = 4;  // Connection waiting for user approval
+  EVENT_TYPE_APPROVED = 5;          // Connection approved by user
 }
 
 message StreamMetricsRequest {
@@ -510,13 +543,55 @@ message StatsSummaryResponse {
 // ---------------------------------------------------------------------------
 
 message ResolveApprovalRequest {
-  string req_id = 1;  // Approval request ID
+  string req_id = 1;
   nitella.ApprovalActionType action = 2;
-  nitella.ApprovalDuration duration = 3;
-  string reason = 4;  // Optional reason for the decision
+  int64 duration_seconds = 3;
+  string reason = 4;
 }
 
 message ResolveApprovalResponse {
   bool success = 1;
   string error_message = 2;
+}
+
+// ---------------------------------------------------------------------------
+// Active Approval Management
+// ---------------------------------------------------------------------------
+
+message ActiveApproval {
+  string key = 1;                          // Unique key (ip:rule_id:tls_session)
+  string source_ip = 2;
+  string rule_id = 3;
+  string proxy_id = 4;
+  string tls_session_id = 5;               // Empty if non-TLS
+  bool allowed = 6;                        // true=allow, false=block
+  google.protobuf.Timestamp created_at = 7;
+  google.protobuf.Timestamp expires_at = 8;
+  int64 bytes_in = 9;
+  int64 bytes_out = 10;
+  int64 blocked_count = 11;                // For block decisions
+  repeated string conn_ids = 12;           // Active connection IDs
+  string geo_country = 13;
+  string geo_city = 14;
+  string geo_isp = 15;
+}
+
+message ListActiveApprovalsRequest {
+  string proxy_id = 1;                     // Optional: filter by proxy
+  string source_ip = 2;                    // Optional: filter by IP
+}
+
+message ListActiveApprovalsResponse {
+  repeated ActiveApproval approvals = 1;
+}
+
+message CancelApprovalRequest {
+  string key = 1;                          // Approval key to cancel
+  bool close_connections = 2;              // Also close active connections
+}
+
+message CancelApprovalResponse {
+  bool success = 1;
+  string error_message = 2;
+  int32 connections_closed = 3;
 }

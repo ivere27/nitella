@@ -2,11 +2,6 @@
 
 package geoip
 
-import (
-	empty "github.com/golang/protobuf/ptypes/empty"
-	common "github.com/ivere27/nitella/pkg/api/common"
-)
-
 /*
 #include <stdlib.h>
 */
@@ -20,11 +15,20 @@ import (
 	"github.com/ivere27/synurang/pkg/synurang"
 	"google.golang.org/grpc"
 	"google.golang.org/protobuf/proto"
+	empty "github.com/golang/protobuf/ptypes/empty"
 )
+
+// =============================================================================
+// FFI Server Interface
+// =============================================================================
 
 type FfiServer interface {
 	GeoIPServiceServer
 }
+
+// =============================================================================
+// Invoke - returns []byte (for TCP/UDS)
+// =============================================================================
 
 func Invoke(s FfiServer, ctx context.Context, method string, data []byte) ([]byte, error) {
 	switch method {
@@ -53,6 +57,10 @@ func Invoke(s FfiServer, ctx context.Context, method string, data []byte) ([]byt
 	}
 }
 
+// =============================================================================
+// InvokeFfi - returns C pointer (for zero-copy FFI)
+// =============================================================================
+
 // InvokeFfi is the zero-copy variant for FFI mode.
 // It allocates C memory and serializes directly into it.
 // Caller is responsible for freeing the returned pointer via C.free().
@@ -73,6 +81,9 @@ func InvokeFfi(s FfiServer, ctx context.Context, method string, data []byte) (un
 			return nil, 0, nil
 		}
 		cPtr := C.malloc(C.size_t(size))
+		if cPtr == nil {
+			return nil, 0, fmt.Errorf("failed to allocate memory for response")
+		}
 		buf := unsafe.Slice((*byte)(cPtr), size)
 		if _, err := (proto.MarshalOptions{}).MarshalAppend(buf[:0], resp); err != nil {
 			C.free(cPtr)
@@ -94,6 +105,9 @@ func InvokeFfi(s FfiServer, ctx context.Context, method string, data []byte) (un
 			return nil, 0, nil
 		}
 		cPtr := C.malloc(C.size_t(size))
+		if cPtr == nil {
+			return nil, 0, fmt.Errorf("failed to allocate memory for response")
+		}
 		buf := unsafe.Slice((*byte)(cPtr), size)
 		if _, err := (proto.MarshalOptions{}).MarshalAppend(buf[:0], resp); err != nil {
 			C.free(cPtr)
@@ -102,14 +116,6 @@ func InvokeFfi(s FfiServer, ctx context.Context, method string, data []byte) (un
 		return cPtr, int64(size), nil
 	default:
 		return nil, 0, fmt.Errorf("unknown method: %s", method)
-	}
-}
-
-// InvokeStream dispatches streaming RPC calls to the appropriate server method.
-func InvokeStream(s FfiServer, ctx context.Context, method string, stream grpc.ServerStream) error {
-	switch method {
-	default:
-		return fmt.Errorf("unknown streaming method: %s", method)
 	}
 }
 
@@ -132,18 +138,16 @@ func (i *ffiInvoker) Invoke(ctx context.Context, method string, req, reply proto
 		if err != nil {
 			return err
 		}
-		// Zero-copy: direct struct copy
-		dst := reply.(*common.GeoInfo)
-		*dst = *resp
+		// Use proto.Merge to avoid copying mutex in MessageState
+		proto.Merge(reply.(proto.Message), resp)
 		return nil
 	case "/nitella.geoip.GeoIPService/GetStatus":
 		resp, err := i.server.GetStatus(ctx, req.(*empty.Empty))
 		if err != nil {
 			return err
 		}
-		// Zero-copy: direct struct copy
-		dst := reply.(*ServiceStatus)
-		*dst = *resp
+		// Use proto.Merge to avoid copying mutex in MessageState
+		proto.Merge(reply.(proto.Message), resp)
 		return nil
 	default:
 		return fmt.Errorf("unknown method: %s", method)

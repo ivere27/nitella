@@ -20,12 +20,15 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/ivere27/nitella/pkg/cli"
 	"github.com/ivere27/nitella/pkg/hub/auth"
 	"github.com/ivere27/nitella/pkg/hub/certmanager"
 	"github.com/ivere27/nitella/pkg/hub/firebase"
+	"github.com/ivere27/nitella/pkg/hub/ratelimit"
 	"github.com/ivere27/nitella/pkg/hub/server"
 	"github.com/ivere27/nitella/pkg/hub/store"
 	"github.com/ivere27/nitella/pkg/log"
+	"github.com/ivere27/nitella/pkg/tier"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/keepalive"
@@ -113,9 +116,32 @@ func main() {
 		log.Infof("Firebase credentials not provided, push notifications disabled")
 	}
 
+	// Load tier configuration
+	tierCfg := tier.DefaultConfig()
+	if tiersFile := "tiers.yaml"; func() bool { _, err := os.Stat(tiersFile); return err == nil }() {
+		if cfg, err := tier.LoadConfig(tiersFile); err == nil {
+			tierCfg = cfg
+			log.Infof("Loaded tier configuration from %s", tiersFile)
+		} else {
+			log.Warnf("Failed to load tiers.yaml, using defaults: %v", err)
+		}
+	}
+
+	// Create IP-based rate limiter (anti-DDoS, runs first)
+	ipRateLimiter := ratelimit.NewIPRateLimiter(ratelimit.DefaultIPRateLimiterConfig())
+
+	// Create tier-based rate limiter
+	tierRateLimiter := ratelimit.NewTieredRateLimiter(tierCfg, func(routingToken string) string {
+		info, err := hubStore.GetRoutingTokenInfo(routingToken)
+		if err != nil || info.Tier == "" {
+			return "free"
+		}
+		return info.Tier
+	})
+
 	// Create Hub server
 	// tokenManager is used for both user and admin tokens (can be separated if needed)
-	hubServer := server.NewHubServer(jwtManager, jwtManager, hubStore, firebaseService, nil)
+	hubServer := server.NewHubServer(jwtManager, jwtManager, hubStore, firebaseService, tierCfg)
 
 	// Configure gRPC server options
 	opts := []grpc.ServerOption{
@@ -187,14 +213,18 @@ func main() {
 		}
 	}
 
-	// Add interceptors
+	// Add interceptors (order: IP limit -> logging -> auth -> tier limit)
 	opts = append(opts, grpc.ChainUnaryInterceptor(
+		ipRateLimiter.UnaryInterceptor(),
 		loggingInterceptor,
 		hubServer.AuthInterceptor,
+		tierRateLimiter.UnaryInterceptor(),
 	))
 	opts = append(opts, grpc.ChainStreamInterceptor(
+		ipRateLimiter.StreamInterceptor(),
 		streamLoggingInterceptor,
 		hubServer.StreamAuthInterceptor,
+		tierRateLimiter.StreamInterceptor(),
 	))
 
 	// Create gRPC server
@@ -311,13 +341,9 @@ func loadTLSConfig(certFile, keyFile, caFile string) (*tls.Config, error) {
 
 	// Load CA for client verification if provided
 	if caFile != "" {
-		caPEM, err := os.ReadFile(caFile)
+		caPool, err := cli.LoadCertPool(caFile)
 		if err != nil {
-			return nil, fmt.Errorf("failed to read CA certificate: %w", err)
-		}
-		caPool := x509.NewCertPool()
-		if !caPool.AppendCertsFromPEM(caPEM) {
-			return nil, fmt.Errorf("failed to parse CA certificate")
+			return nil, err
 		}
 		config.ClientCAs = caPool
 		if *requireMTLS {

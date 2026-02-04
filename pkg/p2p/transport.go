@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
+	"crypto/subtle"
 	"crypto/x509"
 	"encoding/json"
 	"encoding/pem"
@@ -24,28 +25,11 @@ type SignalingClient interface {
 	StreamSignaling(ctx context.Context, opts ...grpc.CallOption) (pb.MobileService_StreamSignalingClient, error)
 }
 
-// AuthMessage types for P2P authentication
-type AuthMessageType string
-
-const (
-	AuthChallenge AuthMessageType = "auth_challenge"
-	AuthResponse  AuthMessageType = "auth_response"
-	AuthSuccess   AuthMessageType = "auth_success"
-	AuthFailed    AuthMessageType = "auth_failed"
-)
-
-// AuthMessage is used for P2P peer authentication
-type AuthMessage struct {
-	Type      AuthMessageType `json:"type"`
-	Challenge []byte          `json:"challenge,omitempty"` // Random nonce
-	UserID    string          `json:"user_id,omitempty"`   // Claimed user ID
-	PublicKey []byte          `json:"public_key,omitempty"` // Ed25519 public key
-	CertPEM   string          `json:"cert_pem,omitempty"`  // PEM-encoded certificate (signed by CA)
-	Signature []byte          `json:"signature,omitempty"` // Signature of challenge
-}
-
 // DefaultSTUNServer is the default STUN server URL
 const DefaultSTUNServer = "stun:stun.l.google.com:19302"
+
+// AuthFailSendDelay is the time to wait for auth failure message to send before closing
+const AuthFailSendDelay = 100 * time.Millisecond
 
 // Transport manages WebRTC connections to nodes via Hub signaling
 // This is used by CLI/mobile to connect to nitellad nodes
@@ -75,12 +59,15 @@ type Transport struct {
 	// Callback for peer status (connected/disconnected)
 	onPeerStatus func(senderID string, connected bool)
 
+	// Callback for approval requests (P2P approval flow)
+	onApprovalRequest func(nodeID string, req *ApprovalRequest)
+
 	// Known node public keys for verification (extracted from verified certs)
 	nodePublicKeys map[string]ed25519.PublicKey
 	nodeKeysMu     sync.RWMutex
 
-	// Require authentication before accepting messages
-	requireAuth bool
+	// Replay protection
+	nonceTracker *NonceTracker
 }
 
 // PeerConnection represents a WebRTC connection to a peer
@@ -105,8 +92,8 @@ func NewTransport(userID string, client SignalingClient) *Transport {
 		peers:          make(map[string]*PeerConnection),
 		api:            api,
 		nodePublicKeys: make(map[string]ed25519.PublicKey),
-		requireAuth:    true, // Default: auth required (secure by default)
 		stunURL:        DefaultSTUNServer,
+		nonceTracker:   NewNonceTracker(5 * time.Minute), // 5 min replay window
 	}
 }
 
@@ -139,11 +126,6 @@ func (t *Transport) SetCertificates(caCertPEM, myCertPEM []byte) error {
 	t.caCert = caCert
 	t.myCertPEM = myCertPEM
 	return nil
-}
-
-// SetRequireAuth enables/disables mandatory authentication
-func (t *Transport) SetRequireAuth(require bool) {
-	t.requireAuth = require
 }
 
 // RegisterNodeKey registers a node's public key for verification
@@ -191,25 +173,26 @@ func (t *Transport) SetPeerStatusHandler(handler func(senderID string, connected
 func (t *Transport) setupPeerHandlers(peer *PeerConnection) {
 	handleOpen := func() {
 		log.Printf("[P2P] DataChannel OPEN for %s", peer.remoteID)
-		// Start authentication if required
-		if t.requireAuth && t.myPrivKey != nil {
-			t.initiateAuth(peer)
-		} else {
-			// No auth required, mark as authenticated
-			peer.authenticated = true
-			if t.onPeerStatus != nil {
-				t.onPeerStatus(peer.remoteID, true)
-			}
+		// Authentication is mandatory - reject if no private key configured
+		if t.myPrivKey == nil {
+			log.Printf("[P2P] Rejecting peer %s: no private key configured (authentication required)", peer.remoteID)
+			peer.pc.Close()
+			return
 		}
+		t.initiateAuth(peer)
 	}
 
 	handleMessage := func(msg webrtc.DataChannelMessage) {
-		// Check for auth messages
-		if t.requireAuth && !peer.authenticated {
+		// Authentication is mandatory - process auth messages until authenticated
+		if !peer.authenticated {
 			t.handleAuthMessage(peer, msg.Data)
 			return
 		}
-		// Regular message handling (only if authenticated or no auth required)
+		// Try P2P protocol messages first
+		if t.handleP2PMessage(peer.remoteID, msg.Data) {
+			return
+		}
+		// Fallback to generic message handler
 		if t.onMessage != nil {
 			t.onMessage(peer.remoteID, msg.Data)
 		}
@@ -353,8 +336,8 @@ func (t *Transport) handleAuthChallenge(peer *PeerConnection, msg *AuthMessage) 
 func (t *Transport) handleAuthResponse(peer *PeerConnection, msg *AuthMessage) {
 	log.Printf("[P2P] Received auth response from %s (UserID: %s)", peer.remoteID, msg.UserID)
 
-	// Verify the challenge matches what we sent
-	if string(msg.Challenge) != string(peer.authChallenge) {
+	// Verify the challenge matches what we sent (constant-time comparison)
+	if subtle.ConstantTimeCompare(msg.Challenge, peer.authChallenge) != 1 {
 		log.Printf("[P2P] Auth challenge mismatch from %s", peer.remoteID)
 		t.sendAuthFailed(peer)
 		return
@@ -396,6 +379,12 @@ func (t *Transport) handleAuthResponse(peer *PeerConnection, msg *AuthMessage) {
 	peer.remoteUserID = msg.UserID
 	log.Printf("[P2P] Peer %s authenticated as %s (certificate verified)", peer.remoteID, msg.UserID)
 
+	// Store peer's public key for E2E encryption
+	t.nodeKeysMu.Lock()
+	t.nodePublicKeys[peer.remoteID] = pubKey
+	t.nodeKeysMu.Unlock()
+	log.Printf("[P2P] Stored public key for node %s", peer.remoteID)
+
 	// Send success message
 	successMsg := AuthMessage{Type: AuthSuccess}
 	data, _ := json.Marshal(successMsg)
@@ -427,7 +416,7 @@ func (t *Transport) sendAuthFailed(peer *PeerConnection) {
 	if peer.dataChannel != nil {
 		peer.dataChannel.Send(data)
 		// Give time for message to send
-		time.Sleep(100 * time.Millisecond)
+		time.Sleep(AuthFailSendDelay)
 	}
 	peer.pc.Close()
 }
@@ -462,13 +451,13 @@ func (t *Transport) verifyCertificate(certPEM string, claimedPubKey []byte) erro
 		return fmt.Errorf("certificate has expired")
 	}
 
-	// Verify the public key in the certificate matches the claimed public key
+	// Verify the public key in the certificate matches the claimed public key (constant-time comparison)
 	if len(claimedPubKey) == ed25519.PublicKeySize {
 		certPubKey, ok := peerCert.PublicKey.(ed25519.PublicKey)
 		if !ok {
 			return fmt.Errorf("certificate does not contain Ed25519 public key")
 		}
-		if string(certPubKey) != string(claimedPubKey) {
+		if subtle.ConstantTimeCompare(certPubKey, claimedPubKey) != 1 {
 			return fmt.Errorf("public key mismatch: claimed key does not match certificate")
 		}
 	}
@@ -608,6 +597,11 @@ func (t *Transport) IsConnected(peerID string) bool {
 
 // Close closes all connections
 func (t *Transport) Close() {
+	// Stop nonce tracker goroutine
+	if t.nonceTracker != nil {
+		t.nonceTracker.Stop()
+	}
+
 	t.peersMu.Lock()
 	defer t.peersMu.Unlock()
 
@@ -749,4 +743,107 @@ func (t *Transport) handleCandidate(senderID string, payload []byte) {
 	if err := peer.pc.AddICECandidate(candidate); err != nil {
 		log.Printf("[P2P] Failed to add candidate from %s: %v", senderID, err)
 	}
+}
+
+// SetApprovalRequestHandler sets the callback for incoming P2P approval requests
+func (t *Transport) SetApprovalRequestHandler(handler func(nodeID string, req *ApprovalRequest)) {
+	t.onApprovalRequest = handler
+}
+
+// SendApprovalDecision sends an approval decision to a specific node via P2P
+// The message is encrypted with the node's public key
+func (t *Transport) SendApprovalDecision(nodeID string, decision *ApprovalDecision) error {
+	msg, err := NewP2PMessage(MessageTypeApprovalDecision, decision)
+	if err != nil {
+		return fmt.Errorf("failed to create decision message: %w", err)
+	}
+
+	// Get node's public key for encryption
+	t.nodeKeysMu.RLock()
+	nodePubKey := t.nodePublicKeys[nodeID]
+	t.nodeKeysMu.RUnlock()
+
+	if nodePubKey == nil {
+		return fmt.Errorf("no public key for node %s", nodeID)
+	}
+
+	// Encrypt with node's public key
+	data, err := EncryptP2PMessage(msg, nodePubKey)
+	if err != nil {
+		return fmt.Errorf("failed to encrypt decision: %w", err)
+	}
+
+	return t.Send(nodeID, data)
+}
+
+// handleP2PMessage parses and routes incoming P2P protocol messages
+// SECURITY: Only called for authenticated peers, all messages must be encrypted
+func (t *Transport) handleP2PMessage(senderID string, data []byte) bool {
+	if t.myPrivKey == nil {
+		// Should never happen - authentication requires private key (see line 177)
+		log.Printf("[P2P] SECURITY: Rejecting message from %s - no private key", senderID)
+		return true // Consumed but rejected
+	}
+
+	msg, err := DecryptP2PMessage(data, t.myPrivKey)
+	if err != nil {
+		// Decryption failed - reject (no plaintext fallback)
+		log.Printf("[P2P] Rejecting unencrypted/malformed message from %s: %v", senderID, err)
+		return true // Consumed but rejected
+	}
+
+	// Check for replay attacks (skip for encrypted wrapper - inner msg has nonce)
+	if msg.Type != MessageTypeEncrypted && t.nonceTracker != nil {
+		if !t.nonceTracker.Check(msg.Nonce, msg.Timestamp) {
+			log.Printf("[P2P] Replay attack detected from %s (nonce: %s)", senderID, msg.Nonce)
+			return true // Consumed but rejected
+		}
+	}
+
+	switch msg.Type {
+	case MessageTypeApprovalRequest:
+		if t.onApprovalRequest != nil {
+			if req, err := msg.ParseApprovalRequest(); err == nil {
+				t.onApprovalRequest(senderID, req)
+			} else {
+				log.Printf("[P2P] Failed to parse approval request: %v", err)
+			}
+		}
+		return true
+	case MessageTypeMetrics, MessageTypeCommand, MessageTypeCommandResponse:
+		// Forward to generic handler
+		if t.onMessage != nil {
+			t.onMessage(senderID, msg.Payload)
+		}
+		return true
+	default:
+		return false
+	}
+}
+
+// GetConnectedNodes returns list of connected node IDs
+func (t *Transport) GetConnectedNodes() []string {
+	t.peersMu.RLock()
+	defer t.peersMu.RUnlock()
+
+	var nodes []string
+	for id, peer := range t.peers {
+		if peer.dataChannel != nil && peer.dataChannel.ReadyState() == webrtc.DataChannelStateOpen {
+			nodes = append(nodes, id)
+		}
+	}
+	return nodes
+}
+
+// HasConnectedNodes returns true if there are any active P2P connections
+func (t *Transport) HasConnectedNodes() bool {
+	t.peersMu.RLock()
+	defer t.peersMu.RUnlock()
+
+	for _, peer := range t.peers {
+		if peer.dataChannel != nil && peer.dataChannel.ReadyState() == webrtc.DataChannelStateOpen {
+			return true
+		}
+	}
+	return false
 }

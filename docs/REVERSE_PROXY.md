@@ -59,13 +59,13 @@ Nitella's reverse proxy is a Layer 4 (TCP) proxy that operates at the transport 
    │ :8080 → Backend A                        │ :3389 → RDP Server                       │ :22 → SSH Farm
    │                                          │                                          │ (child process)
    │  ┌─────────────┐                         │  ┌─────────────┐                         └───────────────┘
-   │  │ Rule Engine │                         │  │ Rule Engine │
-   │  │ GeoIP Lookup│                         │  │ GeoIP Lookup│
-   │  │ Stats       │                         │  │ Stats       │
-   │  └─────────────┘                         │  └─────────────┘
-   └───────────────┘                          └───────────────┘
-           │                                          │
-           ▼                                          ▼
+   │  │ Rule Engine │                         │  │ Rule Engine │                                 │
+   │  │ GeoIP Lookup│                         │  │ GeoIP Lookup│                          (Socketpair IPC)
+   │  │ Stats       │                         │  │ Stats       │                                 │
+   │  └─────────────┘                         │  └─────────────┘                                 ▼
+   └───────────────┘                          └───────────────┘                          ┌───────────────┐
+           │                                          │                                  │ Child Process │
+           ▼                                          ▼                                  └───────────────┘
    ┌───────────────┐                          ┌───────────────┐
    │   Backend A   │                          │  RDP Server   │
    │ 192.168.1.10  │                          │ 192.168.1.20  │
@@ -105,16 +105,19 @@ nitellad --listen :8080 --backend 192.168.1.10:80
 
 ### Separated Process Mode
 
-Each listener runs as a separate child OS process with IPC via Unix sockets.
+Each listener runs as a separate child OS process. Communication between the parent (manager) and child (listener) is handled via high-performance IPC.
+
+**Mechanism:**
+- **Linux/macOS**: Uses `socketpair()` for an anonymous, kernel-isolated bidirectional connection. The parent passes the connection to the child via an inherited file descriptor. No TLS is required as the channel is physically isolated by the kernel.
+- **Windows**: Uses TCP over localhost with a randomized port.
 
 **Pros:**
-- Process isolation (crash doesn't affect parent)
-- Can be individually restarted
-- Better for production servers
+- **Fault Isolation**: A crash in one listener (e.g., segfault in a plugin) kills only that child process. The main manager and other listeners remain unaffected.
+- **Security**: Listeners run in their own memory space.
+- **Restartability**: Individual listeners can be restarted without dropping connections on other ports.
 
 **Cons:**
-- Higher memory footprint
-- Slightly more latency for IPC
+- Higher memory footprint (multiple Go runtimes).
 
 ```bash
 # Enable process mode with --process-mode flag
@@ -122,7 +125,7 @@ nitellad --listen :8080 --backend localhost:3000 --process-mode
 
 # Child process is spawned automatically for each proxy
 # Internal command (used by parent process):
-nitellad child --socket /tmp/nitella_child_1.sock --listen :8080 --id proxy1
+# nitellad child --ipc-fd 3 --listen :8080 --id proxy1
 ```
 
 ---
@@ -147,6 +150,7 @@ resp, err := proxyManager.CreateProxy(&pb.CreateProxyRequest{
 | `ALLOW` | Forward to default backend (blacklist mode - block specific IPs) |
 | `BLOCK` | Reject connection (whitelist mode - allow specific IPs) |
 | `MOCK` | Respond with fake service banner |
+| `REQUIRE_APPROVAL` | Hold connection and request real-time user approval (see [APPROVAL_SYSTEM.md](APPROVAL_SYSTEM.md)) |
 
 ### Multiple Listeners
 
@@ -194,6 +198,7 @@ Rules define how connections are handled based on conditions. Rules are evaluate
 | `ALLOW` | Forward to backend |
 | `BLOCK` | Reject immediately |
 | `MOCK` | Return fake service response |
+| `REQUIRE_APPROVAL` | Hold connection pending user approval via CLI/mobile |
 
 ### Example Rule
 
@@ -484,3 +489,5 @@ rpc GetStatsSummary(Empty) returns (StatsSummaryResponse);
 
 - [RULE_ENGINE.md](RULE_ENGINE.md) - Detailed rule conditions and actions
 - [GEOIP.md](../GEOIP.md) - GeoIP service architecture and configuration
+- [APPROVAL_SYSTEM.md](APPROVAL_SYSTEM.md) - Real-time connection approval workflow
+- [HUB.md](HUB.md) - Hub architecture for remote management

@@ -34,7 +34,7 @@ build: proto geoip_build mock_build nitellad_build nitella_build hub_build
 # Proto Generation
 # ============================================================================
 
-proto: common_proto proxy_proto process_proto geoip_proto geoip_ffi_proto hub_proto
+proto: common_proto proxy_proto process_proto process_ffi_proto geoip_proto geoip_ffi_proto hub_proto
 
 common_proto:
 	@mkdir -p pkg/api/common
@@ -54,6 +54,13 @@ process_proto: common_proto proxy_proto
 	protoc --proto_path=api \
 		--go_out=pkg/api --go_opt=paths=source_relative \
 		--go-grpc_out=pkg/api --go-grpc_opt=paths=source_relative \
+		api/process/process.proto
+
+process_ffi_proto: common_proto proxy_proto process_proto
+	@mkdir -p pkg/api/process
+	protoc --proto_path=api \
+		--plugin=protoc-gen-synurang-ffi=$(shell go env GOPATH)/bin/protoc-gen-synurang-ffi \
+		--synurang-ffi_out=pkg/api/process --synurang-ffi_opt=paths=source_relative,services=ProcessControl \
 		api/process/process.proto
 
 geoip_ffi_proto: common_proto geoip_proto
@@ -351,8 +358,6 @@ hub_test_integration: hub_build nitellad_build nitella_build
 	@echo "============================================"
 	@echo "Running Hub Integration Tests"
 	@echo "============================================"
-	@# Copy hub binary to test location
-	@cp $(BUILD_DIR)/hub cmd/hub/hub 2>/dev/null || true
 	@# Run basic integration tests
 	go test -v ./test/integration/... -run "TestHub_" -timeout 300s
 	@# Run hubctl tests
@@ -381,7 +386,6 @@ hub_test_e2e_docker:
 # Quick smoke test (fast verification)
 hub_test_quick: hub_build
 	@echo "Running quick smoke tests..."
-	@cp $(BUILD_DIR)/hub cmd/hub/hub 2>/dev/null || true
 	go test -v ./test/integration/... -run "TestHub_BasicHealth|TestHub_UserRegistration" -timeout 60s
 
 # Clean up test artifacts
@@ -418,7 +422,7 @@ hubctl_run: hubctl_build
 	./$(BUILD_DIR)/hubctl \
 		--hub $(HUB_ADDR) \
 		$(if $(HUB_ADMIN_KEY),--admin-key $(HUB_ADMIN_KEY)) \
-		--insecure \
+
 		$(CMD)
 
 hub_clean:

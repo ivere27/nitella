@@ -30,13 +30,13 @@ func TestCLI_DynamicProxyManagement(t *testing.T) {
 	// Start nitellad
 	adminPort := getFreePort(t)
 	token := "cli-test-token"
-	daemon := startNitelladWithAdmin(t, adminPort, token)
+	daemon, caPath := startNitelladWithAdmin(t, adminPort, token)
 	defer daemon.Process.Kill()
 	time.Sleep(200 * time.Millisecond)
 
 	// Helper to run CLI command
 	runCLI := func(args ...string) (string, error) {
-		allArgs := append([]string{"--local", "--addr", fmt.Sprintf("localhost:%d", adminPort), "--token", token}, args...)
+		allArgs := append([]string{"--local", "--addr", fmt.Sprintf("localhost:%d", adminPort), "--token", token, "--tls-ca", caPath}, args...)
 		cmd := exec.Command(nitellaBin, allArgs...)
 		var stdout, stderr bytes.Buffer
 		cmd.Stdout = &stdout
@@ -209,12 +209,12 @@ func TestCLI_QuickBlockAllow(t *testing.T) {
 
 	adminPort := getFreePort(t)
 	token := "quick-cli-token"
-	daemon := startNitelladWithAdmin(t, adminPort, token)
+	daemon, caPath := startNitelladWithAdmin(t, adminPort, token)
 	defer daemon.Process.Kill()
 	time.Sleep(200 * time.Millisecond)
 
 	runCLI := func(args ...string) (string, error) {
-		allArgs := append([]string{"--local", "--addr", fmt.Sprintf("localhost:%d", adminPort), "--token", token}, args...)
+		allArgs := append([]string{"--local", "--addr", fmt.Sprintf("localhost:%d", adminPort), "--token", token, "--tls-ca", caPath}, args...)
 		cmd := exec.Command(nitellaBin, allArgs...)
 		var stdout, stderr bytes.Buffer
 		cmd.Stdout = &stdout
@@ -282,12 +282,12 @@ func TestCLI_UpdateProxy(t *testing.T) {
 
 	adminPort := getFreePort(t)
 	token := "update-cli-token"
-	daemon := startNitelladWithAdmin(t, adminPort, token)
+	daemon, caPath := startNitelladWithAdmin(t, adminPort, token)
 	defer daemon.Process.Kill()
 	time.Sleep(200 * time.Millisecond)
 
 	runCLI := func(args ...string) (string, error) {
-		allArgs := append([]string{"--local", "--addr", fmt.Sprintf("localhost:%d", adminPort), "--token", token}, args...)
+		allArgs := append([]string{"--local", "--addr", fmt.Sprintf("localhost:%d", adminPort), "--token", token, "--tls-ca", caPath}, args...)
 		cmd := exec.Command(nitellaBin, allArgs...)
 		var stdout, stderr bytes.Buffer
 		cmd.Stdout = &stdout
@@ -354,12 +354,12 @@ func TestCLI_GeoIPLookup(t *testing.T) {
 
 	adminPort := getFreePort(t)
 	token := "geoip-cli-token"
-	daemon := startNitelladWithAdmin(t, adminPort, token)
+	daemon, caPath := startNitelladWithAdmin(t, adminPort, token)
 	defer daemon.Process.Kill()
 	time.Sleep(200 * time.Millisecond)
 
 	runCLI := func(args ...string) (string, error) {
-		allArgs := append([]string{"--local", "--addr", fmt.Sprintf("localhost:%d", adminPort), "--token", token}, args...)
+		allArgs := append([]string{"--local", "--addr", fmt.Sprintf("localhost:%d", adminPort), "--token", token, "--tls-ca", caPath}, args...)
 		cmd := exec.Command(nitellaBin, allArgs...)
 		var stdout, stderr bytes.Buffer
 		cmd.Stdout = &stdout
@@ -424,12 +424,12 @@ func TestCLI_Connections(t *testing.T) {
 
 	adminPort := getFreePort(t)
 	token := "conn-cli-token"
-	daemon := startNitelladWithAdmin(t, adminPort, token)
+	daemon, caPath := startNitelladWithAdmin(t, adminPort, token)
 	defer daemon.Process.Kill()
 	time.Sleep(200 * time.Millisecond)
 
 	runCLI := func(args ...string) (string, error) {
-		allArgs := append([]string{"--local", "--addr", fmt.Sprintf("localhost:%d", adminPort), "--token", token}, args...)
+		allArgs := append([]string{"--local", "--addr", fmt.Sprintf("localhost:%d", adminPort), "--token", token, "--tls-ca", caPath}, args...)
 		cmd := exec.Command(nitellaBin, allArgs...)
 		var stdout, stderr bytes.Buffer
 		cmd.Stdout = &stdout
@@ -497,12 +497,12 @@ func TestCLI_RestartListeners(t *testing.T) {
 
 	adminPort := getFreePort(t)
 	token := "restart-cli-token"
-	daemon := startNitelladWithAdmin(t, adminPort, token)
+	daemon, caPath := startNitelladWithAdmin(t, adminPort, token)
 	defer daemon.Process.Kill()
 	time.Sleep(200 * time.Millisecond)
 
 	runCLI := func(args ...string) (string, error) {
-		allArgs := append([]string{"--local", "--addr", fmt.Sprintf("localhost:%d", adminPort), "--token", token}, args...)
+		allArgs := append([]string{"--local", "--addr", fmt.Sprintf("localhost:%d", adminPort), "--token", token, "--tls-ca", caPath}, args...)
 		cmd := exec.Command(nitellaBin, allArgs...)
 		var stdout, stderr bytes.Buffer
 		cmd.Stdout = &stdout

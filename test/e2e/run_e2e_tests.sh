@@ -4,17 +4,16 @@
 # ============================================================================
 #
 # This script orchestrates comprehensive E2E tests for Nitella:
-# 1. Fresh registration (PAKE and QR pairing)
-# 2. Proxy creation and rule management
-# 3. Backend connectivity testing
-# 4. Multi-tenant isolation
-# 5. Restart and persistence
-# 6. Crash recovery
-# 7. Security verification (E2E encryption)
+# 1. Full System Scenario (Registration, Pairing, Proxy, Multi-tenant, Security)
+# 2. Advanced Features (Approval, Alerts, Commands, Rules, Stats, Logs)
+# 3. Reliability (Persistence, Crash Recovery)
 #
 # ============================================================================
 
 set -e
+
+# Export E2E_TEST=1 to enable the Go tests
+export E2E_TEST=1
 
 # Colors for output
 RED='\033[0;31m'
@@ -45,17 +44,17 @@ log_test() {
 
 log_pass() {
     log "${GREEN}[PASS]${NC} $1"
-    ((TESTS_PASSED++))
+    TESTS_PASSED=$((TESTS_PASSED + 1))
 }
 
 log_fail() {
     log "${RED}[FAIL]${NC} $1"
-    ((TESTS_FAILED++))
+    TESTS_FAILED=$((TESTS_FAILED + 1))
 }
 
 log_skip() {
     log "${YELLOW}[SKIP]${NC} $1"
-    ((TESTS_SKIPPED++))
+    TESTS_SKIPPED=$((TESTS_SKIPPED + 1))
 }
 
 # ============================================================================
@@ -81,12 +80,33 @@ wait_for_service() {
 }
 
 # ============================================================================
-# Phase 1: Fresh Registration Tests
+# Helper to run a Go test
 # ============================================================================
 
-test_phase1_fresh_registration() {
+run_go_test() {
+    local test_name=$1
+    local description=$2
+    
+    log_test "$description"
+    if [ -f ./e2e_tests ]; then
+        ./e2e_tests -test.run "^${test_name}$" -test.v 2>&1 | tee -a "$LOG_FILE"
+        if [ ${PIPESTATUS[0]} -eq 0 ]; then
+            log_pass "$description"
+        else
+            log_fail "$description failed"
+        fi
+    else
+        log_skip "$description (test binary not found)"
+    fi
+}
+
+# ============================================================================
+# Phase 1: Core System Tests
+# ============================================================================
+
+test_phase1_core_system() {
     log "\n${BLUE}========================================${NC}"
-    log "${BLUE}PHASE 1: Fresh Registration${NC}"
+    log "${BLUE}PHASE 1: Core System Tests${NC}"
     log "${BLUE}========================================${NC}\n"
 
     # Test 1.1: Hub health check
@@ -98,175 +118,43 @@ test_phase1_fresh_registration() {
         return 1
     fi
 
-    # Test 1.2: User registration (simulated via CLI)
-    log_test "1.2 User registration"
-    # In real test, this would use the nitella CLI
-    if ./nitella --hub="$HUB_ADDR" --help > /dev/null 2>&1; then
-        log_pass "CLI available for registration"
-    else
-        log_skip "CLI registration test (requires interactive mode)"
-    fi
-
-    # Test 1.3: PAKE pairing simulation
-    log_test "1.3 PAKE pairing"
-    # This would be tested via the Go test binary
-    if [ -f ./e2e_tests ]; then
-        ./e2e_tests -test.run TestComprehensive_FreshRegister_PAKE -test.v 2>&1 | tee -a "$LOG_FILE"
-        if [ ${PIPESTATUS[0]} -eq 0 ]; then
-            log_pass "PAKE pairing test"
-        else
-            log_fail "PAKE pairing test"
-        fi
-    else
-        log_skip "PAKE pairing test (test binary not found)"
-    fi
-
-    # Test 1.4: QR pairing simulation
-    log_test "1.4 QR code pairing"
-    if [ -f ./e2e_tests ]; then
-        ./e2e_tests -test.run TestComprehensive_FreshRegister_QRCode -test.v 2>&1 | tee -a "$LOG_FILE"
-        if [ ${PIPESTATUS[0]} -eq 0 ]; then
-            log_pass "QR code pairing test"
-        else
-            log_fail "QR code pairing test"
-        fi
-    else
-        log_skip "QR code pairing test (test binary not found)"
-    fi
+    # Test 1.2: Full System Scenario
+    # Covers: Fresh Registration (PAKE/QR), Proxy Creation, Backend Traffic, 
+    # Multi-tenant Isolation, Security Verification
+    run_go_test "TestE2E_FullScenario" "1.2 Full System Scenario (Reg, PAKE/QR, Proxy, Security)"
 }
 
 # ============================================================================
-# Phase 2: Proxy and Backend Tests
+# Phase 2: Feature Tests
 # ============================================================================
 
-test_phase2_proxy_backend() {
+test_phase2_features() {
     log "\n${BLUE}========================================${NC}"
-    log "${BLUE}PHASE 2: Proxy and Backend Tests${NC}"
+    log "${BLUE}PHASE 2: Feature Tests${NC}"
     log "${BLUE}========================================${NC}\n"
 
-    # Test 2.1: HTTP backend connectivity
-    log_test "2.1 HTTP backend via proxy"
-    if curl -sf "http://$MOCK_HTTP/health" > /dev/null 2>&1; then
-        log_pass "HTTP mock backend reachable"
-    else
-        log_fail "HTTP mock backend unreachable"
-    fi
-
-    # Test 2.2: SSH backend connectivity
-    log_test "2.2 SSH backend"
-    if nc -z "${MOCK_SSH%:*}" "${MOCK_SSH#*:}" 2>/dev/null; then
-        log_pass "SSH mock backend reachable"
-    else
-        log_fail "SSH mock backend unreachable"
-    fi
-
-    # Test 2.3: MySQL backend connectivity
-    log_test "2.3 MySQL backend"
-    if nc -z "${MOCK_MYSQL%:*}" "${MOCK_MYSQL#*:}" 2>/dev/null; then
-        log_pass "MySQL mock backend reachable"
-    else
-        log_fail "MySQL mock backend unreachable"
-    fi
+    run_go_test "TestE2E_MockServices" "2.1 Mock Services (HTTP, SSH, MySQL)"
+    run_go_test "TestE2E_RuleEngine" "2.2 Rule Engine (IP, CIDR, GeoIP)"
+    run_go_test "TestE2E_ApprovalSystem" "2.3 Approval System"
+    run_go_test "TestE2E_AlertStreaming" "2.4 Alert Streaming"
+    run_go_test "TestE2E_CommandRelay" "2.5 Command Relay"
+    run_go_test "TestE2E_Statistics" "2.6 Statistics"
+    run_go_test "TestE2E_EncryptedLogs" "2.7 Encrypted Logs"
+    run_go_test "TestE2E_HeartbeatStatus" "2.8 Heartbeat & Status"
+    run_go_test "TestE2E_MetricsStreaming" "2.9 Metrics Streaming"
 }
 
 # ============================================================================
-# Phase 3: Multi-Tenant Tests
+# Phase 3: Reliability Tests
 # ============================================================================
 
-test_phase3_multi_tenant() {
+test_phase3_reliability() {
     log "\n${BLUE}========================================${NC}"
-    log "${BLUE}PHASE 3: Multi-Tenant Isolation${NC}"
+    log "${BLUE}PHASE 3: Reliability Tests${NC}"
     log "${BLUE}========================================${NC}\n"
 
-    log_test "3.1 Multi-tenant isolation test"
-    if [ -f ./e2e_tests ]; then
-        ./e2e_tests -test.run TestComprehensive_MultiTenant -test.v 2>&1 | tee -a "$LOG_FILE"
-        if [ ${PIPESTATUS[0]} -eq 0 ]; then
-            log_pass "Multi-tenant isolation verified"
-        else
-            log_fail "Multi-tenant isolation test failed"
-        fi
-    else
-        log_skip "Multi-tenant test (test binary not found)"
-    fi
-}
-
-# ============================================================================
-# Phase 4: Persistence Tests
-# ============================================================================
-
-test_phase4_persistence() {
-    log "\n${BLUE}========================================${NC}"
-    log "${BLUE}PHASE 4: Restart and Persistence${NC}"
-    log "${BLUE}========================================${NC}\n"
-
-    log_test "4.1 Restart persistence test"
-    if [ -f ./e2e_tests ]; then
-        ./e2e_tests -test.run TestComprehensive_RestartPersistence -test.v 2>&1 | tee -a "$LOG_FILE"
-        if [ ${PIPESTATUS[0]} -eq 0 ]; then
-            log_pass "Restart persistence verified"
-        else
-            log_fail "Restart persistence test failed"
-        fi
-    else
-        log_skip "Restart persistence test (test binary not found)"
-    fi
-}
-
-# ============================================================================
-# Phase 5: Crash Recovery Tests
-# ============================================================================
-
-test_phase5_crash_recovery() {
-    log "\n${BLUE}========================================${NC}"
-    log "${BLUE}PHASE 5: Crash Recovery${NC}"
-    log "${BLUE}========================================${NC}\n"
-
-    log_test "5.1 Crash recovery test"
-    if [ -f ./e2e_tests ]; then
-        ./e2e_tests -test.run TestComprehensive_CrashRecovery -test.v 2>&1 | tee -a "$LOG_FILE"
-        if [ ${PIPESTATUS[0]} -eq 0 ]; then
-            log_pass "Crash recovery verified"
-        else
-            log_fail "Crash recovery test failed"
-        fi
-    else
-        log_skip "Crash recovery test (test binary not found)"
-    fi
-}
-
-# ============================================================================
-# Phase 6: Security Tests
-# ============================================================================
-
-test_phase6_security() {
-    log "\n${BLUE}========================================${NC}"
-    log "${BLUE}PHASE 6: Security (E2E Encryption)${NC}"
-    log "${BLUE}========================================${NC}\n"
-
-    log_test "6.1 E2E encryption verification"
-    if [ -f ./e2e_tests ]; then
-        ./e2e_tests -test.run TestComprehensive_Security_E2E -test.v 2>&1 | tee -a "$LOG_FILE"
-        if [ ${PIPESTATUS[0]} -eq 0 ]; then
-            log_pass "E2E encryption verified - Hub cannot see sensitive data"
-        else
-            log_fail "E2E encryption test failed"
-        fi
-    else
-        log_skip "E2E encryption test (test binary not found)"
-    fi
-
-    log_test "6.2 Full system integration test"
-    if [ -f ./e2e_tests ]; then
-        ./e2e_tests -test.run TestComprehensive_FullSystem -test.v 2>&1 | tee -a "$LOG_FILE"
-        if [ ${PIPESTATUS[0]} -eq 0 ]; then
-            log_pass "Full system integration test"
-        else
-            log_fail "Full system integration test failed"
-        fi
-    else
-        log_skip "Full system integration test (test binary not found)"
-    fi
+    run_go_test "TestE2E_RestartPersistence" "3.1 Restart Persistence"
+    run_go_test "TestE2E_CrashRecovery" "3.2 Crash Recovery"
 }
 
 # ============================================================================
@@ -297,12 +185,9 @@ main() {
     wait_for_service "${MOCK_SSH%:*}" "${MOCK_SSH#*:}" 30
 
     # Run test phases
-    test_phase1_fresh_registration
-    test_phase2_proxy_backend
-    test_phase3_multi_tenant
-    test_phase4_persistence
-    test_phase5_crash_recovery
-    test_phase6_security
+    test_phase1_core_system
+    test_phase2_features
+    test_phase3_reliability
 
     # Summary
     log "\n${BLUE}============================================${NC}"

@@ -183,10 +183,12 @@ func (HealthStatus) EnumDescriptor() ([]byte, []int) {
 type EventType int32
 
 const (
-	EventType_EVENT_TYPE_UNSPECIFIED EventType = 0
-	EventType_EVENT_TYPE_CONNECTED   EventType = 1
-	EventType_EVENT_TYPE_CLOSED      EventType = 2
-	EventType_EVENT_TYPE_BLOCKED     EventType = 3
+	EventType_EVENT_TYPE_UNSPECIFIED      EventType = 0
+	EventType_EVENT_TYPE_CONNECTED        EventType = 1
+	EventType_EVENT_TYPE_CLOSED           EventType = 2
+	EventType_EVENT_TYPE_BLOCKED          EventType = 3
+	EventType_EVENT_TYPE_PENDING_APPROVAL EventType = 4 // Connection waiting for user approval
+	EventType_EVENT_TYPE_APPROVED         EventType = 5 // Connection approved by user
 )
 
 // Enum value maps for EventType.
@@ -196,12 +198,16 @@ var (
 		1: "EVENT_TYPE_CONNECTED",
 		2: "EVENT_TYPE_CLOSED",
 		3: "EVENT_TYPE_BLOCKED",
+		4: "EVENT_TYPE_PENDING_APPROVAL",
+		5: "EVENT_TYPE_APPROVED",
 	}
 	EventType_value = map[string]int32{
-		"EVENT_TYPE_UNSPECIFIED": 0,
-		"EVENT_TYPE_CONNECTED":   1,
-		"EVENT_TYPE_CLOSED":      2,
-		"EVENT_TYPE_BLOCKED":     3,
+		"EVENT_TYPE_UNSPECIFIED":      0,
+		"EVENT_TYPE_CONNECTED":        1,
+		"EVENT_TYPE_CLOSED":           2,
+		"EVENT_TYPE_BLOCKED":          3,
+		"EVENT_TYPE_PENDING_APPROVAL": 4,
+		"EVENT_TYPE_APPROVED":         5,
 	}
 )
 
@@ -2536,6 +2542,266 @@ func (x *AllowIPRequest) GetDurationSeconds() int64 {
 	return 0
 }
 
+type GlobalRule struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Id            string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
+	Name          string                 `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`                              // Human-readable description
+	SourceIp      string                 `protobuf:"bytes,3,opt,name=source_ip,json=sourceIp,proto3" json:"source_ip,omitempty"`      // IP or CIDR
+	Action        common.ActionType      `protobuf:"varint,4,opt,name=action,proto3,enum=nitella.ActionType" json:"action,omitempty"` // ALLOW or BLOCK
+	ExpiresAt     *timestamp.Timestamp   `protobuf:"bytes,5,opt,name=expires_at,json=expiresAt,proto3" json:"expires_at,omitempty"`   // Zero means permanent
+	CreatedAt     *timestamp.Timestamp   `protobuf:"bytes,6,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GlobalRule) Reset() {
+	*x = GlobalRule{}
+	mi := &file_proxy_proxy_proto_msgTypes[34]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GlobalRule) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GlobalRule) ProtoMessage() {}
+
+func (x *GlobalRule) ProtoReflect() protoreflect.Message {
+	mi := &file_proxy_proxy_proto_msgTypes[34]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GlobalRule.ProtoReflect.Descriptor instead.
+func (*GlobalRule) Descriptor() ([]byte, []int) {
+	return file_proxy_proxy_proto_rawDescGZIP(), []int{34}
+}
+
+func (x *GlobalRule) GetId() string {
+	if x != nil {
+		return x.Id
+	}
+	return ""
+}
+
+func (x *GlobalRule) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *GlobalRule) GetSourceIp() string {
+	if x != nil {
+		return x.SourceIp
+	}
+	return ""
+}
+
+func (x *GlobalRule) GetAction() common.ActionType {
+	if x != nil {
+		return x.Action
+	}
+	return common.ActionType(0)
+}
+
+func (x *GlobalRule) GetExpiresAt() *timestamp.Timestamp {
+	if x != nil {
+		return x.ExpiresAt
+	}
+	return nil
+}
+
+func (x *GlobalRule) GetCreatedAt() *timestamp.Timestamp {
+	if x != nil {
+		return x.CreatedAt
+	}
+	return nil
+}
+
+type ListGlobalRulesRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ListGlobalRulesRequest) Reset() {
+	*x = ListGlobalRulesRequest{}
+	mi := &file_proxy_proxy_proto_msgTypes[35]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListGlobalRulesRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListGlobalRulesRequest) ProtoMessage() {}
+
+func (x *ListGlobalRulesRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_proxy_proxy_proto_msgTypes[35]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListGlobalRulesRequest.ProtoReflect.Descriptor instead.
+func (*ListGlobalRulesRequest) Descriptor() ([]byte, []int) {
+	return file_proxy_proxy_proto_rawDescGZIP(), []int{35}
+}
+
+type ListGlobalRulesResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Rules         []*GlobalRule          `protobuf:"bytes,1,rep,name=rules,proto3" json:"rules,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ListGlobalRulesResponse) Reset() {
+	*x = ListGlobalRulesResponse{}
+	mi := &file_proxy_proxy_proto_msgTypes[36]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListGlobalRulesResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListGlobalRulesResponse) ProtoMessage() {}
+
+func (x *ListGlobalRulesResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_proxy_proxy_proto_msgTypes[36]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListGlobalRulesResponse.ProtoReflect.Descriptor instead.
+func (*ListGlobalRulesResponse) Descriptor() ([]byte, []int) {
+	return file_proxy_proxy_proto_rawDescGZIP(), []int{36}
+}
+
+func (x *ListGlobalRulesResponse) GetRules() []*GlobalRule {
+	if x != nil {
+		return x.Rules
+	}
+	return nil
+}
+
+type RemoveGlobalRuleRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	RuleId        string                 `protobuf:"bytes,1,opt,name=rule_id,json=ruleId,proto3" json:"rule_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *RemoveGlobalRuleRequest) Reset() {
+	*x = RemoveGlobalRuleRequest{}
+	mi := &file_proxy_proxy_proto_msgTypes[37]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RemoveGlobalRuleRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RemoveGlobalRuleRequest) ProtoMessage() {}
+
+func (x *RemoveGlobalRuleRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_proxy_proxy_proto_msgTypes[37]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RemoveGlobalRuleRequest.ProtoReflect.Descriptor instead.
+func (*RemoveGlobalRuleRequest) Descriptor() ([]byte, []int) {
+	return file_proxy_proxy_proto_rawDescGZIP(), []int{37}
+}
+
+func (x *RemoveGlobalRuleRequest) GetRuleId() string {
+	if x != nil {
+		return x.RuleId
+	}
+	return ""
+}
+
+type RemoveGlobalRuleResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Success       bool                   `protobuf:"varint,1,opt,name=success,proto3" json:"success,omitempty"`
+	ErrorMessage  string                 `protobuf:"bytes,2,opt,name=error_message,json=errorMessage,proto3" json:"error_message,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *RemoveGlobalRuleResponse) Reset() {
+	*x = RemoveGlobalRuleResponse{}
+	mi := &file_proxy_proxy_proto_msgTypes[38]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RemoveGlobalRuleResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RemoveGlobalRuleResponse) ProtoMessage() {}
+
+func (x *RemoveGlobalRuleResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_proxy_proxy_proto_msgTypes[38]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RemoveGlobalRuleResponse.ProtoReflect.Descriptor instead.
+func (*RemoveGlobalRuleResponse) Descriptor() ([]byte, []int) {
+	return file_proxy_proxy_proto_rawDescGZIP(), []int{38}
+}
+
+func (x *RemoveGlobalRuleResponse) GetSuccess() bool {
+	if x != nil {
+		return x.Success
+	}
+	return false
+}
+
+func (x *RemoveGlobalRuleResponse) GetErrorMessage() string {
+	if x != nil {
+		return x.ErrorMessage
+	}
+	return ""
+}
+
 type StreamConnectionsRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	ActiveOnly    bool                   `protobuf:"varint,1,opt,name=active_only,json=activeOnly,proto3" json:"active_only,omitempty"` // If true, only streams currently active events
@@ -2545,7 +2811,7 @@ type StreamConnectionsRequest struct {
 
 func (x *StreamConnectionsRequest) Reset() {
 	*x = StreamConnectionsRequest{}
-	mi := &file_proxy_proxy_proto_msgTypes[34]
+	mi := &file_proxy_proxy_proto_msgTypes[39]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2557,7 +2823,7 @@ func (x *StreamConnectionsRequest) String() string {
 func (*StreamConnectionsRequest) ProtoMessage() {}
 
 func (x *StreamConnectionsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proxy_proxy_proto_msgTypes[34]
+	mi := &file_proxy_proxy_proto_msgTypes[39]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2570,7 +2836,7 @@ func (x *StreamConnectionsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StreamConnectionsRequest.ProtoReflect.Descriptor instead.
 func (*StreamConnectionsRequest) Descriptor() ([]byte, []int) {
-	return file_proxy_proxy_proto_rawDescGZIP(), []int{34}
+	return file_proxy_proxy_proto_rawDescGZIP(), []int{39}
 }
 
 func (x *StreamConnectionsRequest) GetActiveOnly() bool {
@@ -2601,7 +2867,7 @@ type ConnectionEvent struct {
 
 func (x *ConnectionEvent) Reset() {
 	*x = ConnectionEvent{}
-	mi := &file_proxy_proxy_proto_msgTypes[35]
+	mi := &file_proxy_proxy_proto_msgTypes[40]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2613,7 +2879,7 @@ func (x *ConnectionEvent) String() string {
 func (*ConnectionEvent) ProtoMessage() {}
 
 func (x *ConnectionEvent) ProtoReflect() protoreflect.Message {
-	mi := &file_proxy_proxy_proto_msgTypes[35]
+	mi := &file_proxy_proxy_proto_msgTypes[40]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2626,7 +2892,7 @@ func (x *ConnectionEvent) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ConnectionEvent.ProtoReflect.Descriptor instead.
 func (*ConnectionEvent) Descriptor() ([]byte, []int) {
-	return file_proxy_proxy_proto_rawDescGZIP(), []int{35}
+	return file_proxy_proxy_proto_rawDescGZIP(), []int{40}
 }
 
 func (x *ConnectionEvent) GetConnId() string {
@@ -2715,7 +2981,7 @@ type StreamMetricsRequest struct {
 
 func (x *StreamMetricsRequest) Reset() {
 	*x = StreamMetricsRequest{}
-	mi := &file_proxy_proxy_proto_msgTypes[36]
+	mi := &file_proxy_proxy_proto_msgTypes[41]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2727,7 +2993,7 @@ func (x *StreamMetricsRequest) String() string {
 func (*StreamMetricsRequest) ProtoMessage() {}
 
 func (x *StreamMetricsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proxy_proxy_proto_msgTypes[36]
+	mi := &file_proxy_proxy_proto_msgTypes[41]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2740,7 +3006,7 @@ func (x *StreamMetricsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StreamMetricsRequest.ProtoReflect.Descriptor instead.
 func (*StreamMetricsRequest) Descriptor() ([]byte, []int) {
-	return file_proxy_proxy_proto_rawDescGZIP(), []int{36}
+	return file_proxy_proxy_proto_rawDescGZIP(), []int{41}
 }
 
 func (x *StreamMetricsRequest) GetIntervalSeconds() int32 {
@@ -2764,7 +3030,7 @@ type MetricsSample struct {
 
 func (x *MetricsSample) Reset() {
 	*x = MetricsSample{}
-	mi := &file_proxy_proxy_proto_msgTypes[37]
+	mi := &file_proxy_proxy_proto_msgTypes[42]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2776,7 +3042,7 @@ func (x *MetricsSample) String() string {
 func (*MetricsSample) ProtoMessage() {}
 
 func (x *MetricsSample) ProtoReflect() protoreflect.Message {
-	mi := &file_proxy_proxy_proto_msgTypes[37]
+	mi := &file_proxy_proxy_proto_msgTypes[42]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2789,7 +3055,7 @@ func (x *MetricsSample) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MetricsSample.ProtoReflect.Descriptor instead.
 func (*MetricsSample) Descriptor() ([]byte, []int) {
-	return file_proxy_proxy_proto_rawDescGZIP(), []int{37}
+	return file_proxy_proxy_proto_rawDescGZIP(), []int{42}
 }
 
 func (x *MetricsSample) GetTimestamp() int64 {
@@ -2850,7 +3116,7 @@ type ActiveConnection struct {
 
 func (x *ActiveConnection) Reset() {
 	*x = ActiveConnection{}
-	mi := &file_proxy_proxy_proto_msgTypes[38]
+	mi := &file_proxy_proxy_proto_msgTypes[43]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2862,7 +3128,7 @@ func (x *ActiveConnection) String() string {
 func (*ActiveConnection) ProtoMessage() {}
 
 func (x *ActiveConnection) ProtoReflect() protoreflect.Message {
-	mi := &file_proxy_proxy_proto_msgTypes[38]
+	mi := &file_proxy_proxy_proto_msgTypes[43]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2875,7 +3141,7 @@ func (x *ActiveConnection) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ActiveConnection.ProtoReflect.Descriptor instead.
 func (*ActiveConnection) Descriptor() ([]byte, []int) {
-	return file_proxy_proxy_proto_rawDescGZIP(), []int{38}
+	return file_proxy_proxy_proto_rawDescGZIP(), []int{43}
 }
 
 func (x *ActiveConnection) GetId() string {
@@ -2944,7 +3210,7 @@ type GetActiveConnectionsRequest struct {
 
 func (x *GetActiveConnectionsRequest) Reset() {
 	*x = GetActiveConnectionsRequest{}
-	mi := &file_proxy_proxy_proto_msgTypes[39]
+	mi := &file_proxy_proxy_proto_msgTypes[44]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2956,7 +3222,7 @@ func (x *GetActiveConnectionsRequest) String() string {
 func (*GetActiveConnectionsRequest) ProtoMessage() {}
 
 func (x *GetActiveConnectionsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proxy_proxy_proto_msgTypes[39]
+	mi := &file_proxy_proxy_proto_msgTypes[44]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2969,7 +3235,7 @@ func (x *GetActiveConnectionsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetActiveConnectionsRequest.ProtoReflect.Descriptor instead.
 func (*GetActiveConnectionsRequest) Descriptor() ([]byte, []int) {
-	return file_proxy_proxy_proto_rawDescGZIP(), []int{39}
+	return file_proxy_proxy_proto_rawDescGZIP(), []int{44}
 }
 
 func (x *GetActiveConnectionsRequest) GetNodeId() string {
@@ -2995,7 +3261,7 @@ type GetActiveConnectionsResponse struct {
 
 func (x *GetActiveConnectionsResponse) Reset() {
 	*x = GetActiveConnectionsResponse{}
-	mi := &file_proxy_proxy_proto_msgTypes[40]
+	mi := &file_proxy_proxy_proto_msgTypes[45]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3007,7 +3273,7 @@ func (x *GetActiveConnectionsResponse) String() string {
 func (*GetActiveConnectionsResponse) ProtoMessage() {}
 
 func (x *GetActiveConnectionsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proxy_proxy_proto_msgTypes[40]
+	mi := &file_proxy_proxy_proto_msgTypes[45]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3020,7 +3286,7 @@ func (x *GetActiveConnectionsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetActiveConnectionsResponse.ProtoReflect.Descriptor instead.
 func (*GetActiveConnectionsResponse) Descriptor() ([]byte, []int) {
-	return file_proxy_proxy_proto_rawDescGZIP(), []int{40}
+	return file_proxy_proxy_proto_rawDescGZIP(), []int{45}
 }
 
 func (x *GetActiveConnectionsResponse) GetConnections() []*ActiveConnection {
@@ -3040,7 +3306,7 @@ type CloseConnectionRequest struct {
 
 func (x *CloseConnectionRequest) Reset() {
 	*x = CloseConnectionRequest{}
-	mi := &file_proxy_proxy_proto_msgTypes[41]
+	mi := &file_proxy_proxy_proto_msgTypes[46]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3052,7 +3318,7 @@ func (x *CloseConnectionRequest) String() string {
 func (*CloseConnectionRequest) ProtoMessage() {}
 
 func (x *CloseConnectionRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proxy_proxy_proto_msgTypes[41]
+	mi := &file_proxy_proxy_proto_msgTypes[46]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3065,7 +3331,7 @@ func (x *CloseConnectionRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CloseConnectionRequest.ProtoReflect.Descriptor instead.
 func (*CloseConnectionRequest) Descriptor() ([]byte, []int) {
-	return file_proxy_proxy_proto_rawDescGZIP(), []int{41}
+	return file_proxy_proxy_proto_rawDescGZIP(), []int{46}
 }
 
 func (x *CloseConnectionRequest) GetProxyId() string {
@@ -3092,7 +3358,7 @@ type CloseConnectionResponse struct {
 
 func (x *CloseConnectionResponse) Reset() {
 	*x = CloseConnectionResponse{}
-	mi := &file_proxy_proxy_proto_msgTypes[42]
+	mi := &file_proxy_proxy_proto_msgTypes[47]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3104,7 +3370,7 @@ func (x *CloseConnectionResponse) String() string {
 func (*CloseConnectionResponse) ProtoMessage() {}
 
 func (x *CloseConnectionResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proxy_proxy_proto_msgTypes[42]
+	mi := &file_proxy_proxy_proto_msgTypes[47]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3117,7 +3383,7 @@ func (x *CloseConnectionResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CloseConnectionResponse.ProtoReflect.Descriptor instead.
 func (*CloseConnectionResponse) Descriptor() ([]byte, []int) {
-	return file_proxy_proxy_proto_rawDescGZIP(), []int{42}
+	return file_proxy_proxy_proto_rawDescGZIP(), []int{47}
 }
 
 func (x *CloseConnectionResponse) GetSuccess() bool {
@@ -3143,7 +3409,7 @@ type CloseAllConnectionsRequest struct {
 
 func (x *CloseAllConnectionsRequest) Reset() {
 	*x = CloseAllConnectionsRequest{}
-	mi := &file_proxy_proxy_proto_msgTypes[43]
+	mi := &file_proxy_proxy_proto_msgTypes[48]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3155,7 +3421,7 @@ func (x *CloseAllConnectionsRequest) String() string {
 func (*CloseAllConnectionsRequest) ProtoMessage() {}
 
 func (x *CloseAllConnectionsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proxy_proxy_proto_msgTypes[43]
+	mi := &file_proxy_proxy_proto_msgTypes[48]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3168,7 +3434,7 @@ func (x *CloseAllConnectionsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CloseAllConnectionsRequest.ProtoReflect.Descriptor instead.
 func (*CloseAllConnectionsRequest) Descriptor() ([]byte, []int) {
-	return file_proxy_proxy_proto_rawDescGZIP(), []int{43}
+	return file_proxy_proxy_proto_rawDescGZIP(), []int{48}
 }
 
 func (x *CloseAllConnectionsRequest) GetProxyId() string {
@@ -3188,7 +3454,7 @@ type CloseAllConnectionsResponse struct {
 
 func (x *CloseAllConnectionsResponse) Reset() {
 	*x = CloseAllConnectionsResponse{}
-	mi := &file_proxy_proxy_proto_msgTypes[44]
+	mi := &file_proxy_proxy_proto_msgTypes[49]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3200,7 +3466,7 @@ func (x *CloseAllConnectionsResponse) String() string {
 func (*CloseAllConnectionsResponse) ProtoMessage() {}
 
 func (x *CloseAllConnectionsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proxy_proxy_proto_msgTypes[44]
+	mi := &file_proxy_proxy_proto_msgTypes[49]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3213,7 +3479,7 @@ func (x *CloseAllConnectionsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CloseAllConnectionsResponse.ProtoReflect.Descriptor instead.
 func (*CloseAllConnectionsResponse) Descriptor() ([]byte, []int) {
-	return file_proxy_proxy_proto_rawDescGZIP(), []int{44}
+	return file_proxy_proxy_proto_rawDescGZIP(), []int{49}
 }
 
 func (x *CloseAllConnectionsResponse) GetSuccess() bool {
@@ -3243,7 +3509,7 @@ type GetIPStatsRequest struct {
 
 func (x *GetIPStatsRequest) Reset() {
 	*x = GetIPStatsRequest{}
-	mi := &file_proxy_proxy_proto_msgTypes[45]
+	mi := &file_proxy_proxy_proto_msgTypes[50]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3255,7 +3521,7 @@ func (x *GetIPStatsRequest) String() string {
 func (*GetIPStatsRequest) ProtoMessage() {}
 
 func (x *GetIPStatsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proxy_proxy_proto_msgTypes[45]
+	mi := &file_proxy_proxy_proto_msgTypes[50]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3268,7 +3534,7 @@ func (x *GetIPStatsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetIPStatsRequest.ProtoReflect.Descriptor instead.
 func (*GetIPStatsRequest) Descriptor() ([]byte, []int) {
-	return file_proxy_proxy_proto_rawDescGZIP(), []int{45}
+	return file_proxy_proxy_proto_rawDescGZIP(), []int{50}
 }
 
 func (x *GetIPStatsRequest) GetLimit() int32 {
@@ -3328,7 +3594,7 @@ type IPStatsResult struct {
 
 func (x *IPStatsResult) Reset() {
 	*x = IPStatsResult{}
-	mi := &file_proxy_proxy_proto_msgTypes[46]
+	mi := &file_proxy_proxy_proto_msgTypes[51]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3340,7 +3606,7 @@ func (x *IPStatsResult) String() string {
 func (*IPStatsResult) ProtoMessage() {}
 
 func (x *IPStatsResult) ProtoReflect() protoreflect.Message {
-	mi := &file_proxy_proxy_proto_msgTypes[46]
+	mi := &file_proxy_proxy_proto_msgTypes[51]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3353,7 +3619,7 @@ func (x *IPStatsResult) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use IPStatsResult.ProtoReflect.Descriptor instead.
 func (*IPStatsResult) Descriptor() ([]byte, []int) {
-	return file_proxy_proxy_proto_rawDescGZIP(), []int{46}
+	return file_proxy_proxy_proto_rawDescGZIP(), []int{51}
 }
 
 func (x *IPStatsResult) GetSourceIp() string {
@@ -3457,7 +3723,7 @@ type GetIPStatsResponse struct {
 
 func (x *GetIPStatsResponse) Reset() {
 	*x = GetIPStatsResponse{}
-	mi := &file_proxy_proxy_proto_msgTypes[47]
+	mi := &file_proxy_proxy_proto_msgTypes[52]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3469,7 +3735,7 @@ func (x *GetIPStatsResponse) String() string {
 func (*GetIPStatsResponse) ProtoMessage() {}
 
 func (x *GetIPStatsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proxy_proxy_proto_msgTypes[47]
+	mi := &file_proxy_proxy_proto_msgTypes[52]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3482,7 +3748,7 @@ func (x *GetIPStatsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetIPStatsResponse.ProtoReflect.Descriptor instead.
 func (*GetIPStatsResponse) Descriptor() ([]byte, []int) {
-	return file_proxy_proxy_proto_rawDescGZIP(), []int{47}
+	return file_proxy_proxy_proto_rawDescGZIP(), []int{52}
 }
 
 func (x *GetIPStatsResponse) GetStats() []*IPStatsResult {
@@ -3510,7 +3776,7 @@ type GetGeoStatsRequest struct {
 
 func (x *GetGeoStatsRequest) Reset() {
 	*x = GetGeoStatsRequest{}
-	mi := &file_proxy_proxy_proto_msgTypes[48]
+	mi := &file_proxy_proxy_proto_msgTypes[53]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3522,7 +3788,7 @@ func (x *GetGeoStatsRequest) String() string {
 func (*GetGeoStatsRequest) ProtoMessage() {}
 
 func (x *GetGeoStatsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proxy_proxy_proto_msgTypes[48]
+	mi := &file_proxy_proxy_proto_msgTypes[53]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3535,7 +3801,7 @@ func (x *GetGeoStatsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetGeoStatsRequest.ProtoReflect.Descriptor instead.
 func (*GetGeoStatsRequest) Descriptor() ([]byte, []int) {
-	return file_proxy_proxy_proto_rawDescGZIP(), []int{48}
+	return file_proxy_proxy_proto_rawDescGZIP(), []int{53}
 }
 
 func (x *GetGeoStatsRequest) GetType() string {
@@ -3574,7 +3840,7 @@ type GeoStatsResult struct {
 
 func (x *GeoStatsResult) Reset() {
 	*x = GeoStatsResult{}
-	mi := &file_proxy_proxy_proto_msgTypes[49]
+	mi := &file_proxy_proxy_proto_msgTypes[54]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3586,7 +3852,7 @@ func (x *GeoStatsResult) String() string {
 func (*GeoStatsResult) ProtoMessage() {}
 
 func (x *GeoStatsResult) ProtoReflect() protoreflect.Message {
-	mi := &file_proxy_proxy_proto_msgTypes[49]
+	mi := &file_proxy_proxy_proto_msgTypes[54]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3599,7 +3865,7 @@ func (x *GeoStatsResult) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GeoStatsResult.ProtoReflect.Descriptor instead.
 func (*GeoStatsResult) Descriptor() ([]byte, []int) {
-	return file_proxy_proxy_proto_rawDescGZIP(), []int{49}
+	return file_proxy_proxy_proto_rawDescGZIP(), []int{54}
 }
 
 func (x *GeoStatsResult) GetType() string {
@@ -3660,7 +3926,7 @@ type GetGeoStatsResponse struct {
 
 func (x *GetGeoStatsResponse) Reset() {
 	*x = GetGeoStatsResponse{}
-	mi := &file_proxy_proxy_proto_msgTypes[50]
+	mi := &file_proxy_proxy_proto_msgTypes[55]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3672,7 +3938,7 @@ func (x *GetGeoStatsResponse) String() string {
 func (*GetGeoStatsResponse) ProtoMessage() {}
 
 func (x *GetGeoStatsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proxy_proxy_proto_msgTypes[50]
+	mi := &file_proxy_proxy_proto_msgTypes[55]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3685,7 +3951,7 @@ func (x *GetGeoStatsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetGeoStatsResponse.ProtoReflect.Descriptor instead.
 func (*GetGeoStatsResponse) Descriptor() ([]byte, []int) {
-	return file_proxy_proxy_proto_rawDescGZIP(), []int{50}
+	return file_proxy_proxy_proto_rawDescGZIP(), []int{55}
 }
 
 func (x *GetGeoStatsResponse) GetStats() []*GeoStatsResult {
@@ -3703,7 +3969,7 @@ type GetStatsSummaryRequest struct {
 
 func (x *GetStatsSummaryRequest) Reset() {
 	*x = GetStatsSummaryRequest{}
-	mi := &file_proxy_proxy_proto_msgTypes[51]
+	mi := &file_proxy_proxy_proto_msgTypes[56]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3715,7 +3981,7 @@ func (x *GetStatsSummaryRequest) String() string {
 func (*GetStatsSummaryRequest) ProtoMessage() {}
 
 func (x *GetStatsSummaryRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proxy_proxy_proto_msgTypes[51]
+	mi := &file_proxy_proxy_proto_msgTypes[56]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3728,7 +3994,7 @@ func (x *GetStatsSummaryRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetStatsSummaryRequest.ProtoReflect.Descriptor instead.
 func (*GetStatsSummaryRequest) Descriptor() ([]byte, []int) {
-	return file_proxy_proxy_proto_rawDescGZIP(), []int{51}
+	return file_proxy_proxy_proto_rawDescGZIP(), []int{56}
 }
 
 type StatsSummaryResponse struct {
@@ -3746,7 +4012,7 @@ type StatsSummaryResponse struct {
 
 func (x *StatsSummaryResponse) Reset() {
 	*x = StatsSummaryResponse{}
-	mi := &file_proxy_proxy_proto_msgTypes[52]
+	mi := &file_proxy_proxy_proto_msgTypes[57]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3758,7 +4024,7 @@ func (x *StatsSummaryResponse) String() string {
 func (*StatsSummaryResponse) ProtoMessage() {}
 
 func (x *StatsSummaryResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proxy_proxy_proto_msgTypes[52]
+	mi := &file_proxy_proxy_proto_msgTypes[57]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3771,7 +4037,7 @@ func (x *StatsSummaryResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StatsSummaryResponse.ProtoReflect.Descriptor instead.
 func (*StatsSummaryResponse) Descriptor() ([]byte, []int) {
-	return file_proxy_proxy_proto_rawDescGZIP(), []int{52}
+	return file_proxy_proxy_proto_rawDescGZIP(), []int{57}
 }
 
 func (x *StatsSummaryResponse) GetTotalConnections() int64 {
@@ -3824,18 +4090,18 @@ func (x *StatsSummaryResponse) GetAllowedTotal() int64 {
 }
 
 type ResolveApprovalRequest struct {
-	state         protoimpl.MessageState    `protogen:"open.v1"`
-	ReqId         string                    `protobuf:"bytes,1,opt,name=req_id,json=reqId,proto3" json:"req_id,omitempty"` // Approval request ID
-	Action        common.ApprovalActionType `protobuf:"varint,2,opt,name=action,proto3,enum=nitella.ApprovalActionType" json:"action,omitempty"`
-	Duration      common.ApprovalDuration   `protobuf:"varint,3,opt,name=duration,proto3,enum=nitella.ApprovalDuration" json:"duration,omitempty"`
-	Reason        string                    `protobuf:"bytes,4,opt,name=reason,proto3" json:"reason,omitempty"` // Optional reason for the decision
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state           protoimpl.MessageState    `protogen:"open.v1"`
+	ReqId           string                    `protobuf:"bytes,1,opt,name=req_id,json=reqId,proto3" json:"req_id,omitempty"`
+	Action          common.ApprovalActionType `protobuf:"varint,2,opt,name=action,proto3,enum=nitella.ApprovalActionType" json:"action,omitempty"`
+	DurationSeconds int64                     `protobuf:"varint,3,opt,name=duration_seconds,json=durationSeconds,proto3" json:"duration_seconds,omitempty"`
+	Reason          string                    `protobuf:"bytes,4,opt,name=reason,proto3" json:"reason,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
 }
 
 func (x *ResolveApprovalRequest) Reset() {
 	*x = ResolveApprovalRequest{}
-	mi := &file_proxy_proxy_proto_msgTypes[53]
+	mi := &file_proxy_proxy_proto_msgTypes[58]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3847,7 +4113,7 @@ func (x *ResolveApprovalRequest) String() string {
 func (*ResolveApprovalRequest) ProtoMessage() {}
 
 func (x *ResolveApprovalRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proxy_proxy_proto_msgTypes[53]
+	mi := &file_proxy_proxy_proto_msgTypes[58]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3860,7 +4126,7 @@ func (x *ResolveApprovalRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ResolveApprovalRequest.ProtoReflect.Descriptor instead.
 func (*ResolveApprovalRequest) Descriptor() ([]byte, []int) {
-	return file_proxy_proxy_proto_rawDescGZIP(), []int{53}
+	return file_proxy_proxy_proto_rawDescGZIP(), []int{58}
 }
 
 func (x *ResolveApprovalRequest) GetReqId() string {
@@ -3877,11 +4143,11 @@ func (x *ResolveApprovalRequest) GetAction() common.ApprovalActionType {
 	return common.ApprovalActionType(0)
 }
 
-func (x *ResolveApprovalRequest) GetDuration() common.ApprovalDuration {
+func (x *ResolveApprovalRequest) GetDurationSeconds() int64 {
 	if x != nil {
-		return x.Duration
+		return x.DurationSeconds
 	}
-	return common.ApprovalDuration(0)
+	return 0
 }
 
 func (x *ResolveApprovalRequest) GetReason() string {
@@ -3901,7 +4167,7 @@ type ResolveApprovalResponse struct {
 
 func (x *ResolveApprovalResponse) Reset() {
 	*x = ResolveApprovalResponse{}
-	mi := &file_proxy_proxy_proto_msgTypes[54]
+	mi := &file_proxy_proxy_proto_msgTypes[59]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3913,7 +4179,7 @@ func (x *ResolveApprovalResponse) String() string {
 func (*ResolveApprovalResponse) ProtoMessage() {}
 
 func (x *ResolveApprovalResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proxy_proxy_proto_msgTypes[54]
+	mi := &file_proxy_proxy_proto_msgTypes[59]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3926,7 +4192,7 @@ func (x *ResolveApprovalResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ResolveApprovalResponse.ProtoReflect.Descriptor instead.
 func (*ResolveApprovalResponse) Descriptor() ([]byte, []int) {
-	return file_proxy_proxy_proto_rawDescGZIP(), []int{54}
+	return file_proxy_proxy_proto_rawDescGZIP(), []int{59}
 }
 
 func (x *ResolveApprovalResponse) GetSuccess() bool {
@@ -3941,6 +4207,370 @@ func (x *ResolveApprovalResponse) GetErrorMessage() string {
 		return x.ErrorMessage
 	}
 	return ""
+}
+
+type ActiveApproval struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Key           string                 `protobuf:"bytes,1,opt,name=key,proto3" json:"key,omitempty"` // Unique key (ip:rule_id:tls_session)
+	SourceIp      string                 `protobuf:"bytes,2,opt,name=source_ip,json=sourceIp,proto3" json:"source_ip,omitempty"`
+	RuleId        string                 `protobuf:"bytes,3,opt,name=rule_id,json=ruleId,proto3" json:"rule_id,omitempty"`
+	ProxyId       string                 `protobuf:"bytes,4,opt,name=proxy_id,json=proxyId,proto3" json:"proxy_id,omitempty"`
+	TlsSessionId  string                 `protobuf:"bytes,5,opt,name=tls_session_id,json=tlsSessionId,proto3" json:"tls_session_id,omitempty"` // Empty if non-TLS
+	Allowed       bool                   `protobuf:"varint,6,opt,name=allowed,proto3" json:"allowed,omitempty"`                                // true=allow, false=block
+	CreatedAt     *timestamp.Timestamp   `protobuf:"bytes,7,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
+	ExpiresAt     *timestamp.Timestamp   `protobuf:"bytes,8,opt,name=expires_at,json=expiresAt,proto3" json:"expires_at,omitempty"`
+	BytesIn       int64                  `protobuf:"varint,9,opt,name=bytes_in,json=bytesIn,proto3" json:"bytes_in,omitempty"`
+	BytesOut      int64                  `protobuf:"varint,10,opt,name=bytes_out,json=bytesOut,proto3" json:"bytes_out,omitempty"`
+	BlockedCount  int64                  `protobuf:"varint,11,opt,name=blocked_count,json=blockedCount,proto3" json:"blocked_count,omitempty"` // For block decisions
+	ConnIds       []string               `protobuf:"bytes,12,rep,name=conn_ids,json=connIds,proto3" json:"conn_ids,omitempty"`                 // Active connection IDs
+	GeoCountry    string                 `protobuf:"bytes,13,opt,name=geo_country,json=geoCountry,proto3" json:"geo_country,omitempty"`
+	GeoCity       string                 `protobuf:"bytes,14,opt,name=geo_city,json=geoCity,proto3" json:"geo_city,omitempty"`
+	GeoIsp        string                 `protobuf:"bytes,15,opt,name=geo_isp,json=geoIsp,proto3" json:"geo_isp,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ActiveApproval) Reset() {
+	*x = ActiveApproval{}
+	mi := &file_proxy_proxy_proto_msgTypes[60]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ActiveApproval) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ActiveApproval) ProtoMessage() {}
+
+func (x *ActiveApproval) ProtoReflect() protoreflect.Message {
+	mi := &file_proxy_proxy_proto_msgTypes[60]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ActiveApproval.ProtoReflect.Descriptor instead.
+func (*ActiveApproval) Descriptor() ([]byte, []int) {
+	return file_proxy_proxy_proto_rawDescGZIP(), []int{60}
+}
+
+func (x *ActiveApproval) GetKey() string {
+	if x != nil {
+		return x.Key
+	}
+	return ""
+}
+
+func (x *ActiveApproval) GetSourceIp() string {
+	if x != nil {
+		return x.SourceIp
+	}
+	return ""
+}
+
+func (x *ActiveApproval) GetRuleId() string {
+	if x != nil {
+		return x.RuleId
+	}
+	return ""
+}
+
+func (x *ActiveApproval) GetProxyId() string {
+	if x != nil {
+		return x.ProxyId
+	}
+	return ""
+}
+
+func (x *ActiveApproval) GetTlsSessionId() string {
+	if x != nil {
+		return x.TlsSessionId
+	}
+	return ""
+}
+
+func (x *ActiveApproval) GetAllowed() bool {
+	if x != nil {
+		return x.Allowed
+	}
+	return false
+}
+
+func (x *ActiveApproval) GetCreatedAt() *timestamp.Timestamp {
+	if x != nil {
+		return x.CreatedAt
+	}
+	return nil
+}
+
+func (x *ActiveApproval) GetExpiresAt() *timestamp.Timestamp {
+	if x != nil {
+		return x.ExpiresAt
+	}
+	return nil
+}
+
+func (x *ActiveApproval) GetBytesIn() int64 {
+	if x != nil {
+		return x.BytesIn
+	}
+	return 0
+}
+
+func (x *ActiveApproval) GetBytesOut() int64 {
+	if x != nil {
+		return x.BytesOut
+	}
+	return 0
+}
+
+func (x *ActiveApproval) GetBlockedCount() int64 {
+	if x != nil {
+		return x.BlockedCount
+	}
+	return 0
+}
+
+func (x *ActiveApproval) GetConnIds() []string {
+	if x != nil {
+		return x.ConnIds
+	}
+	return nil
+}
+
+func (x *ActiveApproval) GetGeoCountry() string {
+	if x != nil {
+		return x.GeoCountry
+	}
+	return ""
+}
+
+func (x *ActiveApproval) GetGeoCity() string {
+	if x != nil {
+		return x.GeoCity
+	}
+	return ""
+}
+
+func (x *ActiveApproval) GetGeoIsp() string {
+	if x != nil {
+		return x.GeoIsp
+	}
+	return ""
+}
+
+type ListActiveApprovalsRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	ProxyId       string                 `protobuf:"bytes,1,opt,name=proxy_id,json=proxyId,proto3" json:"proxy_id,omitempty"`    // Optional: filter by proxy
+	SourceIp      string                 `protobuf:"bytes,2,opt,name=source_ip,json=sourceIp,proto3" json:"source_ip,omitempty"` // Optional: filter by IP
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ListActiveApprovalsRequest) Reset() {
+	*x = ListActiveApprovalsRequest{}
+	mi := &file_proxy_proxy_proto_msgTypes[61]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListActiveApprovalsRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListActiveApprovalsRequest) ProtoMessage() {}
+
+func (x *ListActiveApprovalsRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_proxy_proxy_proto_msgTypes[61]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListActiveApprovalsRequest.ProtoReflect.Descriptor instead.
+func (*ListActiveApprovalsRequest) Descriptor() ([]byte, []int) {
+	return file_proxy_proxy_proto_rawDescGZIP(), []int{61}
+}
+
+func (x *ListActiveApprovalsRequest) GetProxyId() string {
+	if x != nil {
+		return x.ProxyId
+	}
+	return ""
+}
+
+func (x *ListActiveApprovalsRequest) GetSourceIp() string {
+	if x != nil {
+		return x.SourceIp
+	}
+	return ""
+}
+
+type ListActiveApprovalsResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Approvals     []*ActiveApproval      `protobuf:"bytes,1,rep,name=approvals,proto3" json:"approvals,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ListActiveApprovalsResponse) Reset() {
+	*x = ListActiveApprovalsResponse{}
+	mi := &file_proxy_proxy_proto_msgTypes[62]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListActiveApprovalsResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListActiveApprovalsResponse) ProtoMessage() {}
+
+func (x *ListActiveApprovalsResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_proxy_proxy_proto_msgTypes[62]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListActiveApprovalsResponse.ProtoReflect.Descriptor instead.
+func (*ListActiveApprovalsResponse) Descriptor() ([]byte, []int) {
+	return file_proxy_proxy_proto_rawDescGZIP(), []int{62}
+}
+
+func (x *ListActiveApprovalsResponse) GetApprovals() []*ActiveApproval {
+	if x != nil {
+		return x.Approvals
+	}
+	return nil
+}
+
+type CancelApprovalRequest struct {
+	state            protoimpl.MessageState `protogen:"open.v1"`
+	Key              string                 `protobuf:"bytes,1,opt,name=key,proto3" json:"key,omitempty"`                                                    // Approval key to cancel
+	CloseConnections bool                   `protobuf:"varint,2,opt,name=close_connections,json=closeConnections,proto3" json:"close_connections,omitempty"` // Also close active connections
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
+}
+
+func (x *CancelApprovalRequest) Reset() {
+	*x = CancelApprovalRequest{}
+	mi := &file_proxy_proxy_proto_msgTypes[63]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CancelApprovalRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CancelApprovalRequest) ProtoMessage() {}
+
+func (x *CancelApprovalRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_proxy_proxy_proto_msgTypes[63]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CancelApprovalRequest.ProtoReflect.Descriptor instead.
+func (*CancelApprovalRequest) Descriptor() ([]byte, []int) {
+	return file_proxy_proxy_proto_rawDescGZIP(), []int{63}
+}
+
+func (x *CancelApprovalRequest) GetKey() string {
+	if x != nil {
+		return x.Key
+	}
+	return ""
+}
+
+func (x *CancelApprovalRequest) GetCloseConnections() bool {
+	if x != nil {
+		return x.CloseConnections
+	}
+	return false
+}
+
+type CancelApprovalResponse struct {
+	state             protoimpl.MessageState `protogen:"open.v1"`
+	Success           bool                   `protobuf:"varint,1,opt,name=success,proto3" json:"success,omitempty"`
+	ErrorMessage      string                 `protobuf:"bytes,2,opt,name=error_message,json=errorMessage,proto3" json:"error_message,omitempty"`
+	ConnectionsClosed int32                  `protobuf:"varint,3,opt,name=connections_closed,json=connectionsClosed,proto3" json:"connections_closed,omitempty"`
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
+}
+
+func (x *CancelApprovalResponse) Reset() {
+	*x = CancelApprovalResponse{}
+	mi := &file_proxy_proxy_proto_msgTypes[64]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CancelApprovalResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CancelApprovalResponse) ProtoMessage() {}
+
+func (x *CancelApprovalResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_proxy_proxy_proto_msgTypes[64]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CancelApprovalResponse.ProtoReflect.Descriptor instead.
+func (*CancelApprovalResponse) Descriptor() ([]byte, []int) {
+	return file_proxy_proxy_proto_rawDescGZIP(), []int{64}
+}
+
+func (x *CancelApprovalResponse) GetSuccess() bool {
+	if x != nil {
+		return x.Success
+	}
+	return false
+}
+
+func (x *CancelApprovalResponse) GetErrorMessage() string {
+	if x != nil {
+		return x.ErrorMessage
+	}
+	return ""
+}
+
+func (x *CancelApprovalResponse) GetConnectionsClosed() int32 {
+	if x != nil {
+		return x.ConnectionsClosed
+	}
+	return 0
 }
 
 var File_proxy_proxy_proto protoreflect.FileDescriptor
@@ -4130,7 +4760,25 @@ const file_proxy_proxy_proto_rawDesc = "" +
 	"\x06reason\x18\x03 \x01(\tR\x06reason\"K\n" +
 	"\x0eAllowIPRequest\x12\x0e\n" +
 	"\x02ip\x18\x01 \x01(\tR\x02ip\x12)\n" +
-	"\x10duration_seconds\x18\x02 \x01(\x03R\x0fdurationSeconds\";\n" +
+	"\x10duration_seconds\x18\x02 \x01(\x03R\x0fdurationSeconds\"\xf0\x01\n" +
+	"\n" +
+	"GlobalRule\x12\x0e\n" +
+	"\x02id\x18\x01 \x01(\tR\x02id\x12\x12\n" +
+	"\x04name\x18\x02 \x01(\tR\x04name\x12\x1b\n" +
+	"\tsource_ip\x18\x03 \x01(\tR\bsourceIp\x12+\n" +
+	"\x06action\x18\x04 \x01(\x0e2\x13.nitella.ActionTypeR\x06action\x129\n" +
+	"\n" +
+	"expires_at\x18\x05 \x01(\v2\x1a.google.protobuf.TimestampR\texpiresAt\x129\n" +
+	"\n" +
+	"created_at\x18\x06 \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\"\x18\n" +
+	"\x16ListGlobalRulesRequest\"J\n" +
+	"\x17ListGlobalRulesResponse\x12/\n" +
+	"\x05rules\x18\x01 \x03(\v2\x19.nitella.proxy.GlobalRuleR\x05rules\"2\n" +
+	"\x17RemoveGlobalRuleRequest\x12\x17\n" +
+	"\arule_id\x18\x01 \x01(\tR\x06ruleId\"Y\n" +
+	"\x18RemoveGlobalRuleResponse\x12\x18\n" +
+	"\asuccess\x18\x01 \x01(\bR\asuccess\x12#\n" +
+	"\rerror_message\x18\x02 \x01(\tR\ferrorMessage\";\n" +
 	"\x18StreamConnectionsRequest\x12\x1f\n" +
 	"\vactive_only\x18\x01 \x01(\bR\n" +
 	"activeOnly\"\x97\x03\n" +
@@ -4238,15 +4886,47 @@ const file_proxy_proxy_proto_rawDesc = "" +
 	"unique_ips\x18\x04 \x01(\x03R\tuniqueIps\x12)\n" +
 	"\x10unique_countries\x18\x05 \x01(\x03R\x0funiqueCountries\x12#\n" +
 	"\rblocked_total\x18\x06 \x01(\x03R\fblockedTotal\x12#\n" +
-	"\rallowed_total\x18\a \x01(\x03R\fallowedTotal\"\xb3\x01\n" +
+	"\rallowed_total\x18\a \x01(\x03R\fallowedTotal\"\xa7\x01\n" +
 	"\x16ResolveApprovalRequest\x12\x15\n" +
 	"\x06req_id\x18\x01 \x01(\tR\x05reqId\x123\n" +
-	"\x06action\x18\x02 \x01(\x0e2\x1b.nitella.ApprovalActionTypeR\x06action\x125\n" +
-	"\bduration\x18\x03 \x01(\x0e2\x19.nitella.ApprovalDurationR\bduration\x12\x16\n" +
+	"\x06action\x18\x02 \x01(\x0e2\x1b.nitella.ApprovalActionTypeR\x06action\x12)\n" +
+	"\x10duration_seconds\x18\x03 \x01(\x03R\x0fdurationSeconds\x12\x16\n" +
 	"\x06reason\x18\x04 \x01(\tR\x06reason\"X\n" +
 	"\x17ResolveApprovalResponse\x12\x18\n" +
 	"\asuccess\x18\x01 \x01(\bR\asuccess\x12#\n" +
-	"\rerror_message\x18\x02 \x01(\tR\ferrorMessage*\x88\x01\n" +
+	"\rerror_message\x18\x02 \x01(\tR\ferrorMessage\"\xf6\x03\n" +
+	"\x0eActiveApproval\x12\x10\n" +
+	"\x03key\x18\x01 \x01(\tR\x03key\x12\x1b\n" +
+	"\tsource_ip\x18\x02 \x01(\tR\bsourceIp\x12\x17\n" +
+	"\arule_id\x18\x03 \x01(\tR\x06ruleId\x12\x19\n" +
+	"\bproxy_id\x18\x04 \x01(\tR\aproxyId\x12$\n" +
+	"\x0etls_session_id\x18\x05 \x01(\tR\ftlsSessionId\x12\x18\n" +
+	"\aallowed\x18\x06 \x01(\bR\aallowed\x129\n" +
+	"\n" +
+	"created_at\x18\a \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\x129\n" +
+	"\n" +
+	"expires_at\x18\b \x01(\v2\x1a.google.protobuf.TimestampR\texpiresAt\x12\x19\n" +
+	"\bbytes_in\x18\t \x01(\x03R\abytesIn\x12\x1b\n" +
+	"\tbytes_out\x18\n" +
+	" \x01(\x03R\bbytesOut\x12#\n" +
+	"\rblocked_count\x18\v \x01(\x03R\fblockedCount\x12\x19\n" +
+	"\bconn_ids\x18\f \x03(\tR\aconnIds\x12\x1f\n" +
+	"\vgeo_country\x18\r \x01(\tR\n" +
+	"geoCountry\x12\x19\n" +
+	"\bgeo_city\x18\x0e \x01(\tR\ageoCity\x12\x17\n" +
+	"\ageo_isp\x18\x0f \x01(\tR\x06geoIsp\"T\n" +
+	"\x1aListActiveApprovalsRequest\x12\x19\n" +
+	"\bproxy_id\x18\x01 \x01(\tR\aproxyId\x12\x1b\n" +
+	"\tsource_ip\x18\x02 \x01(\tR\bsourceIp\"Z\n" +
+	"\x1bListActiveApprovalsResponse\x12;\n" +
+	"\tapprovals\x18\x01 \x03(\v2\x1d.nitella.proxy.ActiveApprovalR\tapprovals\"V\n" +
+	"\x15CancelApprovalRequest\x12\x10\n" +
+	"\x03key\x18\x01 \x01(\tR\x03key\x12+\n" +
+	"\x11close_connections\x18\x02 \x01(\bR\x10closeConnections\"\x86\x01\n" +
+	"\x16CancelApprovalResponse\x12\x18\n" +
+	"\asuccess\x18\x01 \x01(\bR\asuccess\x12#\n" +
+	"\rerror_message\x18\x02 \x01(\tR\ferrorMessage\x12-\n" +
+	"\x12connections_closed\x18\x03 \x01(\x05R\x11connectionsClosed*\x88\x01\n" +
 	"\x0fHealthCheckType\x12!\n" +
 	"\x1dHEALTH_CHECK_TYPE_UNSPECIFIED\x10\x00\x12\x19\n" +
 	"\x15HEALTH_CHECK_TYPE_TCP\x10\x01\x12\x1a\n" +
@@ -4261,12 +4941,14 @@ const file_proxy_proxy_proto_rawDesc = "" +
 	"\x15HEALTH_STATUS_UNKNOWN\x10\x00\x12\x19\n" +
 	"\x15HEALTH_STATUS_HEALTHY\x10\x01\x12\x1b\n" +
 	"\x17HEALTH_STATUS_UNHEALTHY\x10\x02\x12\x1a\n" +
-	"\x16HEALTH_STATUS_STARTING\x10\x03*p\n" +
+	"\x16HEALTH_STATUS_STARTING\x10\x03*\xaa\x01\n" +
 	"\tEventType\x12\x1a\n" +
 	"\x16EVENT_TYPE_UNSPECIFIED\x10\x00\x12\x18\n" +
 	"\x14EVENT_TYPE_CONNECTED\x10\x01\x12\x15\n" +
 	"\x11EVENT_TYPE_CLOSED\x10\x02\x12\x16\n" +
-	"\x12EVENT_TYPE_BLOCKED\x10\x032\xee\x0e\n" +
+	"\x12EVENT_TYPE_BLOCKED\x10\x03\x12\x1f\n" +
+	"\x1bEVENT_TYPE_PENDING_APPROVAL\x10\x04\x12\x17\n" +
+	"\x13EVENT_TYPE_APPROVED\x10\x052\xe4\x12\n" +
 	"\x13ProxyControlService\x12T\n" +
 	"\vCreateProxy\x12!.nitella.proxy.CreateProxyRequest\x1a\".nitella.proxy.CreateProxyResponse\x12W\n" +
 	"\fDisableProxy\x12\".nitella.proxy.DisableProxyRequest\x1a#.nitella.proxy.DisableProxyResponse\x12T\n" +
@@ -4282,7 +4964,9 @@ const file_proxy_proxy_proto_rawDesc = "" +
 	"\tListRules\x12\x1f.nitella.proxy.ListRulesRequest\x1a .nitella.proxy.ListRulesResponse\x12T\n" +
 	"\vListProxies\x12!.nitella.proxy.ListProxiesRequest\x1a\".nitella.proxy.ListProxiesResponse\x12@\n" +
 	"\aBlockIP\x12\x1d.nitella.proxy.BlockIPRequest\x1a\x16.google.protobuf.Empty\x12@\n" +
-	"\aAllowIP\x12\x1d.nitella.proxy.AllowIPRequest\x1a\x16.google.protobuf.Empty\x12^\n" +
+	"\aAllowIP\x12\x1d.nitella.proxy.AllowIPRequest\x1a\x16.google.protobuf.Empty\x12`\n" +
+	"\x0fListGlobalRules\x12%.nitella.proxy.ListGlobalRulesRequest\x1a&.nitella.proxy.ListGlobalRulesResponse\x12c\n" +
+	"\x10RemoveGlobalRule\x12&.nitella.proxy.RemoveGlobalRuleRequest\x1a'.nitella.proxy.RemoveGlobalRuleResponse\x12^\n" +
 	"\x11StreamConnections\x12'.nitella.proxy.StreamConnectionsRequest\x1a\x1e.nitella.proxy.ConnectionEvent0\x01\x12T\n" +
 	"\rStreamMetrics\x12#.nitella.proxy.StreamMetricsRequest\x1a\x1c.nitella.proxy.MetricsSample0\x01\x12o\n" +
 	"\x14GetActiveConnections\x12*.nitella.proxy.GetActiveConnectionsRequest\x1a+.nitella.proxy.GetActiveConnectionsResponse\x12`\n" +
@@ -4290,7 +4974,10 @@ const file_proxy_proxy_proto_rawDesc = "" +
 	"\x13CloseAllConnections\x12).nitella.proxy.CloseAllConnectionsRequest\x1a*.nitella.proxy.CloseAllConnectionsResponse\x12]\n" +
 	"\x0eConfigureGeoIP\x12$.nitella.proxy.ConfigureGeoIPRequest\x1a%.nitella.proxy.ConfigureGeoIPResponse\x12K\n" +
 	"\bLookupIP\x12\x1e.nitella.proxy.LookupIPRequest\x1a\x1f.nitella.proxy.LookupIPResponse\x12]\n" +
-	"\x0eGetGeoIPStatus\x12$.nitella.proxy.GetGeoIPStatusRequest\x1a%.nitella.proxy.GetGeoIPStatusResponseB*Z(github.com/ivere27/nitella/pkg/api/proxyb\x06proto3"
+	"\x0eGetGeoIPStatus\x12$.nitella.proxy.GetGeoIPStatusRequest\x1a%.nitella.proxy.GetGeoIPStatusResponse\x12l\n" +
+	"\x13ListActiveApprovals\x12).nitella.proxy.ListActiveApprovalsRequest\x1a*.nitella.proxy.ListActiveApprovalsResponse\x12]\n" +
+	"\x0eCancelApproval\x12$.nitella.proxy.CancelApprovalRequest\x1a%.nitella.proxy.CancelApprovalResponse\x12`\n" +
+	"\x0fResolveApproval\x12%.nitella.proxy.ResolveApprovalRequest\x1a&.nitella.proxy.ResolveApprovalResponseB*Z(github.com/ivere27/nitella/pkg/api/proxyb\x06proto3"
 
 var (
 	file_proxy_proxy_proto_rawDescOnce sync.Once
@@ -4305,7 +4992,7 @@ func file_proxy_proxy_proto_rawDescGZIP() []byte {
 }
 
 var file_proxy_proxy_proto_enumTypes = make([]protoimpl.EnumInfo, 5)
-var file_proxy_proxy_proto_msgTypes = make([]protoimpl.MessageInfo, 55)
+var file_proxy_proxy_proto_msgTypes = make([]protoimpl.MessageInfo, 65)
 var file_proxy_proxy_proto_goTypes = []any{
 	(HealthCheckType)(0),                 // 0: nitella.proxy.HealthCheckType
 	(ClientAuthType)(0),                  // 1: nitella.proxy.ClientAuthType
@@ -4346,133 +5033,158 @@ var file_proxy_proxy_proto_goTypes = []any{
 	(*ListProxiesResponse)(nil),          // 36: nitella.proxy.ListProxiesResponse
 	(*BlockIPRequest)(nil),               // 37: nitella.proxy.BlockIPRequest
 	(*AllowIPRequest)(nil),               // 38: nitella.proxy.AllowIPRequest
-	(*StreamConnectionsRequest)(nil),     // 39: nitella.proxy.StreamConnectionsRequest
-	(*ConnectionEvent)(nil),              // 40: nitella.proxy.ConnectionEvent
-	(*StreamMetricsRequest)(nil),         // 41: nitella.proxy.StreamMetricsRequest
-	(*MetricsSample)(nil),                // 42: nitella.proxy.MetricsSample
-	(*ActiveConnection)(nil),             // 43: nitella.proxy.ActiveConnection
-	(*GetActiveConnectionsRequest)(nil),  // 44: nitella.proxy.GetActiveConnectionsRequest
-	(*GetActiveConnectionsResponse)(nil), // 45: nitella.proxy.GetActiveConnectionsResponse
-	(*CloseConnectionRequest)(nil),       // 46: nitella.proxy.CloseConnectionRequest
-	(*CloseConnectionResponse)(nil),      // 47: nitella.proxy.CloseConnectionResponse
-	(*CloseAllConnectionsRequest)(nil),   // 48: nitella.proxy.CloseAllConnectionsRequest
-	(*CloseAllConnectionsResponse)(nil),  // 49: nitella.proxy.CloseAllConnectionsResponse
-	(*GetIPStatsRequest)(nil),            // 50: nitella.proxy.GetIPStatsRequest
-	(*IPStatsResult)(nil),                // 51: nitella.proxy.IPStatsResult
-	(*GetIPStatsResponse)(nil),           // 52: nitella.proxy.GetIPStatsResponse
-	(*GetGeoStatsRequest)(nil),           // 53: nitella.proxy.GetGeoStatsRequest
-	(*GeoStatsResult)(nil),               // 54: nitella.proxy.GeoStatsResult
-	(*GetGeoStatsResponse)(nil),          // 55: nitella.proxy.GetGeoStatsResponse
-	(*GetStatsSummaryRequest)(nil),       // 56: nitella.proxy.GetStatsSummaryRequest
-	(*StatsSummaryResponse)(nil),         // 57: nitella.proxy.StatsSummaryResponse
-	(*ResolveApprovalRequest)(nil),       // 58: nitella.proxy.ResolveApprovalRequest
-	(*ResolveApprovalResponse)(nil),      // 59: nitella.proxy.ResolveApprovalResponse
-	(*common.GeoInfo)(nil),               // 60: nitella.GeoInfo
-	(common.ActionType)(0),               // 61: nitella.ActionType
-	(common.MockPreset)(0),               // 62: nitella.MockPreset
-	(common.FallbackAction)(0),           // 63: nitella.FallbackAction
-	(common.ConditionType)(0),            // 64: nitella.ConditionType
-	(common.Operator)(0),                 // 65: nitella.Operator
-	(*timestamp.Timestamp)(nil),          // 66: google.protobuf.Timestamp
-	(common.ApprovalActionType)(0),       // 67: nitella.ApprovalActionType
-	(common.ApprovalDuration)(0),         // 68: nitella.ApprovalDuration
-	(*empty.Empty)(nil),                  // 69: google.protobuf.Empty
+	(*GlobalRule)(nil),                   // 39: nitella.proxy.GlobalRule
+	(*ListGlobalRulesRequest)(nil),       // 40: nitella.proxy.ListGlobalRulesRequest
+	(*ListGlobalRulesResponse)(nil),      // 41: nitella.proxy.ListGlobalRulesResponse
+	(*RemoveGlobalRuleRequest)(nil),      // 42: nitella.proxy.RemoveGlobalRuleRequest
+	(*RemoveGlobalRuleResponse)(nil),     // 43: nitella.proxy.RemoveGlobalRuleResponse
+	(*StreamConnectionsRequest)(nil),     // 44: nitella.proxy.StreamConnectionsRequest
+	(*ConnectionEvent)(nil),              // 45: nitella.proxy.ConnectionEvent
+	(*StreamMetricsRequest)(nil),         // 46: nitella.proxy.StreamMetricsRequest
+	(*MetricsSample)(nil),                // 47: nitella.proxy.MetricsSample
+	(*ActiveConnection)(nil),             // 48: nitella.proxy.ActiveConnection
+	(*GetActiveConnectionsRequest)(nil),  // 49: nitella.proxy.GetActiveConnectionsRequest
+	(*GetActiveConnectionsResponse)(nil), // 50: nitella.proxy.GetActiveConnectionsResponse
+	(*CloseConnectionRequest)(nil),       // 51: nitella.proxy.CloseConnectionRequest
+	(*CloseConnectionResponse)(nil),      // 52: nitella.proxy.CloseConnectionResponse
+	(*CloseAllConnectionsRequest)(nil),   // 53: nitella.proxy.CloseAllConnectionsRequest
+	(*CloseAllConnectionsResponse)(nil),  // 54: nitella.proxy.CloseAllConnectionsResponse
+	(*GetIPStatsRequest)(nil),            // 55: nitella.proxy.GetIPStatsRequest
+	(*IPStatsResult)(nil),                // 56: nitella.proxy.IPStatsResult
+	(*GetIPStatsResponse)(nil),           // 57: nitella.proxy.GetIPStatsResponse
+	(*GetGeoStatsRequest)(nil),           // 58: nitella.proxy.GetGeoStatsRequest
+	(*GeoStatsResult)(nil),               // 59: nitella.proxy.GeoStatsResult
+	(*GetGeoStatsResponse)(nil),          // 60: nitella.proxy.GetGeoStatsResponse
+	(*GetStatsSummaryRequest)(nil),       // 61: nitella.proxy.GetStatsSummaryRequest
+	(*StatsSummaryResponse)(nil),         // 62: nitella.proxy.StatsSummaryResponse
+	(*ResolveApprovalRequest)(nil),       // 63: nitella.proxy.ResolveApprovalRequest
+	(*ResolveApprovalResponse)(nil),      // 64: nitella.proxy.ResolveApprovalResponse
+	(*ActiveApproval)(nil),               // 65: nitella.proxy.ActiveApproval
+	(*ListActiveApprovalsRequest)(nil),   // 66: nitella.proxy.ListActiveApprovalsRequest
+	(*ListActiveApprovalsResponse)(nil),  // 67: nitella.proxy.ListActiveApprovalsResponse
+	(*CancelApprovalRequest)(nil),        // 68: nitella.proxy.CancelApprovalRequest
+	(*CancelApprovalResponse)(nil),       // 69: nitella.proxy.CancelApprovalResponse
+	(*common.GeoInfo)(nil),               // 70: nitella.GeoInfo
+	(common.ActionType)(0),               // 71: nitella.ActionType
+	(common.MockPreset)(0),               // 72: nitella.MockPreset
+	(common.FallbackAction)(0),           // 73: nitella.FallbackAction
+	(common.ConditionType)(0),            // 74: nitella.ConditionType
+	(common.Operator)(0),                 // 75: nitella.Operator
+	(*timestamp.Timestamp)(nil),          // 76: google.protobuf.Timestamp
+	(common.ApprovalActionType)(0),       // 77: nitella.ApprovalActionType
+	(*empty.Empty)(nil),                  // 78: google.protobuf.Empty
 }
 var file_proxy_proxy_proto_depIdxs = []int32{
 	4,  // 0: nitella.proxy.ConfigureGeoIPRequest.mode:type_name -> nitella.proxy.ConfigureGeoIPRequest.Mode
-	60, // 1: nitella.proxy.LookupIPResponse.geo:type_name -> nitella.GeoInfo
-	61, // 2: nitella.proxy.CreateProxyRequest.default_action:type_name -> nitella.ActionType
-	62, // 3: nitella.proxy.CreateProxyRequest.default_mock:type_name -> nitella.MockPreset
-	63, // 4: nitella.proxy.CreateProxyRequest.fallback_action:type_name -> nitella.FallbackAction
-	62, // 5: nitella.proxy.CreateProxyRequest.fallback_mock:type_name -> nitella.MockPreset
+	70, // 1: nitella.proxy.LookupIPResponse.geo:type_name -> nitella.GeoInfo
+	71, // 2: nitella.proxy.CreateProxyRequest.default_action:type_name -> nitella.ActionType
+	72, // 3: nitella.proxy.CreateProxyRequest.default_mock:type_name -> nitella.MockPreset
+	73, // 4: nitella.proxy.CreateProxyRequest.fallback_action:type_name -> nitella.FallbackAction
+	72, // 5: nitella.proxy.CreateProxyRequest.fallback_mock:type_name -> nitella.MockPreset
 	1,  // 6: nitella.proxy.CreateProxyRequest.client_auth_type:type_name -> nitella.proxy.ClientAuthType
 	12, // 7: nitella.proxy.CreateProxyRequest.health_check:type_name -> nitella.proxy.HealthCheckConfig
 	0,  // 8: nitella.proxy.HealthCheckConfig.type:type_name -> nitella.proxy.HealthCheckType
-	61, // 9: nitella.proxy.UpdateProxyRequest.default_action:type_name -> nitella.ActionType
-	62, // 10: nitella.proxy.UpdateProxyRequest.default_mock:type_name -> nitella.MockPreset
-	63, // 11: nitella.proxy.UpdateProxyRequest.fallback_action:type_name -> nitella.FallbackAction
-	62, // 12: nitella.proxy.UpdateProxyRequest.fallback_mock:type_name -> nitella.MockPreset
+	71, // 9: nitella.proxy.UpdateProxyRequest.default_action:type_name -> nitella.ActionType
+	72, // 10: nitella.proxy.UpdateProxyRequest.default_mock:type_name -> nitella.MockPreset
+	73, // 11: nitella.proxy.UpdateProxyRequest.fallback_action:type_name -> nitella.FallbackAction
+	72, // 12: nitella.proxy.UpdateProxyRequest.fallback_mock:type_name -> nitella.MockPreset
 	1,  // 13: nitella.proxy.UpdateProxyRequest.client_auth_type:type_name -> nitella.proxy.ClientAuthType
 	12, // 14: nitella.proxy.UpdateProxyRequest.health_check:type_name -> nitella.proxy.HealthCheckConfig
-	61, // 15: nitella.proxy.ProxyStatus.default_action:type_name -> nitella.ActionType
-	62, // 16: nitella.proxy.ProxyStatus.default_mock:type_name -> nitella.MockPreset
-	63, // 17: nitella.proxy.ProxyStatus.fallback_action:type_name -> nitella.FallbackAction
-	62, // 18: nitella.proxy.ProxyStatus.fallback_mock:type_name -> nitella.MockPreset
+	71, // 15: nitella.proxy.ProxyStatus.default_action:type_name -> nitella.ActionType
+	72, // 16: nitella.proxy.ProxyStatus.default_mock:type_name -> nitella.MockPreset
+	73, // 17: nitella.proxy.ProxyStatus.fallback_action:type_name -> nitella.FallbackAction
+	72, // 18: nitella.proxy.ProxyStatus.fallback_mock:type_name -> nitella.MockPreset
 	1,  // 19: nitella.proxy.ProxyStatus.client_auth_type:type_name -> nitella.proxy.ClientAuthType
 	12, // 20: nitella.proxy.ProxyStatus.health_check:type_name -> nitella.proxy.HealthCheckConfig
 	2,  // 21: nitella.proxy.ProxyStatus.health_status:type_name -> nitella.proxy.HealthStatus
 	27, // 22: nitella.proxy.ReloadRulesRequest.rules:type_name -> nitella.proxy.Rule
 	28, // 23: nitella.proxy.Rule.conditions:type_name -> nitella.proxy.Condition
-	61, // 24: nitella.proxy.Rule.action:type_name -> nitella.ActionType
+	71, // 24: nitella.proxy.Rule.action:type_name -> nitella.ActionType
 	29, // 25: nitella.proxy.Rule.rate_limit:type_name -> nitella.proxy.RateLimitConfig
 	30, // 26: nitella.proxy.Rule.mock_response:type_name -> nitella.proxy.MockConfig
-	64, // 27: nitella.proxy.Condition.type:type_name -> nitella.ConditionType
-	65, // 28: nitella.proxy.Condition.op:type_name -> nitella.Operator
-	62, // 29: nitella.proxy.MockConfig.preset:type_name -> nitella.MockPreset
+	74, // 27: nitella.proxy.Condition.type:type_name -> nitella.ConditionType
+	75, // 28: nitella.proxy.Condition.op:type_name -> nitella.Operator
+	72, // 29: nitella.proxy.MockConfig.preset:type_name -> nitella.MockPreset
 	27, // 30: nitella.proxy.AddRuleRequest.rule:type_name -> nitella.proxy.Rule
 	27, // 31: nitella.proxy.ListRulesResponse.rules:type_name -> nitella.proxy.Rule
 	24, // 32: nitella.proxy.ListProxiesResponse.proxies:type_name -> nitella.proxy.ProxyStatus
-	3,  // 33: nitella.proxy.ConnectionEvent.event_type:type_name -> nitella.proxy.EventType
-	61, // 34: nitella.proxy.ConnectionEvent.action_taken:type_name -> nitella.ActionType
-	60, // 35: nitella.proxy.ConnectionEvent.geo:type_name -> nitella.GeoInfo
-	66, // 36: nitella.proxy.ActiveConnection.start_time:type_name -> google.protobuf.Timestamp
-	60, // 37: nitella.proxy.ActiveConnection.geo:type_name -> nitella.GeoInfo
-	43, // 38: nitella.proxy.GetActiveConnectionsResponse.connections:type_name -> nitella.proxy.ActiveConnection
-	66, // 39: nitella.proxy.IPStatsResult.first_seen:type_name -> google.protobuf.Timestamp
-	66, // 40: nitella.proxy.IPStatsResult.last_seen:type_name -> google.protobuf.Timestamp
-	51, // 41: nitella.proxy.GetIPStatsResponse.stats:type_name -> nitella.proxy.IPStatsResult
-	54, // 42: nitella.proxy.GetGeoStatsResponse.stats:type_name -> nitella.proxy.GeoStatsResult
-	67, // 43: nitella.proxy.ResolveApprovalRequest.action:type_name -> nitella.ApprovalActionType
-	68, // 44: nitella.proxy.ResolveApprovalRequest.duration:type_name -> nitella.ApprovalDuration
-	11, // 45: nitella.proxy.ProxyControlService.CreateProxy:input_type -> nitella.proxy.CreateProxyRequest
-	14, // 46: nitella.proxy.ProxyControlService.DisableProxy:input_type -> nitella.proxy.DisableProxyRequest
-	16, // 47: nitella.proxy.ProxyControlService.EnableProxy:input_type -> nitella.proxy.EnableProxyRequest
-	18, // 48: nitella.proxy.ProxyControlService.DeleteProxy:input_type -> nitella.proxy.DeleteProxyRequest
-	20, // 49: nitella.proxy.ProxyControlService.UpdateProxy:input_type -> nitella.proxy.UpdateProxyRequest
-	69, // 50: nitella.proxy.ProxyControlService.RestartListeners:input_type -> google.protobuf.Empty
-	23, // 51: nitella.proxy.ProxyControlService.GetStatus:input_type -> nitella.proxy.GetStatusRequest
-	25, // 52: nitella.proxy.ProxyControlService.ReloadRules:input_type -> nitella.proxy.ReloadRulesRequest
-	31, // 53: nitella.proxy.ProxyControlService.AddRule:input_type -> nitella.proxy.AddRuleRequest
-	32, // 54: nitella.proxy.ProxyControlService.RemoveRule:input_type -> nitella.proxy.RemoveRuleRequest
-	33, // 55: nitella.proxy.ProxyControlService.ListRules:input_type -> nitella.proxy.ListRulesRequest
-	35, // 56: nitella.proxy.ProxyControlService.ListProxies:input_type -> nitella.proxy.ListProxiesRequest
-	37, // 57: nitella.proxy.ProxyControlService.BlockIP:input_type -> nitella.proxy.BlockIPRequest
-	38, // 58: nitella.proxy.ProxyControlService.AllowIP:input_type -> nitella.proxy.AllowIPRequest
-	39, // 59: nitella.proxy.ProxyControlService.StreamConnections:input_type -> nitella.proxy.StreamConnectionsRequest
-	41, // 60: nitella.proxy.ProxyControlService.StreamMetrics:input_type -> nitella.proxy.StreamMetricsRequest
-	44, // 61: nitella.proxy.ProxyControlService.GetActiveConnections:input_type -> nitella.proxy.GetActiveConnectionsRequest
-	46, // 62: nitella.proxy.ProxyControlService.CloseConnection:input_type -> nitella.proxy.CloseConnectionRequest
-	48, // 63: nitella.proxy.ProxyControlService.CloseAllConnections:input_type -> nitella.proxy.CloseAllConnectionsRequest
-	5,  // 64: nitella.proxy.ProxyControlService.ConfigureGeoIP:input_type -> nitella.proxy.ConfigureGeoIPRequest
-	7,  // 65: nitella.proxy.ProxyControlService.LookupIP:input_type -> nitella.proxy.LookupIPRequest
-	9,  // 66: nitella.proxy.ProxyControlService.GetGeoIPStatus:input_type -> nitella.proxy.GetGeoIPStatusRequest
-	13, // 67: nitella.proxy.ProxyControlService.CreateProxy:output_type -> nitella.proxy.CreateProxyResponse
-	15, // 68: nitella.proxy.ProxyControlService.DisableProxy:output_type -> nitella.proxy.DisableProxyResponse
-	17, // 69: nitella.proxy.ProxyControlService.EnableProxy:output_type -> nitella.proxy.EnableProxyResponse
-	19, // 70: nitella.proxy.ProxyControlService.DeleteProxy:output_type -> nitella.proxy.DeleteProxyResponse
-	21, // 71: nitella.proxy.ProxyControlService.UpdateProxy:output_type -> nitella.proxy.UpdateProxyResponse
-	22, // 72: nitella.proxy.ProxyControlService.RestartListeners:output_type -> nitella.proxy.RestartListenersResponse
-	24, // 73: nitella.proxy.ProxyControlService.GetStatus:output_type -> nitella.proxy.ProxyStatus
-	26, // 74: nitella.proxy.ProxyControlService.ReloadRules:output_type -> nitella.proxy.ReloadRulesResponse
-	27, // 75: nitella.proxy.ProxyControlService.AddRule:output_type -> nitella.proxy.Rule
-	69, // 76: nitella.proxy.ProxyControlService.RemoveRule:output_type -> google.protobuf.Empty
-	34, // 77: nitella.proxy.ProxyControlService.ListRules:output_type -> nitella.proxy.ListRulesResponse
-	36, // 78: nitella.proxy.ProxyControlService.ListProxies:output_type -> nitella.proxy.ListProxiesResponse
-	69, // 79: nitella.proxy.ProxyControlService.BlockIP:output_type -> google.protobuf.Empty
-	69, // 80: nitella.proxy.ProxyControlService.AllowIP:output_type -> google.protobuf.Empty
-	40, // 81: nitella.proxy.ProxyControlService.StreamConnections:output_type -> nitella.proxy.ConnectionEvent
-	42, // 82: nitella.proxy.ProxyControlService.StreamMetrics:output_type -> nitella.proxy.MetricsSample
-	45, // 83: nitella.proxy.ProxyControlService.GetActiveConnections:output_type -> nitella.proxy.GetActiveConnectionsResponse
-	47, // 84: nitella.proxy.ProxyControlService.CloseConnection:output_type -> nitella.proxy.CloseConnectionResponse
-	49, // 85: nitella.proxy.ProxyControlService.CloseAllConnections:output_type -> nitella.proxy.CloseAllConnectionsResponse
-	6,  // 86: nitella.proxy.ProxyControlService.ConfigureGeoIP:output_type -> nitella.proxy.ConfigureGeoIPResponse
-	8,  // 87: nitella.proxy.ProxyControlService.LookupIP:output_type -> nitella.proxy.LookupIPResponse
-	10, // 88: nitella.proxy.ProxyControlService.GetGeoIPStatus:output_type -> nitella.proxy.GetGeoIPStatusResponse
-	67, // [67:89] is the sub-list for method output_type
-	45, // [45:67] is the sub-list for method input_type
-	45, // [45:45] is the sub-list for extension type_name
-	45, // [45:45] is the sub-list for extension extendee
-	0,  // [0:45] is the sub-list for field type_name
+	71, // 33: nitella.proxy.GlobalRule.action:type_name -> nitella.ActionType
+	76, // 34: nitella.proxy.GlobalRule.expires_at:type_name -> google.protobuf.Timestamp
+	76, // 35: nitella.proxy.GlobalRule.created_at:type_name -> google.protobuf.Timestamp
+	39, // 36: nitella.proxy.ListGlobalRulesResponse.rules:type_name -> nitella.proxy.GlobalRule
+	3,  // 37: nitella.proxy.ConnectionEvent.event_type:type_name -> nitella.proxy.EventType
+	71, // 38: nitella.proxy.ConnectionEvent.action_taken:type_name -> nitella.ActionType
+	70, // 39: nitella.proxy.ConnectionEvent.geo:type_name -> nitella.GeoInfo
+	76, // 40: nitella.proxy.ActiveConnection.start_time:type_name -> google.protobuf.Timestamp
+	70, // 41: nitella.proxy.ActiveConnection.geo:type_name -> nitella.GeoInfo
+	48, // 42: nitella.proxy.GetActiveConnectionsResponse.connections:type_name -> nitella.proxy.ActiveConnection
+	76, // 43: nitella.proxy.IPStatsResult.first_seen:type_name -> google.protobuf.Timestamp
+	76, // 44: nitella.proxy.IPStatsResult.last_seen:type_name -> google.protobuf.Timestamp
+	56, // 45: nitella.proxy.GetIPStatsResponse.stats:type_name -> nitella.proxy.IPStatsResult
+	59, // 46: nitella.proxy.GetGeoStatsResponse.stats:type_name -> nitella.proxy.GeoStatsResult
+	77, // 47: nitella.proxy.ResolveApprovalRequest.action:type_name -> nitella.ApprovalActionType
+	76, // 48: nitella.proxy.ActiveApproval.created_at:type_name -> google.protobuf.Timestamp
+	76, // 49: nitella.proxy.ActiveApproval.expires_at:type_name -> google.protobuf.Timestamp
+	65, // 50: nitella.proxy.ListActiveApprovalsResponse.approvals:type_name -> nitella.proxy.ActiveApproval
+	11, // 51: nitella.proxy.ProxyControlService.CreateProxy:input_type -> nitella.proxy.CreateProxyRequest
+	14, // 52: nitella.proxy.ProxyControlService.DisableProxy:input_type -> nitella.proxy.DisableProxyRequest
+	16, // 53: nitella.proxy.ProxyControlService.EnableProxy:input_type -> nitella.proxy.EnableProxyRequest
+	18, // 54: nitella.proxy.ProxyControlService.DeleteProxy:input_type -> nitella.proxy.DeleteProxyRequest
+	20, // 55: nitella.proxy.ProxyControlService.UpdateProxy:input_type -> nitella.proxy.UpdateProxyRequest
+	78, // 56: nitella.proxy.ProxyControlService.RestartListeners:input_type -> google.protobuf.Empty
+	23, // 57: nitella.proxy.ProxyControlService.GetStatus:input_type -> nitella.proxy.GetStatusRequest
+	25, // 58: nitella.proxy.ProxyControlService.ReloadRules:input_type -> nitella.proxy.ReloadRulesRequest
+	31, // 59: nitella.proxy.ProxyControlService.AddRule:input_type -> nitella.proxy.AddRuleRequest
+	32, // 60: nitella.proxy.ProxyControlService.RemoveRule:input_type -> nitella.proxy.RemoveRuleRequest
+	33, // 61: nitella.proxy.ProxyControlService.ListRules:input_type -> nitella.proxy.ListRulesRequest
+	35, // 62: nitella.proxy.ProxyControlService.ListProxies:input_type -> nitella.proxy.ListProxiesRequest
+	37, // 63: nitella.proxy.ProxyControlService.BlockIP:input_type -> nitella.proxy.BlockIPRequest
+	38, // 64: nitella.proxy.ProxyControlService.AllowIP:input_type -> nitella.proxy.AllowIPRequest
+	40, // 65: nitella.proxy.ProxyControlService.ListGlobalRules:input_type -> nitella.proxy.ListGlobalRulesRequest
+	42, // 66: nitella.proxy.ProxyControlService.RemoveGlobalRule:input_type -> nitella.proxy.RemoveGlobalRuleRequest
+	44, // 67: nitella.proxy.ProxyControlService.StreamConnections:input_type -> nitella.proxy.StreamConnectionsRequest
+	46, // 68: nitella.proxy.ProxyControlService.StreamMetrics:input_type -> nitella.proxy.StreamMetricsRequest
+	49, // 69: nitella.proxy.ProxyControlService.GetActiveConnections:input_type -> nitella.proxy.GetActiveConnectionsRequest
+	51, // 70: nitella.proxy.ProxyControlService.CloseConnection:input_type -> nitella.proxy.CloseConnectionRequest
+	53, // 71: nitella.proxy.ProxyControlService.CloseAllConnections:input_type -> nitella.proxy.CloseAllConnectionsRequest
+	5,  // 72: nitella.proxy.ProxyControlService.ConfigureGeoIP:input_type -> nitella.proxy.ConfigureGeoIPRequest
+	7,  // 73: nitella.proxy.ProxyControlService.LookupIP:input_type -> nitella.proxy.LookupIPRequest
+	9,  // 74: nitella.proxy.ProxyControlService.GetGeoIPStatus:input_type -> nitella.proxy.GetGeoIPStatusRequest
+	66, // 75: nitella.proxy.ProxyControlService.ListActiveApprovals:input_type -> nitella.proxy.ListActiveApprovalsRequest
+	68, // 76: nitella.proxy.ProxyControlService.CancelApproval:input_type -> nitella.proxy.CancelApprovalRequest
+	63, // 77: nitella.proxy.ProxyControlService.ResolveApproval:input_type -> nitella.proxy.ResolveApprovalRequest
+	13, // 78: nitella.proxy.ProxyControlService.CreateProxy:output_type -> nitella.proxy.CreateProxyResponse
+	15, // 79: nitella.proxy.ProxyControlService.DisableProxy:output_type -> nitella.proxy.DisableProxyResponse
+	17, // 80: nitella.proxy.ProxyControlService.EnableProxy:output_type -> nitella.proxy.EnableProxyResponse
+	19, // 81: nitella.proxy.ProxyControlService.DeleteProxy:output_type -> nitella.proxy.DeleteProxyResponse
+	21, // 82: nitella.proxy.ProxyControlService.UpdateProxy:output_type -> nitella.proxy.UpdateProxyResponse
+	22, // 83: nitella.proxy.ProxyControlService.RestartListeners:output_type -> nitella.proxy.RestartListenersResponse
+	24, // 84: nitella.proxy.ProxyControlService.GetStatus:output_type -> nitella.proxy.ProxyStatus
+	26, // 85: nitella.proxy.ProxyControlService.ReloadRules:output_type -> nitella.proxy.ReloadRulesResponse
+	27, // 86: nitella.proxy.ProxyControlService.AddRule:output_type -> nitella.proxy.Rule
+	78, // 87: nitella.proxy.ProxyControlService.RemoveRule:output_type -> google.protobuf.Empty
+	34, // 88: nitella.proxy.ProxyControlService.ListRules:output_type -> nitella.proxy.ListRulesResponse
+	36, // 89: nitella.proxy.ProxyControlService.ListProxies:output_type -> nitella.proxy.ListProxiesResponse
+	78, // 90: nitella.proxy.ProxyControlService.BlockIP:output_type -> google.protobuf.Empty
+	78, // 91: nitella.proxy.ProxyControlService.AllowIP:output_type -> google.protobuf.Empty
+	41, // 92: nitella.proxy.ProxyControlService.ListGlobalRules:output_type -> nitella.proxy.ListGlobalRulesResponse
+	43, // 93: nitella.proxy.ProxyControlService.RemoveGlobalRule:output_type -> nitella.proxy.RemoveGlobalRuleResponse
+	45, // 94: nitella.proxy.ProxyControlService.StreamConnections:output_type -> nitella.proxy.ConnectionEvent
+	47, // 95: nitella.proxy.ProxyControlService.StreamMetrics:output_type -> nitella.proxy.MetricsSample
+	50, // 96: nitella.proxy.ProxyControlService.GetActiveConnections:output_type -> nitella.proxy.GetActiveConnectionsResponse
+	52, // 97: nitella.proxy.ProxyControlService.CloseConnection:output_type -> nitella.proxy.CloseConnectionResponse
+	54, // 98: nitella.proxy.ProxyControlService.CloseAllConnections:output_type -> nitella.proxy.CloseAllConnectionsResponse
+	6,  // 99: nitella.proxy.ProxyControlService.ConfigureGeoIP:output_type -> nitella.proxy.ConfigureGeoIPResponse
+	8,  // 100: nitella.proxy.ProxyControlService.LookupIP:output_type -> nitella.proxy.LookupIPResponse
+	10, // 101: nitella.proxy.ProxyControlService.GetGeoIPStatus:output_type -> nitella.proxy.GetGeoIPStatusResponse
+	67, // 102: nitella.proxy.ProxyControlService.ListActiveApprovals:output_type -> nitella.proxy.ListActiveApprovalsResponse
+	69, // 103: nitella.proxy.ProxyControlService.CancelApproval:output_type -> nitella.proxy.CancelApprovalResponse
+	64, // 104: nitella.proxy.ProxyControlService.ResolveApproval:output_type -> nitella.proxy.ResolveApprovalResponse
+	78, // [78:105] is the sub-list for method output_type
+	51, // [51:78] is the sub-list for method input_type
+	51, // [51:51] is the sub-list for extension type_name
+	51, // [51:51] is the sub-list for extension extendee
+	0,  // [0:51] is the sub-list for field type_name
 }
 
 func init() { file_proxy_proxy_proto_init() }
@@ -4486,7 +5198,7 @@ func file_proxy_proxy_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_proxy_proxy_proto_rawDesc), len(file_proxy_proxy_proto_rawDesc)),
 			NumEnums:      5,
-			NumMessages:   55,
+			NumMessages:   65,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

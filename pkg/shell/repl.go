@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"strings"
+	"sync"
 	"time"
 	"unicode"
 
@@ -25,6 +26,14 @@ type REPL struct {
 	history    []string
 	historyIdx int
 	lastCtrlC  time.Time
+
+	// For notification support
+	mu          sync.Mutex
+	currentLine []rune
+	currentPos  int
+	inRawMode   bool
+	termWidth   int // terminal width for wrapping calculation
+	fd          int // file descriptor for terminal
 }
 
 // NewREPL creates a new REPL with the given prompt and completion provider.
@@ -39,6 +48,24 @@ func NewREPL(prompt string, completion CompletionProvider) *REPL {
 
 // errCtrlCExit is returned when user double-presses Ctrl+C
 var errCtrlCExit = fmt.Errorf("ctrl-c exit")
+
+// activeREPL holds the currently running REPL instance for notifications
+var activeREPL *REPL
+var activeREPLMu sync.Mutex
+
+// NotifyActive sends a notification to the active REPL if one is running.
+// Safe to call from any goroutine. Returns false if no REPL is active.
+func NotifyActive(msg string) bool {
+	activeREPLMu.Lock()
+	repl := activeREPL
+	activeREPLMu.Unlock()
+
+	if repl == nil {
+		return false
+	}
+	repl.Notify(msg)
+	return true
+}
 
 // Run starts the REPL loop, calling handler for each command.
 func (r *REPL) Run(handler func(string) error) {
@@ -67,7 +94,29 @@ func (r *REPL) Run(handler func(string) error) {
 		fmt.Printf("Error entering raw mode: %v\n", err)
 		return
 	}
-	defer term.Restore(fd, oldState)
+	defer func() {
+		activeREPLMu.Lock()
+		activeREPL = nil
+		activeREPLMu.Unlock()
+
+		r.mu.Lock()
+		r.inRawMode = false
+		r.mu.Unlock()
+		term.Restore(fd, oldState)
+	}()
+
+	r.mu.Lock()
+	r.inRawMode = true
+	r.fd = fd
+	r.termWidth = 80 // default
+	if w, _, err := term.GetSize(fd); err == nil && w > 0 {
+		r.termWidth = w
+	}
+	r.mu.Unlock()
+
+	activeREPLMu.Lock()
+	activeREPL = r
+	activeREPLMu.Unlock()
 
 	for {
 		line, err := r.readLine()
@@ -362,12 +411,126 @@ func (r *REPL) findWordEnd(line []rune, pos int) int {
 
 // printPrompt clears line and redraws prompt with cursor at correct position
 func (r *REPL) printPrompt(line []rune, pos int) {
-	// Move cursor to start, clear line, print prompt + line, position cursor
-	fmt.Printf("\r\x1b[K%s%s", r.Prompt, string(line))
+	r.mu.Lock()
+	r.currentLine = line
+	r.currentPos = pos
+	termWidth := r.termWidth
+	r.mu.Unlock()
+
+	// Calculate rows occupied by previous content to clear properly
+	promptWidth := displayWidth(r.Prompt)
+	lineWidth := displayWidth(string(line))
+	totalWidth := promptWidth + lineWidth
+	rows := (totalWidth + termWidth - 1) / termWidth
+	if rows < 1 {
+		rows = 1
+	}
+
+	// Move to start and clear all rows used by input
+	fmt.Print("\r")
+	if rows > 1 {
+		fmt.Printf("\x1b[%dA", rows-1)
+	}
+	fmt.Print("\x1b[J")
+
+	// Print prompt + line
+	fmt.Printf("%s%s", r.Prompt, string(line))
+
 	// Move cursor to correct position
 	if pos < len(line) {
-		fmt.Printf("\x1b[%dD", len(line)-pos)
+		charsAfterCursor := displayWidth(string(line[pos:]))
+		if charsAfterCursor > 0 {
+			fmt.Printf("\x1b[%dD", charsAfterCursor)
+		}
 	}
+}
+
+// Notify prints a message above the current input line without corrupting user input.
+// Safe to call from any goroutine. The message will appear above the prompt,
+// and the prompt with current input will be redrawn below.
+func (r *REPL) Notify(msg string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	if !r.inRawMode {
+		// Not in raw mode, just print normally
+		fmt.Println(msg)
+		return
+	}
+
+	// Update terminal width in case it changed
+	if w, _, err := term.GetSize(r.fd); err == nil && w > 0 {
+		r.termWidth = w
+	}
+
+	// Calculate how many terminal rows the current prompt+input occupies
+	promptLen := displayWidth(r.Prompt)
+	inputLen := displayWidth(string(r.currentLine))
+	totalLen := promptLen + inputLen
+	rows := (totalLen + r.termWidth - 1) / r.termWidth
+	if rows < 1 {
+		rows = 1
+	}
+
+	// Move cursor to start of input area and clear all rows
+	// First, move to column 0
+	fmt.Print("\r")
+	// Move up to the first row of input (if wrapped)
+	if rows > 1 {
+		fmt.Printf("\x1b[%dA", rows-1)
+	}
+	// Clear from cursor to end of screen
+	fmt.Print("\x1b[J")
+
+	// Print notification message (handle multi-line messages)
+	for _, line := range strings.Split(msg, "\n") {
+		fmt.Printf("%s\r\n", line)
+	}
+
+	// Redraw prompt with current input
+	fmt.Printf("%s%s", r.Prompt, string(r.currentLine))
+
+	// Move cursor to correct position within input
+	if r.currentPos < len(r.currentLine) {
+		charsAfterCursor := displayWidth(string(r.currentLine[r.currentPos:]))
+		if charsAfterCursor > 0 {
+			fmt.Printf("\x1b[%dD", charsAfterCursor)
+		}
+	}
+}
+
+// displayWidth returns the display width of a string, accounting for wide characters.
+// This is a simplified version - for full Unicode support, use a library like go-runewidth.
+func displayWidth(s string) int {
+	width := 0
+	inEscape := false
+	for _, r := range s {
+		if inEscape {
+			if (r >= 'A' && r <= 'Z') || (r >= 'a' && r <= 'z') {
+				inEscape = false
+			}
+			continue
+		}
+		if r == '\x1b' {
+			inEscape = true
+			continue
+		}
+		// Approximate: CJK and emoji are typically double-width
+		if r >= 0x1100 && (r <= 0x115F || // Hangul Jamo
+			(r >= 0x2E80 && r <= 0x9FFF) || // CJK
+			(r >= 0xAC00 && r <= 0xD7A3) || // Hangul Syllables
+			(r >= 0xF900 && r <= 0xFAFF) || // CJK Compatibility
+			(r >= 0xFE10 && r <= 0xFE1F) || // Vertical forms
+			(r >= 0xFE30 && r <= 0xFE6F) || // CJK Compatibility Forms
+			(r >= 0xFF00 && r <= 0xFF60) || // Fullwidth Forms
+			(r >= 0xFFE0 && r <= 0xFFE6) || // Fullwidth Forms
+			(r >= 0x1F300 && r <= 0x1F9FF)) { // Emoji
+			width += 2
+		} else if r >= 0x20 { // Printable
+			width++
+		}
+	}
+	return width
 }
 
 // autoComplete handles tab completion

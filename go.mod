@@ -10,7 +10,7 @@ require (
 	github.com/golang-jwt/jwt/v5 v5.3.1
 	github.com/golang/protobuf v1.5.4
 	github.com/google/uuid v1.6.0
-	github.com/ivere27/synurang v0.1.8
+	github.com/ivere27/synurang v0.2.0
 	github.com/lib/pq v1.11.1
 	github.com/mattn/go-sqlite3 v1.14.33
 	github.com/mdp/qrterminal/v3 v3.2.1

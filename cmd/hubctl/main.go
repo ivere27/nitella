@@ -20,7 +20,6 @@ import (
 	"github.com/spf13/cobra"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
-	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
@@ -32,7 +31,6 @@ var (
 	tlsCert   string
 	tlsKey    string
 	tlsCA     string
-	insecureMode bool
 	outputJSON   bool
 
 	// Config file path
@@ -63,8 +61,7 @@ func main() {
 	rootCmd.PersistentFlags().StringVar(&adminKey, "admin-key", "", "Admin authentication key/token")
 	rootCmd.PersistentFlags().StringVar(&tlsCert, "tls-cert", "", "Path to TLS certificate")
 	rootCmd.PersistentFlags().StringVar(&tlsKey, "tls-key", "", "Path to TLS private key")
-	rootCmd.PersistentFlags().StringVar(&tlsCA, "tls-ca", "", "Path to CA certificate")
-	rootCmd.PersistentFlags().BoolVar(&insecureMode, "insecure", false, "Skip TLS verification")
+	rootCmd.PersistentFlags().StringVar(&tlsCA, "tls-ca", "", "Path to CA certificate (required for self-signed Hub CA)")
 	rootCmd.PersistentFlags().BoolVar(&outputJSON, "json", false, "Output in JSON format")
 	rootCmd.PersistentFlags().StringVar(&configPath, "config", "", "Config file path")
 
@@ -143,17 +140,29 @@ func connectHub() (*grpc.ClientConn, error) {
 
 	var opts []grpc.DialOption
 
-	// Configure TLS
-	if insecureMode {
-		opts = append(opts, grpc.WithTransportCredentials(insecure.NewCredentials()))
-	} else if tlsCert != "" && tlsKey != "" {
+	// Configure TLS - Hub always uses TLS only
+	if tlsCert != "" && tlsKey != "" {
+		// mTLS with client certificate
 		tlsConfig, err := loadTLSCredentials()
 		if err != nil {
 			return nil, fmt.Errorf("failed to load TLS credentials: %w", err)
 		}
 		opts = append(opts, grpc.WithTransportCredentials(credentials.NewTLS(tlsConfig)))
+	} else if tlsCA != "" {
+		// Custom CA (for self-signed Hub CA)
+		caPEM, err := os.ReadFile(tlsCA)
+		if err != nil {
+			return nil, fmt.Errorf("failed to read CA certificate: %w", err)
+		}
+		caPool := x509.NewCertPool()
+		if !caPool.AppendCertsFromPEM(caPEM) {
+			return nil, fmt.Errorf("failed to parse CA certificate")
+		}
+		opts = append(opts, grpc.WithTransportCredentials(credentials.NewTLS(&tls.Config{
+			RootCAs: caPool,
+		})))
 	} else {
-		// Default to system CA
+		// Default: TLS with system CA pool
 		opts = append(opts, grpc.WithTransportCredentials(credentials.NewTLS(&tls.Config{})))
 	}
 

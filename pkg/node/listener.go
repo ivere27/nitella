@@ -1,8 +1,10 @@
 package node
 
 import (
+	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net"
@@ -17,6 +19,17 @@ import (
 	"github.com/ivere27/nitella/pkg/log"
 	"github.com/ivere27/nitella/pkg/node/stats"
 )
+
+// ApprovalRequestTimeout is the maximum time to wait for an approval decision.
+// Set to 2 minutes to allow time for mobile approval via FCM push notification.
+const ApprovalRequestTimeout = 2 * time.Minute
+
+// TarpitHistoryMaxAge is how long to keep tarpit history entries before cleanup.
+// Entries older than this are removed to prevent memory leak from port scanners.
+const TarpitHistoryMaxAge = 1 * time.Hour
+
+// TarpitCleanupInterval is how often to run tarpit history cleanup.
+const TarpitCleanupInterval = 5 * time.Minute
 
 // closeWrite attempts to close the write side of a connection.
 // Handles both plain TCP and TLS connections.
@@ -86,6 +99,15 @@ type EmbeddedListener struct {
 	geoIP *GeoIPService
 	stats *stats.StatsService
 
+	// Approval system
+	approval    *ApprovalManager
+	globalRules *GlobalRulesStore
+	nodeID      string // For approval requests
+
+	// Shutdown context for cancelling long-running operations
+	stopCtx    context.Context
+	stopCancel context.CancelFunc
+
 	// Tarpit persistence
 	tarpitHistory map[string][]time.Time // IP -> List of recent connection times
 	tarpitMux     sync.Mutex
@@ -93,6 +115,9 @@ type EmbeddedListener struct {
 	// Active connections tracking
 	conns    map[string]*ConnectionMetadata // ConnID -> Metadata
 	connsMux sync.RWMutex
+
+	// Cleanup manager for periodic maintenance tasks
+	cleanup *CleanupManager
 }
 
 func (l *EmbeddedListener) SetFallback(action common.FallbackAction, mock common.MockPreset) {
@@ -137,6 +162,21 @@ func (r *CountingReader) Read(p []byte) (n int, err error) {
 // Stats recording is optional and non-blocking.
 func (p *EmbeddedListener) SetStatsService(s *stats.StatsService) {
 	p.stats = s
+}
+
+// SetApprovalManager sets the approval manager for real-time approval workflow
+func (p *EmbeddedListener) SetApprovalManager(am *ApprovalManager) {
+	p.approval = am
+}
+
+// SetGlobalRules sets the global rules store for cross-proxy rules
+func (p *EmbeddedListener) SetGlobalRules(gr *GlobalRulesStore) {
+	p.globalRules = gr
+}
+
+// SetNodeID sets the node ID for approval requests
+func (p *EmbeddedListener) SetNodeID(nodeID string) {
+	p.nodeID = nodeID
 }
 
 func NewEmbeddedListener(id, name, listenAddr, defaultBackend string, defaultAction common.ActionType, defaultMock common.MockPreset, certPEM, keyPEM, caPEM string, clientAuth pb.ClientAuthType, geoIP *GeoIPService) *EmbeddedListener {
@@ -199,6 +239,9 @@ func (p *EmbeddedListener) broadcast(event *pb.ConnectionEvent) {
 }
 
 func (p *EmbeddedListener) Start() error {
+	// Initialize shutdown context for cancelling long-running operations
+	p.stopCtx, p.stopCancel = context.WithCancel(context.Background())
+
 	log.Tracef("[TRACE] EmbeddedListener.Start: Opening listener on %s", p.ListenAddr)
 	ln, err := net.Listen("tcp", p.ListenAddr)
 	if err != nil {
@@ -260,6 +303,11 @@ func (p *EmbeddedListener) Start() error {
 	p.listener = ln
 	p.ListenAddr = ln.Addr().String()
 
+	// Initialize cleanup manager for periodic maintenance tasks
+	p.cleanup = NewCleanupManager(1 * time.Second)
+	p.cleanup.Register("tarpit-history", TarpitCleanupInterval, p.cleanupTarpitHistory)
+	p.cleanup.Start()
+
 	log.Tracef("[TRACE] EmbeddedListener.Start: Starting accept loop goroutine...")
 	p.wg.Add(1)
 	go p.acceptLoop()
@@ -269,6 +317,11 @@ func (p *EmbeddedListener) Start() error {
 }
 
 func (p *EmbeddedListener) Stop() error {
+	// Cancel the shutdown context to interrupt long-running operations
+	if p.stopCancel != nil {
+		p.stopCancel()
+	}
+
 	close(p.quit)
 	if p.listener != nil {
 		p.listener.Close()
@@ -292,14 +345,61 @@ func (p *EmbeddedListener) Stop() error {
 	p.ruleLimiters = make(map[string]*RateLimiter) // Clear
 	p.rulesMux.Unlock()
 
+	// Stop cleanup manager
+	if p.cleanup != nil {
+		p.cleanup.Stop()
+	}
+
 	// Clear tarpit history to free memory
 	p.tarpitMux.Lock()
 	p.tarpitHistory = make(map[string][]time.Time)
 	p.tarpitMux.Unlock()
 
-	p.wg.Wait()
+	// Wait for goroutines with timeout to prevent hanging during shutdown
+	done := make(chan struct{})
+	go func() {
+		p.wg.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+		// All goroutines finished cleanly
+	case <-time.After(5 * time.Second):
+		log.Printf("[WARN] EmbeddedListener.Stop: Timeout waiting for goroutines, continuing shutdown")
+	}
 	log.Printf("[INFO] EmbeddedListener.Stop: Stopped listener on %s", p.ListenAddr)
 	return nil
+}
+
+// cleanupTarpitHistory removes stale tarpit entries to prevent memory leak.
+// Called periodically by CleanupManager.
+func (p *EmbeddedListener) cleanupTarpitHistory() {
+	p.tarpitMux.Lock()
+	defer p.tarpitMux.Unlock()
+
+	now := time.Now()
+	removed := 0
+
+	for ip, times := range p.tarpitHistory {
+		// Filter out entries older than TarpitHistoryMaxAge
+		valid := make([]time.Time, 0, len(times))
+		for _, t := range times {
+			if now.Sub(t) < TarpitHistoryMaxAge {
+				valid = append(valid, t)
+			}
+		}
+
+		if len(valid) == 0 {
+			delete(p.tarpitHistory, ip)
+			removed++
+		} else if len(valid) < len(times) {
+			p.tarpitHistory[ip] = valid
+		}
+	}
+
+	if removed > 0 {
+		log.Printf("[Cleanup] Removed %d stale tarpit history entries", removed)
+	}
 }
 
 func (p *EmbeddedListener) acceptLoop() {
@@ -313,7 +413,7 @@ func (p *EmbeddedListener) acceptLoop() {
 				return
 			default:
 				// Log error but continue
-				fmt.Printf("Accept error on %s: %v\n", p.ID, err)
+				log.Printf("Accept error on %s: %v", p.ID, err)
 				continue
 			}
 		}
@@ -447,6 +547,32 @@ func (p *EmbeddedListener) handleConn(conn net.Conn) {
 		Geo:        geoInfo,
 	})
 
+	// 0. Check Global Rules first (highest priority)
+	// Note: Global ALLOW only prevents blocking, it does NOT bypass REQUIRE_APPROVAL.
+	// This ensures human oversight is maintained for high-security scenarios.
+	globalAllowed := false
+	if p.globalRules != nil {
+		if matched, globalAction := p.globalRules.Check(sourceIP); matched {
+			if globalAction == common.ActionType_ACTION_TYPE_BLOCK {
+				p.broadcast(&pb.ConnectionEvent{
+					ConnId:      connID,
+					SourceIp:    sourceIP,
+					EventType:   pb.EventType_EVENT_TYPE_BLOCKED,
+					Timestamp:   time.Now().Unix(),
+					ActionTaken: common.ActionType_ACTION_TYPE_BLOCK,
+					Geo:         geoInfo,
+				})
+				log.Printf("Blocked by global rule: %s", sourceIP)
+				conn.Close()
+				return
+			} else if globalAction == common.ActionType_ACTION_TYPE_ALLOW {
+				// Global allow - prevents blocking but still respects REQUIRE_APPROVAL
+				log.Tracef("[TRACE] Global allow rule matched for %s (will override BLOCK, not REQUIRE_APPROVAL)", sourceIP)
+				globalAllowed = true
+			}
+		}
+	}
+
 	// 1. Check Rules
 	rule, limiter := p.evaluateRules(conn, geoInfo)
 
@@ -455,6 +581,8 @@ func (p *EmbeddedListener) handleConn(conn net.Conn) {
 
 	ruleId := "default"
 	backend := ""
+	var tlsSessionID string      // For approval cache tracking
+	var hasApprovalEntry bool    // Track if this conn has an approval cache entry
 	if rule != nil {
 		action = rule.Action
 		backend = rule.TargetBackend
@@ -468,7 +596,142 @@ func (p *EmbeddedListener) handleConn(conn net.Conn) {
 			},
 		}
 	}
-	_ = ruleId // suppress unused warning
+
+	// Apply global allow: overrides BLOCK but NOT REQUIRE_APPROVAL
+	// This ensures human oversight is maintained for high-security scenarios
+	if globalAllowed && action == common.ActionType_ACTION_TYPE_BLOCK {
+		log.Tracef("[TRACE] Global allow overriding BLOCK for %s", sourceIP)
+		action = common.ActionType_ACTION_TYPE_ALLOW
+	}
+
+	// 2. Handle REQUIRE_APPROVAL action
+	if action == common.ActionType_ACTION_TYPE_REQUIRE_APPROVAL {
+		if p.approval == nil {
+			// No approval manager configured - fall back to block
+			log.Printf("[WARN] Action REQUIRE_APPROVAL but no ApprovalManager configured - blocking")
+			action = common.ActionType_ACTION_TYPE_BLOCK
+		} else {
+			// Extract TLS session ID for binding (prevents replay attacks)
+			// Priority: TLSUnique -> connID
+			// - TLSUnique: Best option, cryptographically bound to TLS session
+			// - connID: Fallback when TLSUnique is empty (common in TLS 1.3 after first request)
+			// This prevents IP-based binding weakness (sharing approval across same IP).
+			isTLS := false
+			if tc, ok := conn.(*tls.Conn); ok {
+				isTLS = true
+				state := tc.ConnectionState()
+				if len(state.TLSUnique) > 0 {
+					tlsSessionID = fmt.Sprintf("%x", state.TLSUnique)
+				}
+			}
+
+			// If still empty AND it is a TLS connection (TLS 1.3), strictly bind to this specific connection
+			// to prevent IP-based binding weakness (sharing approval across same IP).
+			// For plain TCP (!isTLS), we allow empty ID to support IP-based caching (as session ID is impossible).
+			if tlsSessionID == "" && isTLS {
+				tlsSessionID = connID
+			}
+
+			// Check cache first
+			if found, allowed := p.approval.CheckCache(sourceIP, ruleId, tlsSessionID); found {
+				if allowed {
+					action = common.ActionType_ACTION_TYPE_ALLOW
+					// Track this connection under the approval with live byte counters
+					p.approval.SetConnID(sourceIP, ruleId, tlsSessionID, connID, &connBytesIn, &connBytesOut)
+					hasApprovalEntry = true
+				} else {
+					action = common.ActionType_ACTION_TYPE_BLOCK
+					p.approval.IncrementBlockedCount(sourceIP, ruleId, tlsSessionID)
+				}
+			} else {
+				// Cache miss - request approval using async pattern
+				// This allows immediate cleanup if the connection closes during approval wait
+				ctx, cancel := context.WithTimeout(p.stopCtx, ApprovalRequestTimeout)
+				defer cancel()
+
+				// Build approval request info
+				geoCountry, geoCity, geoISP := "", "", ""
+				if geoInfo != nil {
+					geoCountry = geoInfo.Country
+					geoCity = geoInfo.City
+					geoISP = geoInfo.Isp
+				}
+
+				info, err := json.Marshal(map[string]interface{}{
+					"source_ip":   sourceIP,
+					"destination": p.DefaultBackend,
+					"proxy_id":    p.ID,
+					"proxy_name":  p.Name,
+					"rule_id":     ruleId,
+					"geo_country": geoCountry,
+					"geo_city":    geoCity,
+					"geo_isp":     geoISP,
+				})
+				if err != nil {
+					log.Errorf("failed to marshal approval request info: %v", err)
+				}
+
+				meta := ApprovalRequestMeta{
+					ProxyID:    p.ID,
+					SourceIP:   sourceIP,
+					DestAddr:   p.DefaultBackend,
+					RuleID:     ruleId,
+					GeoCountry: geoCountry,
+					GeoCity:    geoCity,
+					GeoISP:     geoISP,
+				}
+
+				// Emit PENDING event
+				p.broadcast(&pb.ConnectionEvent{
+					ConnId:    connID,
+					SourceIp:  sourceIP,
+					EventType: pb.EventType_EVENT_TYPE_PENDING_APPROVAL,
+					Timestamp: time.Now().Unix(),
+					Geo:       geoInfo,
+				})
+
+				// Start approval request (non-blocking)
+				resultCh, err := p.approval.BeginApprovalRequest(connID, p.nodeID, string(info), meta)
+				if err != nil {
+					log.Printf("[WARN] Approval request rejected: %v - blocking", err)
+					action = common.ActionType_ACTION_TYPE_BLOCK
+				} else {
+					// Ensure cleanup on any exit path - this frees the pending slot immediately
+					// when the connection handler exits (including if connection closes)
+					defer p.approval.CancelApprovalRequest(connID)
+
+					// Wait for approval decision
+					// Protection against ghost requests:
+					// 1. Per-IP limit (DefaultMaxPendingPerIP=10) limits single-source attacks
+					// 2. Async pattern + defer ensures cleanup when connection handler exits
+					// 3. Timeout (ApprovalRequestTimeout) bounds maximum wait time
+					//
+					// Note: We can't reliably detect TCP RST without consuming data from
+					// the connection. Per-IP limits provide the primary DoS protection.
+					result, err := p.approval.WaitForApproval(ctx, connID, resultCh, nil)
+					if err != nil {
+						// Timeout or error - block
+						log.Printf("[WARN] Approval request failed: %v - blocking", err)
+						action = common.ActionType_ACTION_TYPE_BLOCK
+					} else if result.Allowed {
+						action = common.ActionType_ACTION_TYPE_ALLOW
+						// Cache the decision
+						if result.Duration > 0 {
+							p.approval.AddToCacheWithGeo(sourceIP, ruleId, p.ID, tlsSessionID, true, result.Duration, geoCountry, geoCity, geoISP)
+							p.approval.SetConnID(sourceIP, ruleId, tlsSessionID, connID, &connBytesIn, &connBytesOut)
+							hasApprovalEntry = true
+						}
+					} else {
+						action = common.ActionType_ACTION_TYPE_BLOCK
+						// Cache block decision too
+						if result.Duration > 0 {
+							p.approval.AddToCacheWithGeo(sourceIP, ruleId, p.ID, tlsSessionID, false, result.Duration, geoCountry, geoCity, geoISP)
+						}
+					}
+				}
+			}
+		}
+	}
 
 	// Helper for fallback logic
 	handleFallback := func(errReason string) {
@@ -492,7 +755,7 @@ func (p *EmbeddedListener) handleConn(conn net.Conn) {
 			}
 
 			if preset != common.MockPreset_MOCK_PRESET_UNSPECIFIED {
-				fmt.Printf("Fallback to Mock (%s): %s\n", errReason, preset)
+				log.Printf("Fallback to Mock (%s): %s", errReason, preset)
 				p.HandleMockConnection(conn, &pb.Rule{
 					Action:       common.ActionType_ACTION_TYPE_MOCK,
 					MockResponse: &pb.MockConfig{Preset: preset},
@@ -517,7 +780,7 @@ func (p *EmbeddedListener) handleConn(conn net.Conn) {
 		}
 
 		// Close (default)
-		fmt.Printf("Closing connection (%s)\n", errReason)
+		log.Printf("Closing connection (%s)", errReason)
 		conn.Close()
 	}
 
@@ -554,7 +817,7 @@ func (p *EmbeddedListener) handleConn(conn net.Conn) {
 		if geoInfo != nil {
 			geoCountry = geoInfo.GetCountry()
 		}
-		fmt.Printf("Blocked connection from %s (%s)\n", conn.RemoteAddr(), geoCountry)
+		log.Printf("Blocked connection from %s (%s)", conn.RemoteAddr(), geoCountry)
 
 		// Use Fallback Logic
 		handleFallback("block")
@@ -610,7 +873,7 @@ func (p *EmbeddedListener) handleConn(conn net.Conn) {
 	p.connsMux.Unlock()
 
 	if targetBackend == "" {
-		fmt.Printf("No backend for connection from %s\n", conn.RemoteAddr())
+		log.Printf("No backend for connection from %s", conn.RemoteAddr())
 		handleFallback("empty-backend")
 		return
 	}
@@ -639,7 +902,7 @@ func (p *EmbeddedListener) handleConn(conn net.Conn) {
 
 	backendConn, err := net.DialTimeout("tcp", targetBackend, 5*time.Second)
 	if err != nil {
-		fmt.Printf("Failed to dial backend %s: %v\n", targetBackend, err)
+		log.Printf("Failed to dial backend %s: %v", targetBackend, err)
 		handleFallback("dial-failed")
 		return
 	}
@@ -670,6 +933,14 @@ func (p *EmbeddedListener) handleConn(conn net.Conn) {
 	}()
 
 	wg.Wait()
+
+	// Update approval cache with final byte counts and remove connection tracking
+	if hasApprovalEntry && p.approval != nil {
+		p.approval.UpdateBytes(sourceIP, ruleId, tlsSessionID,
+			atomic.LoadInt64(&connBytesIn), atomic.LoadInt64(&connBytesOut))
+		// Remove this connection from tracking (keeps ConnIDs bounded to active connections)
+		p.approval.RemoveConnID(sourceIP, ruleId, tlsSessionID, connID)
+	}
 
 	// Record stats after connection completes (non-blocking)
 	if p.stats != nil {

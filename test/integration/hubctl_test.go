@@ -2,6 +2,8 @@ package integration
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -9,6 +11,9 @@ import (
 	"time"
 
 	hubpb "github.com/ivere27/nitella/pkg/api/hub"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials"
+
 )
 
 // ============================================================================
@@ -33,7 +38,7 @@ func TestHubCtl_UserManagement(t *testing.T) {
 	defer hub.stop()
 
 	// Create admin connection
-	adminConn := connectToHubInsecure(t, hub.grpcAddr)
+	adminConn := connectToHubAdmin(t, hub)
 	defer adminConn.Close()
 
 	adminClient := hubpb.NewAdminServiceClient(adminConn)
@@ -76,7 +81,7 @@ func TestHubCtl_NodeManagement(t *testing.T) {
 
 	// Setup CLI and register nodes
 	cliIdentity := generateCLIIdentity(t)
-	cliConn := connectToHubWithMTLS(t, hub.grpcAddr, cliIdentity)
+	cliConn := connectToHubWithMTLS(t, hub.grpcAddr, hub.hubCAPEM, cliIdentity)
 	defer cliConn.Close()
 
 	authClient := hubpb.NewAuthServiceClient(cliConn)
@@ -96,7 +101,7 @@ func TestHubCtl_NodeManagement(t *testing.T) {
 		csrPEM := generateCSR(t, nodeIdentity.privateKey, "admin-test-node")
 		certPEM := signCSR(t, csrPEM, cliIdentity)
 
-		nodeConn := connectToHubWithNodeCert(t, hub.grpcAddr, nodeIdentity.privateKey, certPEM, cliIdentity.rootCertPEM)
+		nodeConn := connectToHubWithNodeCert(t, hub.grpcAddr, nodeIdentity.privateKey, certPEM, cliIdentity.rootCertPEM, hub.hubCAPEM)
 		nodeClient := hubpb.NewNodeServiceClient(nodeConn)
 
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -112,7 +117,7 @@ func TestHubCtl_NodeManagement(t *testing.T) {
 	}
 
 	// Test admin node listing
-	adminConn := connectToHubInsecure(t, hub.grpcAddr)
+	adminConn := connectToHubAdmin(t, hub)
 	defer adminConn.Close()
 
 	adminClient := hubpb.NewAdminServiceClient(adminConn)
@@ -136,7 +141,7 @@ func TestHubCtl_InviteCodes(t *testing.T) {
 	hub := startHubServer(t)
 	defer hub.stop()
 
-	adminConn := connectToHubInsecure(t, hub.grpcAddr)
+	adminConn := connectToHubAdmin(t, hub)
 	defer adminConn.Close()
 
 	adminClient := hubpb.NewAdminServiceClient(adminConn)
@@ -177,7 +182,7 @@ func TestHubCtl_SystemStats(t *testing.T) {
 	hub := startHubServer(t)
 	defer hub.stop()
 
-	adminConn := connectToHubInsecure(t, hub.grpcAddr)
+	adminConn := connectToHubAdmin(t, hub)
 	defer adminConn.Close()
 
 	adminClient := hubpb.NewAdminServiceClient(adminConn)
@@ -203,7 +208,7 @@ func TestHubCtl_DatabaseStats(t *testing.T) {
 	hub := startHubServer(t)
 	defer hub.stop()
 
-	adminConn := connectToHubInsecure(t, hub.grpcAddr)
+	adminConn := connectToHubAdmin(t, hub)
 	defer adminConn.Close()
 
 	adminClient := hubpb.NewAdminServiceClient(adminConn)
@@ -229,7 +234,7 @@ func TestHubCtl_AuditLog(t *testing.T) {
 	hub := startHubServer(t)
 	defer hub.stop()
 
-	adminConn := connectToHubInsecure(t, hub.grpcAddr)
+	adminConn := connectToHubAdmin(t, hub)
 	defer adminConn.Close()
 
 	adminClient := hubpb.NewAdminServiceClient(adminConn)
@@ -258,7 +263,7 @@ func TestHubCtl_UserTierManagement(t *testing.T) {
 
 	// First register a user
 	cliIdentity := generateCLIIdentity(t)
-	cliConn := connectToHubWithMTLS(t, hub.grpcAddr, cliIdentity)
+	cliConn := connectToHubWithMTLS(t, hub.grpcAddr, hub.hubCAPEM, cliIdentity)
 	defer cliConn.Close()
 
 	authClient := hubpb.NewAuthServiceClient(cliConn)
@@ -273,7 +278,7 @@ func TestHubCtl_UserTierManagement(t *testing.T) {
 	}
 
 	// Admin changes user tier
-	adminConn := connectToHubInsecure(t, hub.grpcAddr)
+	adminConn := connectToHubAdmin(t, hub)
 	defer adminConn.Close()
 
 	adminClient := hubpb.NewAdminServiceClient(adminConn)
@@ -375,7 +380,7 @@ func TestHubCtl_BulkOperations(t *testing.T) {
 	userCount := 10
 	for i := 0; i < userCount; i++ {
 		cliIdentity := generateCLIIdentity(t)
-		cliConn := connectToHubWithMTLS(t, hub.grpcAddr, cliIdentity)
+		cliConn := connectToHubWithMTLS(t, hub.grpcAddr, hub.hubCAPEM, cliIdentity)
 
 		authClient := hubpb.NewAuthServiceClient(cliConn)
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -392,7 +397,7 @@ func TestHubCtl_BulkOperations(t *testing.T) {
 	}
 
 	// Admin lists all users
-	adminConn := connectToHubInsecure(t, hub.grpcAddr)
+	adminConn := connectToHubAdmin(t, hub)
 	defer adminConn.Close()
 
 	adminClient := hubpb.NewAdminServiceClient(adminConn)
@@ -415,4 +420,21 @@ func TestHubCtl_BulkOperations(t *testing.T) {
 	if err == nil {
 		t.Logf("After bulk: users=%d, nodes=%d", stats.TotalUsers, stats.TotalNodes)
 	}
+}
+
+func connectToHubAdmin(t *testing.T, hub *hubServer) *grpc.ClientConn {
+	t.Helper()
+	pool := x509.NewCertPool()
+	if !pool.AppendCertsFromPEM(hub.hubCAPEM) {
+		t.Fatal("Failed to append Hub CA")
+	}
+	tlsConfig := &tls.Config{
+		RootCAs:    pool,
+		MinVersion: tls.VersionTLS13,
+	}
+	conn, err := grpc.Dial(hub.grpcAddr, grpc.WithTransportCredentials(credentials.NewTLS(tlsConfig)))
+	if err != nil {
+		t.Fatalf("Failed to connect to Hub: %v", err)
+	}
+	return conn
 }

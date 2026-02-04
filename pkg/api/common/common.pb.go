@@ -25,10 +25,11 @@ const (
 type ActionType int32
 
 const (
-	ActionType_ACTION_TYPE_UNSPECIFIED ActionType = 0
-	ActionType_ACTION_TYPE_ALLOW       ActionType = 1
-	ActionType_ACTION_TYPE_BLOCK       ActionType = 2
-	ActionType_ACTION_TYPE_MOCK        ActionType = 3
+	ActionType_ACTION_TYPE_UNSPECIFIED      ActionType = 0
+	ActionType_ACTION_TYPE_ALLOW            ActionType = 1
+	ActionType_ACTION_TYPE_BLOCK            ActionType = 2
+	ActionType_ACTION_TYPE_MOCK             ActionType = 3
+	ActionType_ACTION_TYPE_REQUIRE_APPROVAL ActionType = 4 // Real-time user approval required
 )
 
 // Enum value maps for ActionType.
@@ -38,12 +39,14 @@ var (
 		1: "ACTION_TYPE_ALLOW",
 		2: "ACTION_TYPE_BLOCK",
 		3: "ACTION_TYPE_MOCK",
+		4: "ACTION_TYPE_REQUIRE_APPROVAL",
 	}
 	ActionType_value = map[string]int32{
-		"ACTION_TYPE_UNSPECIFIED": 0,
-		"ACTION_TYPE_ALLOW":       1,
-		"ACTION_TYPE_BLOCK":       2,
-		"ACTION_TYPE_MOCK":        3,
+		"ACTION_TYPE_UNSPECIFIED":      0,
+		"ACTION_TYPE_ALLOW":            1,
+		"ACTION_TYPE_BLOCK":            2,
+		"ACTION_TYPE_MOCK":             3,
+		"ACTION_TYPE_REQUIRE_APPROVAL": 4,
 	}
 )
 
@@ -449,65 +452,6 @@ func (PemLabel) EnumDescriptor() ([]byte, []int) {
 	return file_common_common_proto_rawDescGZIP(), []int{6}
 }
 
-// ApprovalDuration defines how long an approval decision lasts
-type ApprovalDuration int32
-
-const (
-	ApprovalDuration_APPROVAL_DURATION_UNSPECIFIED ApprovalDuration = 0
-	ApprovalDuration_APPROVAL_DURATION_ONCE        ApprovalDuration = 1 // Single connection only (no caching)
-	ApprovalDuration_APPROVAL_DURATION_1_MINUTE    ApprovalDuration = 2 // 60 seconds
-	ApprovalDuration_APPROVAL_DURATION_10_MINUTES  ApprovalDuration = 3 // 600 seconds
-	ApprovalDuration_APPROVAL_DURATION_1_HOUR      ApprovalDuration = 4 // 3600 seconds
-	ApprovalDuration_APPROVAL_DURATION_24_HOURS    ApprovalDuration = 5 // 86400 seconds
-)
-
-// Enum value maps for ApprovalDuration.
-var (
-	ApprovalDuration_name = map[int32]string{
-		0: "APPROVAL_DURATION_UNSPECIFIED",
-		1: "APPROVAL_DURATION_ONCE",
-		2: "APPROVAL_DURATION_1_MINUTE",
-		3: "APPROVAL_DURATION_10_MINUTES",
-		4: "APPROVAL_DURATION_1_HOUR",
-		5: "APPROVAL_DURATION_24_HOURS",
-	}
-	ApprovalDuration_value = map[string]int32{
-		"APPROVAL_DURATION_UNSPECIFIED": 0,
-		"APPROVAL_DURATION_ONCE":        1,
-		"APPROVAL_DURATION_1_MINUTE":    2,
-		"APPROVAL_DURATION_10_MINUTES":  3,
-		"APPROVAL_DURATION_1_HOUR":      4,
-		"APPROVAL_DURATION_24_HOURS":    5,
-	}
-)
-
-func (x ApprovalDuration) Enum() *ApprovalDuration {
-	p := new(ApprovalDuration)
-	*p = x
-	return p
-}
-
-func (x ApprovalDuration) String() string {
-	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
-}
-
-func (ApprovalDuration) Descriptor() protoreflect.EnumDescriptor {
-	return file_common_common_proto_enumTypes[7].Descriptor()
-}
-
-func (ApprovalDuration) Type() protoreflect.EnumType {
-	return &file_common_common_proto_enumTypes[7]
-}
-
-func (x ApprovalDuration) Number() protoreflect.EnumNumber {
-	return protoreflect.EnumNumber(x)
-}
-
-// Deprecated: Use ApprovalDuration.Descriptor instead.
-func (ApprovalDuration) EnumDescriptor() ([]byte, []int) {
-	return file_common_common_proto_rawDescGZIP(), []int{7}
-}
-
 // ApprovalActionType defines the user's decision for an approval request
 type ApprovalActionType int32
 
@@ -545,11 +489,11 @@ func (x ApprovalActionType) String() string {
 }
 
 func (ApprovalActionType) Descriptor() protoreflect.EnumDescriptor {
-	return file_common_common_proto_enumTypes[8].Descriptor()
+	return file_common_common_proto_enumTypes[7].Descriptor()
 }
 
 func (ApprovalActionType) Type() protoreflect.EnumType {
-	return &file_common_common_proto_enumTypes[8]
+	return &file_common_common_proto_enumTypes[7]
 }
 
 func (x ApprovalActionType) Number() protoreflect.EnumNumber {
@@ -558,7 +502,7 @@ func (x ApprovalActionType) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use ApprovalActionType.Descriptor instead.
 func (ApprovalActionType) EnumDescriptor() ([]byte, []int) {
-	return file_common_common_proto_rawDescGZIP(), []int{8}
+	return file_common_common_proto_rawDescGZIP(), []int{7}
 }
 
 // P2PMode defines the peer-to-peer connection strategy
@@ -598,11 +542,11 @@ func (x P2PMode) String() string {
 }
 
 func (P2PMode) Descriptor() protoreflect.EnumDescriptor {
-	return file_common_common_proto_enumTypes[9].Descriptor()
+	return file_common_common_proto_enumTypes[8].Descriptor()
 }
 
 func (P2PMode) Type() protoreflect.EnumType {
-	return &file_common_common_proto_enumTypes[9]
+	return &file_common_common_proto_enumTypes[8]
 }
 
 func (x P2PMode) Number() protoreflect.EnumNumber {
@@ -611,7 +555,7 @@ func (x P2PMode) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use P2PMode.Descriptor instead.
 func (P2PMode) EnumDescriptor() ([]byte, []int) {
-	return file_common_common_proto_rawDescGZIP(), []int{9}
+	return file_common_common_proto_rawDescGZIP(), []int{8}
 }
 
 // CryptoAlgorithm for forward compatibility
@@ -645,11 +589,11 @@ func (x CryptoAlgorithm) String() string {
 }
 
 func (CryptoAlgorithm) Descriptor() protoreflect.EnumDescriptor {
-	return file_common_common_proto_enumTypes[10].Descriptor()
+	return file_common_common_proto_enumTypes[9].Descriptor()
 }
 
 func (CryptoAlgorithm) Type() protoreflect.EnumType {
-	return &file_common_common_proto_enumTypes[10]
+	return &file_common_common_proto_enumTypes[9]
 }
 
 func (x CryptoAlgorithm) Number() protoreflect.EnumNumber {
@@ -658,7 +602,7 @@ func (x CryptoAlgorithm) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use CryptoAlgorithm.Descriptor instead.
 func (CryptoAlgorithm) EnumDescriptor() ([]byte, []int) {
-	return file_common_common_proto_rawDescGZIP(), []int{10}
+	return file_common_common_proto_rawDescGZIP(), []int{9}
 }
 
 // EncryptedPayload wraps E2E encrypted data using X25519 ECDH + AES-256-GCM.
@@ -1103,13 +1047,14 @@ const file_common_common_proto_rawDesc = "" +
 	"\x02as\x18\f \x01(\tR\x02as\x12\x16\n" +
 	"\x06source\x18\r \x01(\tR\x06source\x12\x1d\n" +
 	"\n" +
-	"latency_ms\x18\x0e \x01(\x03R\tlatencyMs*m\n" +
+	"latency_ms\x18\x0e \x01(\x03R\tlatencyMs*\x8f\x01\n" +
 	"\n" +
 	"ActionType\x12\x1b\n" +
 	"\x17ACTION_TYPE_UNSPECIFIED\x10\x00\x12\x15\n" +
 	"\x11ACTION_TYPE_ALLOW\x10\x01\x12\x15\n" +
 	"\x11ACTION_TYPE_BLOCK\x10\x02\x12\x14\n" +
-	"\x10ACTION_TYPE_MOCK\x10\x03*f\n" +
+	"\x10ACTION_TYPE_MOCK\x10\x03\x12 \n" +
+	"\x1cACTION_TYPE_REQUIRE_APPROVAL\x10\x04*f\n" +
 	"\x0eFallbackAction\x12\x1f\n" +
 	"\x1bFALLBACK_ACTION_UNSPECIFIED\x10\x00\x12\x19\n" +
 	"\x15FALLBACK_ACTION_CLOSE\x10\x01\x12\x18\n" +
@@ -1161,14 +1106,7 @@ const file_common_common_proto_rawDesc = "" +
 	"\x15PEM_LABEL_CERTIFICATE\x10\x01\x12\x18\n" +
 	"\x14PEM_LABEL_PUBLIC_KEY\x10\x02\x12\x19\n" +
 	"\x15PEM_LABEL_PRIVATE_KEY\x10\x03\x12#\n" +
-	"\x1fPEM_LABEL_ENCRYPTED_PRIVATE_KEY\x10\x04*\xd1\x01\n" +
-	"\x10ApprovalDuration\x12!\n" +
-	"\x1dAPPROVAL_DURATION_UNSPECIFIED\x10\x00\x12\x1a\n" +
-	"\x16APPROVAL_DURATION_ONCE\x10\x01\x12\x1e\n" +
-	"\x1aAPPROVAL_DURATION_1_MINUTE\x10\x02\x12 \n" +
-	"\x1cAPPROVAL_DURATION_10_MINUTES\x10\x03\x12\x1c\n" +
-	"\x18APPROVAL_DURATION_1_HOUR\x10\x04\x12\x1e\n" +
-	"\x1aAPPROVAL_DURATION_24_HOURS\x10\x05*\xa3\x01\n" +
+	"\x1fPEM_LABEL_ENCRYPTED_PRIVATE_KEY\x10\x04*\xa3\x01\n" +
 	"\x12ApprovalActionType\x12$\n" +
 	" APPROVAL_ACTION_TYPE_UNSPECIFIED\x10\x00\x12\x1e\n" +
 	"\x1aAPPROVAL_ACTION_TYPE_ALLOW\x10\x01\x12\x1e\n" +
@@ -1195,7 +1133,7 @@ func file_common_common_proto_rawDescGZIP() []byte {
 	return file_common_common_proto_rawDescData
 }
 
-var file_common_common_proto_enumTypes = make([]protoimpl.EnumInfo, 11)
+var file_common_common_proto_enumTypes = make([]protoimpl.EnumInfo, 10)
 var file_common_common_proto_msgTypes = make([]protoimpl.MessageInfo, 5)
 var file_common_common_proto_goTypes = []any{
 	(ActionType)(0),              // 0: nitella.ActionType
@@ -1205,20 +1143,19 @@ var file_common_common_proto_goTypes = []any{
 	(Operator)(0),                // 4: nitella.Operator
 	(SortOrder)(0),               // 5: nitella.SortOrder
 	(PemLabel)(0),                // 6: nitella.PemLabel
-	(ApprovalDuration)(0),        // 7: nitella.ApprovalDuration
-	(ApprovalActionType)(0),      // 8: nitella.ApprovalActionType
-	(P2PMode)(0),                 // 9: nitella.P2PMode
-	(CryptoAlgorithm)(0),         // 10: nitella.CryptoAlgorithm
-	(*EncryptedPayload)(nil),     // 11: nitella.EncryptedPayload
-	(*SecureCommandPayload)(nil), // 12: nitella.SecureCommandPayload
-	(*Alert)(nil),                // 13: nitella.Alert
-	(*GeoInfo)(nil),              // 14: nitella.GeoInfo
-	nil,                          // 15: nitella.Alert.MetadataEntry
+	(ApprovalActionType)(0),      // 7: nitella.ApprovalActionType
+	(P2PMode)(0),                 // 8: nitella.P2PMode
+	(CryptoAlgorithm)(0),         // 9: nitella.CryptoAlgorithm
+	(*EncryptedPayload)(nil),     // 10: nitella.EncryptedPayload
+	(*SecureCommandPayload)(nil), // 11: nitella.SecureCommandPayload
+	(*Alert)(nil),                // 12: nitella.Alert
+	(*GeoInfo)(nil),              // 13: nitella.GeoInfo
+	nil,                          // 14: nitella.Alert.MetadataEntry
 }
 var file_common_common_proto_depIdxs = []int32{
-	10, // 0: nitella.EncryptedPayload.algorithm:type_name -> nitella.CryptoAlgorithm
-	11, // 1: nitella.Alert.encrypted:type_name -> nitella.EncryptedPayload
-	15, // 2: nitella.Alert.metadata:type_name -> nitella.Alert.MetadataEntry
+	9,  // 0: nitella.EncryptedPayload.algorithm:type_name -> nitella.CryptoAlgorithm
+	10, // 1: nitella.Alert.encrypted:type_name -> nitella.EncryptedPayload
+	14, // 2: nitella.Alert.metadata:type_name -> nitella.Alert.MetadataEntry
 	3,  // [3:3] is the sub-list for method output_type
 	3,  // [3:3] is the sub-list for method input_type
 	3,  // [3:3] is the sub-list for extension type_name
@@ -1236,7 +1173,7 @@ func file_common_common_proto_init() {
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_common_common_proto_rawDesc), len(file_common_common_proto_rawDesc)),
-			NumEnums:      11,
+			NumEnums:      10,
 			NumMessages:   5,
 			NumExtensions: 0,
 			NumServices:   0,

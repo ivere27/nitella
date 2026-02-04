@@ -38,8 +38,24 @@ import (
 	"github.com/ivere27/nitella/pkg/hub/certmanager"
 	"github.com/ivere27/nitella/pkg/hub/firebase"
 	"github.com/ivere27/nitella/pkg/hub/model"
+	"github.com/ivere27/nitella/pkg/hub/ratelimit"
 	"github.com/ivere27/nitella/pkg/hub/store"
 	"github.com/ivere27/nitella/pkg/tier"
+)
+
+// Constants for rate limiting and timeouts
+const (
+	// GlobalPairingRateLimit is the maximum pairing requests per minute globally
+	GlobalPairingRateLimit = 100
+
+	// PendingAlertExpiry is how long pending alerts are kept before expiring
+	PendingAlertExpiry = 5 * time.Minute
+
+	// MaxGlobalPendingAlerts is the maximum pending alerts across all routing tokens.
+	// This prevents memory exhaustion from distributed DoS attacks (many users/tokens).
+	// With ~1KB per alert, 100K alerts = ~100MB memory budget.
+	// Sized for a Hub handling ~50K nodes with 2 pending alerts each on average.
+	MaxGlobalPendingAlerts = 100000
 )
 
 // Context key types to avoid collisions
@@ -59,6 +75,8 @@ func generateCode() string {
 	for i := range b {
 		n, err := rand.Int(rand.Reader, big.NewInt(int64(len(chars))))
 		if err != nil {
+			// Intentional panic: crypto/rand failure indicates system entropy exhaustion
+			// or critical OS-level issue. Server cannot operate securely in this state.
 			panic("crypto/rand failed: " + err.Error())
 		}
 		b[i] = chars[n.Int64()]
@@ -115,6 +133,11 @@ type HubServer struct {
 	mobileSignalingStreams map[string]chan *pb.SignalMessage
 	mobileSignalingMu      sync.RWMutex
 
+	// Pending Approval Alerts (alertID -> PendingAlert)
+	// Used to route approval decisions back to the originating node
+	pendingAlerts   map[string]*PendingAlert
+	pendingAlertsMu sync.RWMutex
+
 	// Registration broadcaster
 	broadcaster *RegistrationBroadcaster
 
@@ -124,6 +147,14 @@ type HubServer struct {
 	Auth    *AuthServer
 	Pairing *PairingServer
 	Admin   *AdminServer
+}
+
+// PendingAlert tracks an alert awaiting approval decision
+type PendingAlert struct {
+	NodeID       string
+	RoutingToken string
+	Alert        *common.Alert
+	CreatedAt    time.Time
 }
 
 // RegistrationBroadcaster handles async notifications for registration approvals
@@ -183,7 +214,7 @@ func (s *HubServer) auditLog(routingToken, eventType string, payload []byte) {
 	// Get routing token info (contains public key and tier)
 	info, err := s.store.GetRoutingTokenInfo(routingToken)
 	if err != nil {
-		fmt.Printf("[AUDIT] Failed to get routing token info: %v\n", err)
+		log.Printf("[AUDIT] Failed to get routing token info: %v", err)
 		return
 	}
 
@@ -192,13 +223,13 @@ func (s *HubServer) auditLog(routingToken, eventType string, payload []byte) {
 	if len(info.AuditPubKey) == ed25519.PublicKeySize {
 		encrypted, err := nitellacrypto.Encrypt(payload, ed25519.PublicKey(info.AuditPubKey))
 		if err != nil {
-			fmt.Printf("[AUDIT] Failed to encrypt audit payload: %v\n", err)
+			log.Printf("[AUDIT] Failed to encrypt audit payload: %v", err)
 			return
 		}
 		encryptedPayload = encrypted.Marshal()
 	} else {
 		// No public key stored - skip audit log (can't store unencrypted)
-		fmt.Printf("[AUDIT] No audit public key for routing token, skipping\n")
+		log.Printf("[AUDIT] No audit public key for routing token, skipping")
 		return
 	}
 
@@ -219,7 +250,7 @@ func (s *HubServer) auditLog(routingToken, eventType string, payload []byte) {
 
 	if err := s.store.SaveAuditLog(auditLog); err != nil {
 		// Log error but don't fail the operation
-		fmt.Printf("[AUDIT] Failed to save audit log: %v\n", err)
+		log.Printf("[AUDIT] Failed to save audit log: %v", err)
 	}
 }
 
@@ -252,6 +283,7 @@ func NewHubServer(tm *auth.TokenManager, adminTm *auth.TokenManager, s store.Sto
 		nodeLogStreams:         make(map[string]chan *pb.EncryptedLogEntry),
 		nodeSignalingStreams:   make(map[string]chan *pb.SignalMessage),
 		mobileSignalingStreams: make(map[string]chan *pb.SignalMessage),
+		pendingAlerts:          make(map[string]*PendingAlert),
 		broadcaster:            NewRegistrationBroadcaster(),
 	}
 
@@ -267,12 +299,31 @@ func NewHubServer(tm *auth.TokenManager, adminTm *auth.TokenManager, s store.Sto
 	// Start rate limit cleanup goroutine (fix memory leak)
 	go srv.rateLimitCleanupLoop()
 
+	// Start pending alerts cleanup goroutine (expire old alerts)
+	go srv.pendingAlertsCleanupLoop()
+
 	return srv
 }
 
 // SetCertManager sets the certificate manager for CSR signing
+// Also loads CLI CAs from approved registrations for mTLS verification
 func (s *HubServer) SetCertManager(cm *certmanager.CertManager) {
 	s.certMgr = cm
+
+	// Load CLI CAs from existing approved registrations
+	cas, err := s.store.GetApprovedCLICAs()
+	if err != nil {
+		log.Printf("[Hub] Warning: Failed to load CLI CAs from store: %v", err)
+		return
+	}
+	for _, caPEM := range cas {
+		if err := cm.AddClientCA([]byte(caPEM)); err != nil {
+			log.Printf("[Hub] Warning: Failed to add CLI CA: %v", err)
+		}
+	}
+	if len(cas) > 0 {
+		log.Printf("[Hub] Loaded %d CLI CA(s) for mTLS verification", len(cas))
+	}
 }
 
 // GetCACertPEM returns the Hub CA certificate PEM if available
@@ -290,6 +341,23 @@ func (s *HubServer) getTierByRoutingToken(routingToken string) *tier.TierConfig 
 		return s.tierConfig.GetTierOrDefault("free")
 	}
 	return s.tierConfig.GetTierOrDefault(info.Tier)
+}
+
+// getTierByLicenseKey looks up tier by license key prefix
+// Returns tier ID and TierConfig. If no match, returns "free" tier.
+func (s *HubServer) getTierByLicenseKey(licenseKey string) (string, *tier.TierConfig) {
+	if licenseKey == "" {
+		return "free", s.tierConfig.GetTierOrDefault("free")
+	}
+
+	// Check each tier's license prefix
+	for _, t := range s.tierConfig.Tiers {
+		if t.LicensePrefix != "" && strings.HasPrefix(licenseKey, t.LicensePrefix) {
+			return t.ID, &t
+		}
+	}
+
+	return "free", s.tierConfig.GetTierOrDefault("free")
 }
 
 func (s *HubServer) seedInviteCodes() {
@@ -420,6 +488,7 @@ func (s *HubServer) AuthInterceptor(ctx context.Context, req interface{}, info *
 		}
 
 		ctx = context.WithValue(ctx, ctxKeyNodeID, nodeID)
+		ctx = ratelimit.ContextWithRoutingToken(ctx, node.RoutingToken)
 		ctx = context.WithValue(ctx, ctxKeyRole, "node")
 		return handler(ctx, req)
 	}
@@ -491,6 +560,7 @@ func (s *HubServer) StreamAuthInterceptor(srv interface{}, ss grpc.ServerStream,
 					}
 
 					newCtx := context.WithValue(ss.Context(), ctxKeyNodeID, nodeID)
+					newCtx = ratelimit.ContextWithRoutingToken(newCtx, node.RoutingToken)
 					newCtx = context.WithValue(newCtx, ctxKeyRole, "node")
 					wrapped := &wrappedStream{ServerStream: ss, ctx: newCtx}
 					return handler(srv, wrapped)
@@ -596,6 +666,26 @@ func (s *HubServer) NotifyByRoutingToken(routingToken string, title string, body
 	}
 }
 
+// ForwardAlertToClients forwards an alert (with encrypted payload intact) to connected CLI/Mobile clients
+// Zero-Trust: The encrypted payload can only be decrypted by the user's private key
+func (s *HubServer) ForwardAlertToClients(routingToken string, alert *common.Alert) {
+	s.userStreamsMu.RLock()
+	streams := s.userStreams[routingToken]
+	if len(streams) == 0 {
+		s.userStreamsMu.RUnlock()
+		log.Printf("[Hub] No connected clients for routing token, alert %s not delivered", alert.Id)
+		return
+	}
+	for ch := range streams {
+		select {
+		case ch <- alert:
+		default:
+			// Channel full, drop alert
+		}
+	}
+	s.userStreamsMu.RUnlock()
+}
+
 // Helper for rate limiting pairing
 func (s *HubServer) checkPairingRateLimit(ctx context.Context) error {
 	peerInfo, ok := peer.FromContext(ctx)
@@ -617,7 +707,7 @@ func (s *HubServer) checkPairingRateLimit(ctx context.Context) error {
 		s.globalPairingReset = now.Add(1 * time.Minute)
 	}
 	s.globalPairingCount++
-	if s.globalPairingCount > 100 {
+	if s.globalPairingCount > GlobalPairingRateLimit {
 		return status.Error(codes.ResourceExhausted, "Service busy. Please try again later.")
 	}
 
@@ -656,10 +746,12 @@ func checkRegistrationRateLimit(s *HubServer, ctx context.Context) error {
 		return status.Error(codes.ResourceExhausted, "Registration service busy. Please try again later.")
 	}
 
-	// Per-IP rate limit: 1 registration per 5 seconds
-	lastAttempt, exists := s.pairingRateLimit[ip]
-	if exists && time.Since(lastAttempt) < 5*time.Second {
-		return status.Error(codes.ResourceExhausted, "Too many registration attempts. Please wait 5 seconds.")
+	// Per-IP rate limit: 1 registration per 5 seconds (can be disabled for e2e tests)
+	if os.Getenv("NITELLA_DISABLE_PAIRING_RATE_LIMIT") != "true" {
+		lastAttempt, exists := s.pairingRateLimit[ip]
+		if exists && time.Since(lastAttempt) < 5*time.Second {
+			return status.Error(codes.ResourceExhausted, "Too many registration attempts. Please wait 5 seconds.")
+		}
 	}
 	s.pairingRateLimit[ip] = now
 	return nil
@@ -667,7 +759,7 @@ func checkRegistrationRateLimit(s *HubServer, ctx context.Context) error {
 
 // rateLimitCleanupLoop periodically removes stale rate limit entries (fix memory leak)
 func (s *HubServer) rateLimitCleanupLoop() {
-	ticker := time.NewTicker(5 * time.Minute)
+	ticker := time.NewTicker(PendingAlertExpiry)
 	defer ticker.Stop()
 	for range ticker.C {
 		s.pairingRateMu.Lock()
@@ -679,6 +771,26 @@ func (s *HubServer) rateLimitCleanupLoop() {
 			}
 		}
 		s.pairingRateMu.Unlock()
+	}
+}
+
+// pendingAlertsCleanupLoop periodically removes expired pending alerts
+func (s *HubServer) pendingAlertsCleanupLoop() {
+	ticker := time.NewTicker(1 * time.Minute)
+	defer ticker.Stop()
+	for range ticker.C {
+		s.pendingAlertsMu.Lock()
+		now := time.Now()
+		var expiredTokens []string
+		for id, pending := range s.pendingAlerts {
+			// Remove alerts older than PendingAlertExpiry (approval timeout)
+			if now.Sub(pending.CreatedAt) > PendingAlertExpiry {
+				log.Printf("[Hub] Expiring pending alert %s (no response)", id)
+				expiredTokens = append(expiredTokens, pending.RoutingToken)
+				delete(s.pendingAlerts, id)
+			}
+		}
+		s.pendingAlertsMu.Unlock()
 	}
 }
 
@@ -1087,11 +1199,29 @@ func (s *NodeServer) PushAlert(ctx context.Context, alert *common.Alert) (*pb.Em
 		return nil, status.Error(codes.NotFound, "Node not found")
 	}
 
-	// Notify via routing token (blind routing - Hub doesn't know the user)
-	s.hub.NotifyByRoutingToken(node.RoutingToken, "Alert from Node", "New activity", map[string]string{
-		"alert_id": alert.Id,
-		// Note: node_id is not included to prevent correlation
-	})
+	// Fill in NodeId for the alert (node may not have included it)
+	alert.NodeId = nodeID
+
+	// Store pending alert for routing approval decisions back to node
+	// This is needed because approval decisions reference the alert ID
+	s.hub.pendingAlertsMu.Lock()
+	// Global limit check: prevent memory exhaustion from distributed DoS
+	if len(s.hub.pendingAlerts) >= MaxGlobalPendingAlerts {
+		s.hub.pendingAlertsMu.Unlock()
+		return nil, status.Errorf(codes.ResourceExhausted,
+			"hub overloaded: too many pending alerts globally (max: %d), try again later",
+			MaxGlobalPendingAlerts)
+	}
+	s.hub.pendingAlerts[alert.Id] = &PendingAlert{
+		NodeID:       nodeID,
+		RoutingToken: node.RoutingToken,
+		Alert:        alert,
+		CreatedAt:    time.Now(),
+	}
+	s.hub.pendingAlertsMu.Unlock()
+
+	// Forward the original alert (with encrypted payload) to connected clients
+	s.hub.ForwardAlertToClients(node.RoutingToken, alert)
 
 	return &pb.Empty{}, nil
 }
@@ -1277,10 +1407,12 @@ func (s *MobileServer) RegisterNode(ctx context.Context, req *pb.RegisterNodeReq
 }
 
 func (s *MobileServer) ApproveNode(ctx context.Context, req *pb.ApproveNodeRequest) (*pb.Empty, error) {
-
 	// CLI must sign the CSR - Hub never signs (zero-trust)
 	if req.CertPem == "" {
 		return nil, status.Error(codes.InvalidArgument, "cert_pem required: CLI must sign the node CSR")
+	}
+	if req.CaPem == "" {
+		return nil, status.Error(codes.InvalidArgument, "ca_pem required: CLI must provide CA certificate for audit log encryption")
 	}
 	certPEM := req.CertPem
 	caPEM := req.CaPem
@@ -1292,8 +1424,53 @@ func (s *MobileServer) ApproveNode(ctx context.Context, req *pb.ApproveNodeReque
 		return nil, status.Error(codes.InvalidArgument, "routing_token is required: CLI must generate HMAC(node_id, user_secret)")
 	}
 
-	// Atomic approval with optimistic locking (prevents TOCTOU race)
-	regReq, err := s.hub.store.ApproveRegistration(req.RegistrationCode, certPEM, caPEM, routingToken)
+	// Validate CA certificate BEFORE approval - no fallback to unencrypted audit logs
+	block, _ := pem.Decode([]byte(caPEM))
+	if block == nil {
+		return nil, status.Error(codes.InvalidArgument, "failed to decode CA PEM")
+	}
+	caCert, err := x509.ParseCertificate(block.Bytes)
+	if err != nil {
+		return nil, status.Errorf(codes.InvalidArgument, "failed to parse CA certificate: %v", err)
+	}
+	auditPubKey, ok := caCert.PublicKey.(ed25519.PublicKey)
+	if !ok {
+		return nil, status.Error(codes.InvalidArgument, "CA certificate must contain Ed25519 public key for audit log encryption")
+	}
+
+	// Add CLI CA to CertManager for mTLS verification of node certificates
+	if s.hub.certMgr != nil {
+		if err := s.hub.certMgr.AddClientCA([]byte(caPEM)); err != nil {
+			log.Printf("[ApproveNode] Warning: Failed to add CLI CA to CertManager: %v", err)
+		}
+	}
+
+	// Look up registration first to get NodeID and LicenseKey (needed for node and tier info)
+	pendingReg, err := s.hub.store.GetRegistrationRequest(req.RegistrationCode)
+	if err != nil {
+		return nil, status.Error(codes.NotFound, "Registration not found")
+	}
+
+	// Build node record
+	node := &model.Node{
+		ID:           pendingReg.NodeID,
+		RoutingToken: routingToken,
+		CertPEM:      certPEM,
+		Status:       "offline",
+	}
+
+	// Build routing token info with tier lookup
+	tierName, _ := s.hub.getTierByLicenseKey(pendingReg.LicenseKey)
+	info := &model.RoutingTokenInfo{
+		RoutingToken: routingToken,
+		LicenseKey:   pendingReg.LicenseKey,
+		Tier:         tierName,
+		AuditPubKey:  auditPubKey,
+	}
+
+	// Atomic approval: registration + node + routing token info in single transaction
+	// Prevents billing bypass if any step fails after approval
+	regReq, err := s.hub.store.ApproveNodeAtomic(req.RegistrationCode, certPEM, caPEM, routingToken, node, info)
 	if err != nil {
 		if err.Error() == "registration not found" {
 			return nil, status.Error(codes.NotFound, "Registration not found")
@@ -1302,45 +1479,6 @@ func (s *MobileServer) ApproveNode(ctx context.Context, req *pb.ApproveNodeReque
 			return nil, status.Error(codes.FailedPrecondition, "Registration already approved")
 		}
 		return nil, status.Error(codes.FailedPrecondition, err.Error())
-	}
-
-	// Create node record with routing token from CLI
-	node := &model.Node{
-		ID:           regReq.NodeID,
-		RoutingToken: routingToken,
-		CertPEM:      certPEM,
-		Status:       "offline",
-	}
-	s.hub.store.SaveNode(node)
-
-	// Extract public key from CA certificate for audit log encryption
-	var auditPubKey []byte
-	if caPEM != "" {
-		block, _ := pem.Decode([]byte(caPEM))
-		if block == nil {
-			log.Printf("[ApproveNode] Warning: Failed to decode CA PEM - audit logs will not be encrypted")
-		} else {
-			caCert, err := x509.ParseCertificate(block.Bytes)
-			if err != nil {
-				log.Printf("[ApproveNode] Warning: Failed to parse CA certificate: %v - audit logs will not be encrypted", err)
-			} else if pubKey, ok := caCert.PublicKey.(ed25519.PublicKey); ok {
-				auditPubKey = pubKey
-			} else {
-				log.Printf("[ApproveNode] Warning: CA certificate does not contain Ed25519 public key - audit logs will not be encrypted")
-			}
-		}
-	}
-
-	// Save routing token info for tier lookup and audit encryption
-	if routingToken != "" {
-		// TODO: Look up tier from license key
-		tierName := "free"
-		s.hub.store.SaveRoutingTokenInfo(&model.RoutingTokenInfo{
-			RoutingToken: routingToken,
-			LicenseKey:   regReq.LicenseKey,
-			Tier:         tierName,
-			AuditPubKey:  auditPubKey,
-		})
 	}
 
 	// Broadcast approval
@@ -1642,11 +1780,6 @@ func (s *MobileServer) StreamSignaling(stream grpc.BidiStreamingServer[pb.Signal
 		}
 		s.hub.nodeSignalingMu.RUnlock()
 	}
-}
-
-func (s *MobileServer) SubmitApprovalDecision(ctx context.Context, req *pb.SubmitApprovalDecisionRequest) (*pb.SubmitApprovalDecisionResponse, error) {
-	// TODO: Forward approval decision to the node
-	return &pb.SubmitApprovalDecisionResponse{Success: true}, nil
 }
 
 // ============================================================================
@@ -2070,10 +2203,34 @@ func (s *AuthServer) RegisterDevice(ctx context.Context, req *pb.RegisterDeviceR
 }
 
 func (s *AuthServer) UpdateLicense(ctx context.Context, req *pb.UpdateLicenseRequest) (*pb.UpdateLicenseResponse, error) {
-	// TODO: Implement license validation
+	routingToken := req.GetRoutingToken()
+	if routingToken == "" {
+		return nil, status.Error(codes.InvalidArgument, "routing_token is required")
+	}
+
+	// Look up tier from license key prefix
+	tierID, tierCfg := s.hub.getTierByLicenseKey(req.GetLicenseKey())
+
+	// Update routing token's tier
+	info, err := s.hub.store.GetRoutingTokenInfo(routingToken)
+	if err != nil {
+		return nil, status.Error(codes.NotFound, "routing token not found")
+	}
+
+	info.LicenseKey = req.GetLicenseKey()
+	info.Tier = tierID
+	if err := s.hub.store.SaveRoutingTokenInfo(info); err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to update license: %v", err)
+	}
+
+	maxNodes := tierCfg.MaxNodes
+	if maxNodes == 0 {
+		maxNodes = -1 // -1 indicates unlimited
+	}
+
 	return &pb.UpdateLicenseResponse{
-		Tier:     "pro",
-		MaxNodes: 10,
+		Tier:     tierID,
+		MaxNodes: int32(maxNodes),
 		Valid:    true,
 	}, nil
 }

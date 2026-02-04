@@ -104,6 +104,8 @@ github.com/inconshreveable/mousetrap v1.1.0 h1:wN+x4NVGpMsO7ErUn/mUI3vEoE6Jt13X2
 github.com/inconshreveable/mousetrap v1.1.0/go.mod h1:vpF70FUmC8bwa3OWnCshd2FqLfsEA9PFc4w1p2J65bw=
 github.com/ivere27/synurang v0.1.8 h1:dLN0ZtjfTIgUtvcrdmoCGSg0UDubi3RaRk5sBjuN6mQ=
 github.com/ivere27/synurang v0.1.8/go.mod h1:bSNYUmZUi9ZXwL7fHPzVyjQ6E2vKdSXk36pqj6siFXY=
+github.com/ivere27/synurang v0.2.0 h1:ywx1UiURAfMI6K8Q+2qDeTCd4O3CtKeKWbbQez0rmyM=
+github.com/ivere27/synurang v0.2.0/go.mod h1:bSNYUmZUi9ZXwL7fHPzVyjQ6E2vKdSXk36pqj6siFXY=
 github.com/kballard/go-shellquote v0.0.0-20180428030007-95032a82bc51 h1:Z9n2FFNUXsshfwJMBgNA0RU6/i7WVaAegv3PtuIHPMs=
 github.com/kballard/go-shellquote v0.0.0-20180428030007-95032a82bc51/go.mod h1:CzGEWj7cYgsdH8dAjBGEr58BoE7ScuLd+fwFZ44+/x8=
 github.com/kr/pretty v0.1.0/go.mod h1:dAy3ld7l9f0ibDNOQOHHMYYIIbhfbHSm3C4ZsoJORNo=

@@ -8,6 +8,7 @@ import (
 	"net"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 
@@ -15,7 +16,9 @@ import (
 
 	pb "github.com/ivere27/nitella/pkg/api/geoip"
 	"github.com/ivere27/nitella/pkg/geoip"
+	"github.com/ivere27/nitella/pkg/node/admincert"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials"
 )
 
 func main() {
@@ -34,6 +37,9 @@ func main() {
 
 	// Config file flags
 	configPath := flag.String("config", "", "Path to provider.yaml config file")
+
+	// TLS flags
+	certDataDir := flag.String("cert-data-dir", "", "Directory for auto-generated TLS certificates (required)")
 
 	flag.Parse()
 
@@ -137,23 +143,35 @@ func main() {
 		log.Printf("Generated admin token (keep secret): %s", *adminToken)
 	}
 
-	// Start Public Server
+	// Initialize TLS certificate manager
+	if *certDataDir == "" {
+		// Default to working directory if not specified
+		*certDataDir = "."
+	}
+	certMgr, err := admincert.New(filepath.Join(*certDataDir, "geoip_certs"))
+	if err != nil {
+		log.Fatalf("Failed to initialize TLS: %v", err)
+	}
+	tlsCreds := credentials.NewTLS(certMgr.GetTLSConfig())
+	log.Printf("TLS enabled - clients should use CA: %s", certMgr.GetCACertPath())
+
+	// Start Public Server with TLS
 	publicLis, err := net.Listen("tcp", fmt.Sprintf(":%d", *port))
 	if err != nil {
 		log.Fatalf("Failed to listen on port %d: %v", *port, err)
 	}
 
-	publicServer := grpc.NewServer()
+	publicServer := grpc.NewServer(grpc.Creds(tlsCreds))
 	pb.RegisterGeoIPServiceServer(publicServer, geoip.NewGrpcServer(manager))
 
 	go func() {
-		log.Printf("GeoIP Public Service listening on :%d", *port)
+		log.Printf("GeoIP Public Service listening on :%d (TLS)", *port)
 		if err := publicServer.Serve(publicLis); err != nil {
 			log.Fatalf("Failed to serve public: %v", err)
 		}
 	}()
 
-	// Start Admin Server (if enabled)
+	// Start Admin Server with TLS (if enabled)
 	var adminServer *grpc.Server
 	if *adminPort > 0 {
 		adminLis, err := net.Listen("tcp", fmt.Sprintf(":%d", *adminPort))
@@ -162,12 +180,13 @@ func main() {
 		}
 
 		adminServer = grpc.NewServer(
+			grpc.Creds(tlsCreds),
 			grpc.UnaryInterceptor(geoip.AdminAuthInterceptor(*adminToken)),
 		)
 		pb.RegisterGeoIPAdminServiceServer(adminServer, geoip.NewAdminServer(manager))
 
 		go func() {
-			log.Printf("GeoIP Admin Service listening on :%d (token required)", *adminPort)
+			log.Printf("GeoIP Admin Service listening on :%d (TLS, token required)", *adminPort)
 			if err := adminServer.Serve(adminLis); err != nil {
 				log.Fatalf("Failed to serve admin: %v", err)
 			}

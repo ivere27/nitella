@@ -1,6 +1,7 @@
 package identity
 
 import (
+	"crypto/ed25519"
 	"encoding/hex"
 	"os"
 	"path/filepath"
@@ -398,6 +399,242 @@ func TestKeyFilePermissions(t *testing.T) {
 
 	// Check cert file permissions (should be 0644)
 	certPath := filepath.Join(tmpDir, "root_ca.crt")
+	info, err = os.Stat(certPath)
+	if err != nil {
+		t.Fatalf("Failed to stat cert file: %v", err)
+	}
+
+	perm = info.Mode().Perm()
+	if perm != 0644 {
+		t.Errorf("Expected cert file permissions 0644, got %o", perm)
+	}
+}
+
+// ============================================================================
+// Node Certificate Storage Tests
+// ============================================================================
+
+func TestSaveAndLoadNodeCert(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "nitella-node-cert-test-*")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	nodeID := "test-node-001"
+	certPEM := []byte(`-----BEGIN CERTIFICATE-----
+MIIBkTCB+wIJAKHBfpegPjMCMA0GCSqGSIb3DQEBCwUAMBExDzANBgNVBAMMBnRl
+c3QtY2EwHhcNMjQwMTAxMDAwMDAwWhcNMjUwMTAxMDAwMDAwWjAUMRIwEAYDVQQD
+DAl0ZXN0LW5vZGUwKjAFBgMrZXADIQD8888888888888888888888888888888888
+8880ANBgkqhkiG9w0BAQsFAANBAHhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhh
+hhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhh
+-----END CERTIFICATE-----`)
+
+	// Test save
+	err = SaveNodeCert(tmpDir, nodeID, certPEM)
+	if err != nil {
+		t.Fatalf("Failed to save node cert: %v", err)
+	}
+
+	// Verify file exists
+	expectedPath := filepath.Join(tmpDir, "nodes", nodeID+".crt")
+	if _, err := os.Stat(expectedPath); os.IsNotExist(err) {
+		t.Errorf("Node cert file not created at expected path: %s", expectedPath)
+	}
+
+	// Test load
+	loadedPEM, err := LoadNodeCert(tmpDir, nodeID)
+	if err != nil {
+		t.Fatalf("Failed to load node cert: %v", err)
+	}
+
+	if string(loadedPEM) != string(certPEM) {
+		t.Error("Loaded cert does not match saved cert")
+	}
+}
+
+func TestLoadNodeCertNotFound(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "nitella-node-cert-test-*")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	_, err = LoadNodeCert(tmpDir, "non-existent-node")
+	if err == nil {
+		t.Error("Expected error when loading non-existent node cert")
+	}
+}
+
+func TestListPairedNodes(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "nitella-node-cert-test-*")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	// Initially empty
+	nodes, err := ListPairedNodes(tmpDir)
+	if err != nil {
+		t.Fatalf("Failed to list paired nodes: %v", err)
+	}
+	if len(nodes) != 0 {
+		t.Errorf("Expected 0 nodes, got %d", len(nodes))
+	}
+
+	// Add some nodes
+	certPEM := []byte("-----BEGIN CERTIFICATE-----\ntest\n-----END CERTIFICATE-----")
+	SaveNodeCert(tmpDir, "node-alpha", certPEM)
+	SaveNodeCert(tmpDir, "node-beta", certPEM)
+	SaveNodeCert(tmpDir, "node-gamma", certPEM)
+
+	// List again
+	nodes, err = ListPairedNodes(tmpDir)
+	if err != nil {
+		t.Fatalf("Failed to list paired nodes: %v", err)
+	}
+	if len(nodes) != 3 {
+		t.Errorf("Expected 3 nodes, got %d", len(nodes))
+	}
+
+	// Verify node IDs
+	nodeSet := make(map[string]bool)
+	for _, n := range nodes {
+		nodeSet[n] = true
+	}
+	if !nodeSet["node-alpha"] || !nodeSet["node-beta"] || !nodeSet["node-gamma"] {
+		t.Errorf("Missing expected node IDs: %v", nodes)
+	}
+}
+
+func TestDeleteNodeCert(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "nitella-node-cert-test-*")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	nodeID := "node-to-delete"
+	certPEM := []byte("-----BEGIN CERTIFICATE-----\ntest\n-----END CERTIFICATE-----")
+
+	// Save
+	err = SaveNodeCert(tmpDir, nodeID, certPEM)
+	if err != nil {
+		t.Fatalf("Failed to save node cert: %v", err)
+	}
+
+	// Verify exists
+	_, err = LoadNodeCert(tmpDir, nodeID)
+	if err != nil {
+		t.Fatalf("Node cert should exist: %v", err)
+	}
+
+	// Delete
+	err = DeleteNodeCert(tmpDir, nodeID)
+	if err != nil {
+		t.Fatalf("Failed to delete node cert: %v", err)
+	}
+
+	// Verify deleted
+	_, err = LoadNodeCert(tmpDir, nodeID)
+	if err == nil {
+		t.Error("Node cert should not exist after deletion")
+	}
+}
+
+func TestSanitizeFilename(t *testing.T) {
+	tests := []struct {
+		input    string
+		expected string
+	}{
+		{"simple-node", "simple-node"},
+		{"node/with/slashes", "node_with_slashes"},
+		{"node:with:colons", "node_with_colons"},
+		{"node<with>brackets", "node_with_brackets"},
+		{"node|with|pipes", "node_with_pipes"},
+		{"node\"with\"quotes", "node_with_quotes"},
+		{"normal-node-123", "normal-node-123"},
+	}
+
+	for _, tc := range tests {
+		result := sanitizeFilename(tc.input)
+		if result != tc.expected {
+			t.Errorf("sanitizeFilename(%q) = %q, want %q", tc.input, result, tc.expected)
+		}
+	}
+}
+
+func TestLoadNodePublicKey(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "nitella-node-cert-test-*")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	// Create a real identity to get a valid certificate
+	cfg := DefaultConfig(tmpDir, "test-ca")
+	caIdentity, _, err := LoadOrCreate(cfg)
+	if err != nil {
+		t.Fatalf("Failed to create CA identity: %v", err)
+	}
+
+	// The CA cert itself can be used as a test (it has Ed25519 public key)
+	nodeID := "test-node-with-real-cert"
+	err = SaveNodeCert(tmpDir, nodeID, caIdentity.RootCertPEM)
+	if err != nil {
+		t.Fatalf("Failed to save node cert: %v", err)
+	}
+
+	// Load public key
+	pubKey, err := LoadNodePublicKey(tmpDir, nodeID)
+	if err != nil {
+		t.Fatalf("Failed to load node public key: %v", err)
+	}
+
+	if pubKey == nil {
+		t.Error("Public key should not be nil")
+	}
+
+	if len(pubKey) != 32 {
+		t.Errorf("Expected Ed25519 public key (32 bytes), got %d bytes", len(pubKey))
+	}
+
+	// Verify it matches the CA's public key (since we used CA cert as test data)
+	expectedPubKey := caIdentity.RootKey.Public().(ed25519.PublicKey)
+	if hex.EncodeToString(pubKey) != hex.EncodeToString(expectedPubKey) {
+		t.Error("Loaded public key does not match expected")
+	}
+}
+
+func TestNodeCertDirectoryPermissions(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "nitella-node-cert-test-*")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	nodeID := "test-node"
+	certPEM := []byte("-----BEGIN CERTIFICATE-----\ntest\n-----END CERTIFICATE-----")
+
+	err = SaveNodeCert(tmpDir, nodeID, certPEM)
+	if err != nil {
+		t.Fatalf("Failed to save node cert: %v", err)
+	}
+
+	// Check nodes directory permissions (should be 0700)
+	nodesDir := filepath.Join(tmpDir, "nodes")
+	info, err := os.Stat(nodesDir)
+	if err != nil {
+		t.Fatalf("Failed to stat nodes directory: %v", err)
+	}
+
+	perm := info.Mode().Perm()
+	if perm != 0700 {
+		t.Errorf("Expected nodes directory permissions 0700, got %o", perm)
+	}
+
+	// Check cert file permissions (should be 0644)
+	certPath := filepath.Join(nodesDir, nodeID+".crt")
 	info, err = os.Stat(certPath)
 	if err != nil {
 		t.Fatalf("Failed to stat cert file: %v", err)

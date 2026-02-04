@@ -31,6 +31,9 @@ services:
       - hub-data:/data
     environment:
       - NITELLA_LOG_LEVEL=debug
+      - NITELLA_CERT_DNS_NAMES=hub
+      - NITELLA_DISABLE_PAIRING_RATE_LIMIT=true
+    command: ["--port", "50052", "--http-port", "8080", "--db-path", "/data/hub.db", "--cert-data-dir", "/data"]
     healthcheck:
       test: ["CMD", "nc", "-z", "localhost", "50052"]
       interval: 5s
@@ -54,7 +57,9 @@ services:
       - "50061:50051"
     volumes:
       - node1-data:/data
+      - node1-certs:/data/admin-certs
       - ./configs:/configs:ro
+    command: ["--listen", ":8080", "--admin-port", "50051", "--db-path", "/data/nitella.db", "--admin-data-dir", "/data/admin-certs"]
     environment:
       - NODE_ID=node1
       - NODE_NAME=alice-production
@@ -77,7 +82,9 @@ services:
       - "50062:50051"
     volumes:
       - node2-data:/data
+      - node2-certs:/data/admin-certs
       - ./configs:/configs:ro
+    command: ["--listen", ":8080", "--admin-port", "50051", "--db-path", "/data/nitella.db", "--admin-data-dir", "/data/admin-certs"]
     environment:
       - NODE_ID=node2
       - NODE_NAME=alice-staging
@@ -100,7 +107,9 @@ services:
       - "50063:50051"
     volumes:
       - node3-data:/data
+      - node3-certs:/data/admin-certs
       - ./configs:/configs:ro
+    command: ["--listen", ":8080", "--admin-port", "50051", "--db-path", "/data/nitella.db", "--admin-data-dir", "/data/admin-certs"]
     environment:
       - NODE_ID=node3
       - NODE_NAME=bob-homelab
@@ -193,8 +202,14 @@ services:
     volumes:
       - ./results:/results
       - /var/run/docker.sock:/var/run/docker.sock
+      - node1-certs:/certs/node1:ro
+      - node2-certs:/certs/node2:ro
+      - node3-certs:/certs/node3:ro
+      - hub-data:/certs/hub:ro
     environment:
       - HUB_ADDR=hub:50052
+      - HUB_HTTP_ADDR=hub:8080
+      - HUB_CA_PATH=/certs/hub/hub_ca.crt
       - NODE1_ADDR=node1:8080
       - NODE1_ADMIN=node1:50051
       - NODE2_ADDR=node2:8080
@@ -240,8 +255,11 @@ services:
 volumes:
   hub-data:
   node1-data:
+  node1-certs:
   node2-data:
+  node2-certs:
   node3-data:
+  node3-certs:
   hubctl-data:
 
 networks:

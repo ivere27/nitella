@@ -3,13 +3,13 @@ package node
 import (
 	"crypto/rand"
 	"encoding/binary"
-	"fmt"
 	"net"
 	"time"
 
 	"github.com/ivere27/nitella/pkg/api/common"
 	pb "github.com/ivere27/nitella/pkg/api/proxy"
 	"github.com/ivere27/nitella/pkg/config"
+	"github.com/ivere27/nitella/pkg/log"
 	"github.com/ivere27/nitella/pkg/mockproto"
 )
 
@@ -134,7 +134,7 @@ func (p *EmbeddedListener) HandleMockConnection(conn net.Conn, rule *pb.Rule) {
 				jitter := secureRandomInt(mockConfig.DelayMs/2 + 1)
 
 				mockConfig.DelayMs = baseDelay + jitter
-				fmt.Printf("[Tarpit] Penalty applied for %s: %d attempts -> %dms delay (jitter: %d)\n", sourceIP, attempts, mockConfig.DelayMs, jitter)
+				log.Printf("[Tarpit] Penalty applied for %s: %d attempts -> %dms delay (jitter: %d)", sourceIP, attempts, mockConfig.DelayMs, jitter)
 			}
 		}
 	}

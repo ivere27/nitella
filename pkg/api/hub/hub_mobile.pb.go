@@ -1180,6 +1180,7 @@ type UpdateLicenseRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	UserId        string                 `protobuf:"bytes,1,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`
 	LicenseKey    string                 `protobuf:"bytes,2,opt,name=license_key,json=licenseKey,proto3" json:"license_key,omitempty"`
+	RoutingToken  string                 `protobuf:"bytes,3,opt,name=routing_token,json=routingToken,proto3" json:"routing_token,omitempty"` // Required: routing token to update tier for
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1224,6 +1225,13 @@ func (x *UpdateLicenseRequest) GetUserId() string {
 func (x *UpdateLicenseRequest) GetLicenseKey() string {
 	if x != nil {
 		return x.LicenseKey
+	}
+	return ""
+}
+
+func (x *UpdateLicenseRequest) GetRoutingToken() string {
+	if x != nil {
+		return x.RoutingToken
 	}
 	return ""
 }
@@ -1288,119 +1296,6 @@ func (x *UpdateLicenseResponse) GetValid() bool {
 	return false
 }
 
-// Approval
-type SubmitApprovalDecisionRequest struct {
-	state           protoimpl.MessageState `protogen:"open.v1"`
-	RequestId       string                 `protobuf:"bytes,1,opt,name=request_id,json=requestId,proto3" json:"request_id,omitempty"` // ID from the Alert metadata
-	Allowed         bool                   `protobuf:"varint,2,opt,name=allowed,proto3" json:"allowed,omitempty"`
-	DurationSeconds int64                  `protobuf:"varint,3,opt,name=duration_seconds,json=durationSeconds,proto3" json:"duration_seconds,omitempty"` // How long to cache this decision
-	Reason          string                 `protobuf:"bytes,4,opt,name=reason,proto3" json:"reason,omitempty"`                                           // Optional reason
-	unknownFields   protoimpl.UnknownFields
-	sizeCache       protoimpl.SizeCache
-}
-
-func (x *SubmitApprovalDecisionRequest) Reset() {
-	*x = SubmitApprovalDecisionRequest{}
-	mi := &file_hub_hub_mobile_proto_msgTypes[20]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *SubmitApprovalDecisionRequest) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*SubmitApprovalDecisionRequest) ProtoMessage() {}
-
-func (x *SubmitApprovalDecisionRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_hub_hub_mobile_proto_msgTypes[20]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use SubmitApprovalDecisionRequest.ProtoReflect.Descriptor instead.
-func (*SubmitApprovalDecisionRequest) Descriptor() ([]byte, []int) {
-	return file_hub_hub_mobile_proto_rawDescGZIP(), []int{20}
-}
-
-func (x *SubmitApprovalDecisionRequest) GetRequestId() string {
-	if x != nil {
-		return x.RequestId
-	}
-	return ""
-}
-
-func (x *SubmitApprovalDecisionRequest) GetAllowed() bool {
-	if x != nil {
-		return x.Allowed
-	}
-	return false
-}
-
-func (x *SubmitApprovalDecisionRequest) GetDurationSeconds() int64 {
-	if x != nil {
-		return x.DurationSeconds
-	}
-	return 0
-}
-
-func (x *SubmitApprovalDecisionRequest) GetReason() string {
-	if x != nil {
-		return x.Reason
-	}
-	return ""
-}
-
-type SubmitApprovalDecisionResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Success       bool                   `protobuf:"varint,1,opt,name=success,proto3" json:"success,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *SubmitApprovalDecisionResponse) Reset() {
-	*x = SubmitApprovalDecisionResponse{}
-	mi := &file_hub_hub_mobile_proto_msgTypes[21]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *SubmitApprovalDecisionResponse) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*SubmitApprovalDecisionResponse) ProtoMessage() {}
-
-func (x *SubmitApprovalDecisionResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_hub_hub_mobile_proto_msgTypes[21]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use SubmitApprovalDecisionResponse.ProtoReflect.Descriptor instead.
-func (*SubmitApprovalDecisionResponse) Descriptor() ([]byte, []int) {
-	return file_hub_hub_mobile_proto_rawDescGZIP(), []int{21}
-}
-
-func (x *SubmitApprovalDecisionResponse) GetSuccess() bool {
-	if x != nil {
-		return x.Success
-	}
-	return false
-}
-
 // Create new proxy config (just ID, no content yet)
 type CreateProxyConfigRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
@@ -1412,7 +1307,7 @@ type CreateProxyConfigRequest struct {
 
 func (x *CreateProxyConfigRequest) Reset() {
 	*x = CreateProxyConfigRequest{}
-	mi := &file_hub_hub_mobile_proto_msgTypes[22]
+	mi := &file_hub_hub_mobile_proto_msgTypes[20]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1424,7 +1319,7 @@ func (x *CreateProxyConfigRequest) String() string {
 func (*CreateProxyConfigRequest) ProtoMessage() {}
 
 func (x *CreateProxyConfigRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_hub_hub_mobile_proto_msgTypes[22]
+	mi := &file_hub_hub_mobile_proto_msgTypes[20]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1437,7 +1332,7 @@ func (x *CreateProxyConfigRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateProxyConfigRequest.ProtoReflect.Descriptor instead.
 func (*CreateProxyConfigRequest) Descriptor() ([]byte, []int) {
-	return file_hub_hub_mobile_proto_rawDescGZIP(), []int{22}
+	return file_hub_hub_mobile_proto_rawDescGZIP(), []int{20}
 }
 
 func (x *CreateProxyConfigRequest) GetProxyId() string {
@@ -1464,7 +1359,7 @@ type CreateProxyConfigResponse struct {
 
 func (x *CreateProxyConfigResponse) Reset() {
 	*x = CreateProxyConfigResponse{}
-	mi := &file_hub_hub_mobile_proto_msgTypes[23]
+	mi := &file_hub_hub_mobile_proto_msgTypes[21]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1476,7 +1371,7 @@ func (x *CreateProxyConfigResponse) String() string {
 func (*CreateProxyConfigResponse) ProtoMessage() {}
 
 func (x *CreateProxyConfigResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_hub_hub_mobile_proto_msgTypes[23]
+	mi := &file_hub_hub_mobile_proto_msgTypes[21]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1489,7 +1384,7 @@ func (x *CreateProxyConfigResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateProxyConfigResponse.ProtoReflect.Descriptor instead.
 func (*CreateProxyConfigResponse) Descriptor() ([]byte, []int) {
-	return file_hub_hub_mobile_proto_rawDescGZIP(), []int{23}
+	return file_hub_hub_mobile_proto_rawDescGZIP(), []int{21}
 }
 
 func (x *CreateProxyConfigResponse) GetSuccess() bool {
@@ -1516,7 +1411,7 @@ type ListProxyConfigsRequest struct {
 
 func (x *ListProxyConfigsRequest) Reset() {
 	*x = ListProxyConfigsRequest{}
-	mi := &file_hub_hub_mobile_proto_msgTypes[24]
+	mi := &file_hub_hub_mobile_proto_msgTypes[22]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1528,7 +1423,7 @@ func (x *ListProxyConfigsRequest) String() string {
 func (*ListProxyConfigsRequest) ProtoMessage() {}
 
 func (x *ListProxyConfigsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_hub_hub_mobile_proto_msgTypes[24]
+	mi := &file_hub_hub_mobile_proto_msgTypes[22]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1541,7 +1436,7 @@ func (x *ListProxyConfigsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListProxyConfigsRequest.ProtoReflect.Descriptor instead.
 func (*ListProxyConfigsRequest) Descriptor() ([]byte, []int) {
-	return file_hub_hub_mobile_proto_rawDescGZIP(), []int{24}
+	return file_hub_hub_mobile_proto_rawDescGZIP(), []int{22}
 }
 
 func (x *ListProxyConfigsRequest) GetRoutingToken() string {
@@ -1560,7 +1455,7 @@ type ListProxyConfigsResponse struct {
 
 func (x *ListProxyConfigsResponse) Reset() {
 	*x = ListProxyConfigsResponse{}
-	mi := &file_hub_hub_mobile_proto_msgTypes[25]
+	mi := &file_hub_hub_mobile_proto_msgTypes[23]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1572,7 +1467,7 @@ func (x *ListProxyConfigsResponse) String() string {
 func (*ListProxyConfigsResponse) ProtoMessage() {}
 
 func (x *ListProxyConfigsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_hub_hub_mobile_proto_msgTypes[25]
+	mi := &file_hub_hub_mobile_proto_msgTypes[23]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1585,7 +1480,7 @@ func (x *ListProxyConfigsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListProxyConfigsResponse.ProtoReflect.Descriptor instead.
 func (*ListProxyConfigsResponse) Descriptor() ([]byte, []int) {
-	return file_hub_hub_mobile_proto_rawDescGZIP(), []int{25}
+	return file_hub_hub_mobile_proto_rawDescGZIP(), []int{23}
 }
 
 func (x *ListProxyConfigsResponse) GetProxies() []*ProxyConfigInfo {
@@ -1609,7 +1504,7 @@ type ProxyConfigInfo struct {
 
 func (x *ProxyConfigInfo) Reset() {
 	*x = ProxyConfigInfo{}
-	mi := &file_hub_hub_mobile_proto_msgTypes[26]
+	mi := &file_hub_hub_mobile_proto_msgTypes[24]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1621,7 +1516,7 @@ func (x *ProxyConfigInfo) String() string {
 func (*ProxyConfigInfo) ProtoMessage() {}
 
 func (x *ProxyConfigInfo) ProtoReflect() protoreflect.Message {
-	mi := &file_hub_hub_mobile_proto_msgTypes[26]
+	mi := &file_hub_hub_mobile_proto_msgTypes[24]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1634,7 +1529,7 @@ func (x *ProxyConfigInfo) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ProxyConfigInfo.ProtoReflect.Descriptor instead.
 func (*ProxyConfigInfo) Descriptor() ([]byte, []int) {
-	return file_hub_hub_mobile_proto_rawDescGZIP(), []int{26}
+	return file_hub_hub_mobile_proto_rawDescGZIP(), []int{24}
 }
 
 func (x *ProxyConfigInfo) GetProxyId() string {
@@ -1690,7 +1585,7 @@ type DeleteProxyConfigRequest struct {
 
 func (x *DeleteProxyConfigRequest) Reset() {
 	*x = DeleteProxyConfigRequest{}
-	mi := &file_hub_hub_mobile_proto_msgTypes[27]
+	mi := &file_hub_hub_mobile_proto_msgTypes[25]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1702,7 +1597,7 @@ func (x *DeleteProxyConfigRequest) String() string {
 func (*DeleteProxyConfigRequest) ProtoMessage() {}
 
 func (x *DeleteProxyConfigRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_hub_hub_mobile_proto_msgTypes[27]
+	mi := &file_hub_hub_mobile_proto_msgTypes[25]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1715,7 +1610,7 @@ func (x *DeleteProxyConfigRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteProxyConfigRequest.ProtoReflect.Descriptor instead.
 func (*DeleteProxyConfigRequest) Descriptor() ([]byte, []int) {
-	return file_hub_hub_mobile_proto_rawDescGZIP(), []int{27}
+	return file_hub_hub_mobile_proto_rawDescGZIP(), []int{25}
 }
 
 func (x *DeleteProxyConfigRequest) GetProxyId() string {
@@ -1745,7 +1640,7 @@ type PushRevisionRequest struct {
 
 func (x *PushRevisionRequest) Reset() {
 	*x = PushRevisionRequest{}
-	mi := &file_hub_hub_mobile_proto_msgTypes[28]
+	mi := &file_hub_hub_mobile_proto_msgTypes[26]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1757,7 +1652,7 @@ func (x *PushRevisionRequest) String() string {
 func (*PushRevisionRequest) ProtoMessage() {}
 
 func (x *PushRevisionRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_hub_hub_mobile_proto_msgTypes[28]
+	mi := &file_hub_hub_mobile_proto_msgTypes[26]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1770,7 +1665,7 @@ func (x *PushRevisionRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PushRevisionRequest.ProtoReflect.Descriptor instead.
 func (*PushRevisionRequest) Descriptor() ([]byte, []int) {
-	return file_hub_hub_mobile_proto_rawDescGZIP(), []int{28}
+	return file_hub_hub_mobile_proto_rawDescGZIP(), []int{26}
 }
 
 func (x *PushRevisionRequest) GetProxyId() string {
@@ -1816,7 +1711,7 @@ type PushRevisionResponse struct {
 
 func (x *PushRevisionResponse) Reset() {
 	*x = PushRevisionResponse{}
-	mi := &file_hub_hub_mobile_proto_msgTypes[29]
+	mi := &file_hub_hub_mobile_proto_msgTypes[27]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1828,7 +1723,7 @@ func (x *PushRevisionResponse) String() string {
 func (*PushRevisionResponse) ProtoMessage() {}
 
 func (x *PushRevisionResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_hub_hub_mobile_proto_msgTypes[29]
+	mi := &file_hub_hub_mobile_proto_msgTypes[27]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1841,7 +1736,7 @@ func (x *PushRevisionResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PushRevisionResponse.ProtoReflect.Descriptor instead.
 func (*PushRevisionResponse) Descriptor() ([]byte, []int) {
-	return file_hub_hub_mobile_proto_rawDescGZIP(), []int{29}
+	return file_hub_hub_mobile_proto_rawDescGZIP(), []int{27}
 }
 
 func (x *PushRevisionResponse) GetSuccess() bool {
@@ -1905,7 +1800,7 @@ type GetRevisionRequest struct {
 
 func (x *GetRevisionRequest) Reset() {
 	*x = GetRevisionRequest{}
-	mi := &file_hub_hub_mobile_proto_msgTypes[30]
+	mi := &file_hub_hub_mobile_proto_msgTypes[28]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1917,7 +1812,7 @@ func (x *GetRevisionRequest) String() string {
 func (*GetRevisionRequest) ProtoMessage() {}
 
 func (x *GetRevisionRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_hub_hub_mobile_proto_msgTypes[30]
+	mi := &file_hub_hub_mobile_proto_msgTypes[28]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1930,7 +1825,7 @@ func (x *GetRevisionRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetRevisionRequest.ProtoReflect.Descriptor instead.
 func (*GetRevisionRequest) Descriptor() ([]byte, []int) {
-	return file_hub_hub_mobile_proto_rawDescGZIP(), []int{30}
+	return file_hub_hub_mobile_proto_rawDescGZIP(), []int{28}
 }
 
 func (x *GetRevisionRequest) GetProxyId() string {
@@ -1966,7 +1861,7 @@ type GetRevisionResponse struct {
 
 func (x *GetRevisionResponse) Reset() {
 	*x = GetRevisionResponse{}
-	mi := &file_hub_hub_mobile_proto_msgTypes[31]
+	mi := &file_hub_hub_mobile_proto_msgTypes[29]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1978,7 +1873,7 @@ func (x *GetRevisionResponse) String() string {
 func (*GetRevisionResponse) ProtoMessage() {}
 
 func (x *GetRevisionResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_hub_hub_mobile_proto_msgTypes[31]
+	mi := &file_hub_hub_mobile_proto_msgTypes[29]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1991,7 +1886,7 @@ func (x *GetRevisionResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetRevisionResponse.ProtoReflect.Descriptor instead.
 func (*GetRevisionResponse) Descriptor() ([]byte, []int) {
-	return file_hub_hub_mobile_proto_rawDescGZIP(), []int{31}
+	return file_hub_hub_mobile_proto_rawDescGZIP(), []int{29}
 }
 
 func (x *GetRevisionResponse) GetEncryptedBlob() []byte {
@@ -2033,7 +1928,7 @@ type ListRevisionsRequest struct {
 
 func (x *ListRevisionsRequest) Reset() {
 	*x = ListRevisionsRequest{}
-	mi := &file_hub_hub_mobile_proto_msgTypes[32]
+	mi := &file_hub_hub_mobile_proto_msgTypes[30]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2045,7 +1940,7 @@ func (x *ListRevisionsRequest) String() string {
 func (*ListRevisionsRequest) ProtoMessage() {}
 
 func (x *ListRevisionsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_hub_hub_mobile_proto_msgTypes[32]
+	mi := &file_hub_hub_mobile_proto_msgTypes[30]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2058,7 +1953,7 @@ func (x *ListRevisionsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListRevisionsRequest.ProtoReflect.Descriptor instead.
 func (*ListRevisionsRequest) Descriptor() ([]byte, []int) {
-	return file_hub_hub_mobile_proto_rawDescGZIP(), []int{32}
+	return file_hub_hub_mobile_proto_rawDescGZIP(), []int{30}
 }
 
 func (x *ListRevisionsRequest) GetProxyId() string {
@@ -2084,7 +1979,7 @@ type ListRevisionsResponse struct {
 
 func (x *ListRevisionsResponse) Reset() {
 	*x = ListRevisionsResponse{}
-	mi := &file_hub_hub_mobile_proto_msgTypes[33]
+	mi := &file_hub_hub_mobile_proto_msgTypes[31]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2096,7 +1991,7 @@ func (x *ListRevisionsResponse) String() string {
 func (*ListRevisionsResponse) ProtoMessage() {}
 
 func (x *ListRevisionsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_hub_hub_mobile_proto_msgTypes[33]
+	mi := &file_hub_hub_mobile_proto_msgTypes[31]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2109,7 +2004,7 @@ func (x *ListRevisionsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListRevisionsResponse.ProtoReflect.Descriptor instead.
 func (*ListRevisionsResponse) Descriptor() ([]byte, []int) {
-	return file_hub_hub_mobile_proto_rawDescGZIP(), []int{33}
+	return file_hub_hub_mobile_proto_rawDescGZIP(), []int{31}
 }
 
 func (x *ListRevisionsResponse) GetRevisions() []*RevisionMeta {
@@ -2130,7 +2025,7 @@ type RevisionMeta struct {
 
 func (x *RevisionMeta) Reset() {
 	*x = RevisionMeta{}
-	mi := &file_hub_hub_mobile_proto_msgTypes[34]
+	mi := &file_hub_hub_mobile_proto_msgTypes[32]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2142,7 +2037,7 @@ func (x *RevisionMeta) String() string {
 func (*RevisionMeta) ProtoMessage() {}
 
 func (x *RevisionMeta) ProtoReflect() protoreflect.Message {
-	mi := &file_hub_hub_mobile_proto_msgTypes[34]
+	mi := &file_hub_hub_mobile_proto_msgTypes[32]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2155,7 +2050,7 @@ func (x *RevisionMeta) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RevisionMeta.ProtoReflect.Descriptor instead.
 func (*RevisionMeta) Descriptor() ([]byte, []int) {
-	return file_hub_hub_mobile_proto_rawDescGZIP(), []int{34}
+	return file_hub_hub_mobile_proto_rawDescGZIP(), []int{32}
 }
 
 func (x *RevisionMeta) GetRevisionNum() int64 {
@@ -2191,7 +2086,7 @@ type FlushRevisionsRequest struct {
 
 func (x *FlushRevisionsRequest) Reset() {
 	*x = FlushRevisionsRequest{}
-	mi := &file_hub_hub_mobile_proto_msgTypes[35]
+	mi := &file_hub_hub_mobile_proto_msgTypes[33]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2203,7 +2098,7 @@ func (x *FlushRevisionsRequest) String() string {
 func (*FlushRevisionsRequest) ProtoMessage() {}
 
 func (x *FlushRevisionsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_hub_hub_mobile_proto_msgTypes[35]
+	mi := &file_hub_hub_mobile_proto_msgTypes[33]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2216,7 +2111,7 @@ func (x *FlushRevisionsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use FlushRevisionsRequest.ProtoReflect.Descriptor instead.
 func (*FlushRevisionsRequest) Descriptor() ([]byte, []int) {
-	return file_hub_hub_mobile_proto_rawDescGZIP(), []int{35}
+	return file_hub_hub_mobile_proto_rawDescGZIP(), []int{33}
 }
 
 func (x *FlushRevisionsRequest) GetProxyId() string {
@@ -2252,7 +2147,7 @@ type FlushRevisionsResponse struct {
 
 func (x *FlushRevisionsResponse) Reset() {
 	*x = FlushRevisionsResponse{}
-	mi := &file_hub_hub_mobile_proto_msgTypes[36]
+	mi := &file_hub_hub_mobile_proto_msgTypes[34]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2264,7 +2159,7 @@ func (x *FlushRevisionsResponse) String() string {
 func (*FlushRevisionsResponse) ProtoMessage() {}
 
 func (x *FlushRevisionsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_hub_hub_mobile_proto_msgTypes[36]
+	mi := &file_hub_hub_mobile_proto_msgTypes[34]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2277,7 +2172,7 @@ func (x *FlushRevisionsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use FlushRevisionsResponse.ProtoReflect.Descriptor instead.
 func (*FlushRevisionsResponse) Descriptor() ([]byte, []int) {
-	return file_hub_hub_mobile_proto_rawDescGZIP(), []int{36}
+	return file_hub_hub_mobile_proto_rawDescGZIP(), []int{34}
 }
 
 func (x *FlushRevisionsResponse) GetSuccess() bool {
@@ -2397,23 +2292,16 @@ const file_hub_hub_mobile_proto_rawDesc = "" +
 	"\auser_id\x18\x01 \x01(\tR\x06userId\x12\x1b\n" +
 	"\tfcm_token\x18\x02 \x01(\tR\bfcmToken\x12\x1f\n" +
 	"\vdevice_type\x18\x03 \x01(\tR\n" +
-	"deviceType\"P\n" +
+	"deviceType\"u\n" +
 	"\x14UpdateLicenseRequest\x12\x17\n" +
 	"\auser_id\x18\x01 \x01(\tR\x06userId\x12\x1f\n" +
 	"\vlicense_key\x18\x02 \x01(\tR\n" +
-	"licenseKey\"^\n" +
+	"licenseKey\x12#\n" +
+	"\rrouting_token\x18\x03 \x01(\tR\froutingToken\"^\n" +
 	"\x15UpdateLicenseResponse\x12\x12\n" +
 	"\x04tier\x18\x01 \x01(\tR\x04tier\x12\x1b\n" +
 	"\tmax_nodes\x18\x02 \x01(\x05R\bmaxNodes\x12\x14\n" +
-	"\x05valid\x18\x03 \x01(\bR\x05valid\"\x9b\x01\n" +
-	"\x1dSubmitApprovalDecisionRequest\x12\x1d\n" +
-	"\n" +
-	"request_id\x18\x01 \x01(\tR\trequestId\x12\x18\n" +
-	"\aallowed\x18\x02 \x01(\bR\aallowed\x12)\n" +
-	"\x10duration_seconds\x18\x03 \x01(\x03R\x0fdurationSeconds\x12\x16\n" +
-	"\x06reason\x18\x04 \x01(\tR\x06reason\":\n" +
-	"\x1eSubmitApprovalDecisionResponse\x12\x18\n" +
-	"\asuccess\x18\x01 \x01(\bR\asuccess\"Z\n" +
+	"\x05valid\x18\x03 \x01(\bR\x05valid\"Z\n" +
 	"\x18CreateProxyConfigRequest\x12\x19\n" +
 	"\bproxy_id\x18\x01 \x01(\tR\aproxyId\x12#\n" +
 	"\rrouting_token\x18\x02 \x01(\tR\froutingToken\"K\n" +
@@ -2481,7 +2369,7 @@ const file_hub_hub_mobile_proto_rawDesc = "" +
 	"\asuccess\x18\x01 \x01(\bR\asuccess\x12#\n" +
 	"\rdeleted_count\x18\x02 \x01(\x05R\fdeletedCount\x12'\n" +
 	"\x0fremaining_count\x18\x03 \x01(\x05R\x0eremainingCount\x12\x14\n" +
-	"\x05error\x18\x04 \x01(\tR\x05error2\xbf\f\n" +
+	"\x05error\x18\x04 \x01(\tR\x05error2\xcc\v\n" +
 	"\rMobileService\x12T\n" +
 	"\x12RegisterNodeViaCSR\x12&.nitella.hub.RegisterNodeViaCSRRequest\x1a\x16.google.protobuf.Empty\x12J\n" +
 	"\tListNodes\x12\x1d.nitella.hub.ListNodesRequest\x1a\x1e.nitella.hub.ListNodesResponse\x129\n" +
@@ -2501,8 +2389,7 @@ const file_hub_hub_mobile_proto_rawDesc = "" +
 	"\fPushRevision\x12 .nitella.hub.PushRevisionRequest\x1a!.nitella.hub.PushRevisionResponse\x12P\n" +
 	"\vGetRevision\x12\x1f.nitella.hub.GetRevisionRequest\x1a .nitella.hub.GetRevisionResponse\x12V\n" +
 	"\rListRevisions\x12!.nitella.hub.ListRevisionsRequest\x1a\".nitella.hub.ListRevisionsResponse\x12Y\n" +
-	"\x0eFlushRevisions\x12\".nitella.hub.FlushRevisionsRequest\x1a#.nitella.hub.FlushRevisionsResponse\x12q\n" +
-	"\x16SubmitApprovalDecision\x12*.nitella.hub.SubmitApprovalDecisionRequest\x1a+.nitella.hub.SubmitApprovalDecisionResponse2\xa6\x01\n" +
+	"\x0eFlushRevisions\x12\".nitella.hub.FlushRevisionsRequest\x1a#.nitella.hub.FlushRevisionsResponse2\xa6\x01\n" +
 	"\x0ePairingService\x12F\n" +
 	"\fPakeExchange\x12\x18.nitella.hub.PakeMessage\x1a\x18.nitella.hub.PakeMessage(\x010\x01\x12L\n" +
 	"\x10SubmitSignedCert\x12$.nitella.hub.SubmitSignedCertRequest\x1a\x12.nitella.hub.Empty2\x84\x02\n" +
@@ -2524,69 +2411,67 @@ func file_hub_hub_mobile_proto_rawDescGZIP() []byte {
 }
 
 var file_hub_hub_mobile_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_hub_hub_mobile_proto_msgTypes = make([]protoimpl.MessageInfo, 37)
+var file_hub_hub_mobile_proto_msgTypes = make([]protoimpl.MessageInfo, 35)
 var file_hub_hub_mobile_proto_goTypes = []any{
-	(PakeMessage_MessageType)(0),           // 0: nitella.hub.PakeMessage.MessageType
-	(*RegisterNodeViaCSRRequest)(nil),      // 1: nitella.hub.RegisterNodeViaCSRRequest
-	(*ListNodesRequest)(nil),               // 2: nitella.hub.ListNodesRequest
-	(*ListNodesResponse)(nil),              // 3: nitella.hub.ListNodesResponse
-	(*GetNodeRequest)(nil),                 // 4: nitella.hub.GetNodeRequest
-	(*RegisterNodeRequest)(nil),            // 5: nitella.hub.RegisterNodeRequest
-	(*RegisterNodeResponse)(nil),           // 6: nitella.hub.RegisterNodeResponse
-	(*ApproveNodeRequest)(nil),             // 7: nitella.hub.ApproveNodeRequest
-	(*DeleteNodeRequest)(nil),              // 8: nitella.hub.DeleteNodeRequest
-	(*CommandRequest)(nil),                 // 9: nitella.hub.CommandRequest
-	(*StreamMetricsRequest)(nil),           // 10: nitella.hub.StreamMetricsRequest
-	(*GetMetricsHistoryRequest)(nil),       // 11: nitella.hub.GetMetricsHistoryRequest
-	(*GetMetricsHistoryResponse)(nil),      // 12: nitella.hub.GetMetricsHistoryResponse
-	(*StreamAlertsRequest)(nil),            // 13: nitella.hub.StreamAlertsRequest
-	(*SubmitSignedCertRequest)(nil),        // 14: nitella.hub.SubmitSignedCertRequest
-	(*PakeMessage)(nil),                    // 15: nitella.hub.PakeMessage
-	(*RegisterUserRequest)(nil),            // 16: nitella.hub.RegisterUserRequest
-	(*RegisterUserResponse)(nil),           // 17: nitella.hub.RegisterUserResponse
-	(*RegisterDeviceRequest)(nil),          // 18: nitella.hub.RegisterDeviceRequest
-	(*UpdateLicenseRequest)(nil),           // 19: nitella.hub.UpdateLicenseRequest
-	(*UpdateLicenseResponse)(nil),          // 20: nitella.hub.UpdateLicenseResponse
-	(*SubmitApprovalDecisionRequest)(nil),  // 21: nitella.hub.SubmitApprovalDecisionRequest
-	(*SubmitApprovalDecisionResponse)(nil), // 22: nitella.hub.SubmitApprovalDecisionResponse
-	(*CreateProxyConfigRequest)(nil),       // 23: nitella.hub.CreateProxyConfigRequest
-	(*CreateProxyConfigResponse)(nil),      // 24: nitella.hub.CreateProxyConfigResponse
-	(*ListProxyConfigsRequest)(nil),        // 25: nitella.hub.ListProxyConfigsRequest
-	(*ListProxyConfigsResponse)(nil),       // 26: nitella.hub.ListProxyConfigsResponse
-	(*ProxyConfigInfo)(nil),                // 27: nitella.hub.ProxyConfigInfo
-	(*DeleteProxyConfigRequest)(nil),       // 28: nitella.hub.DeleteProxyConfigRequest
-	(*PushRevisionRequest)(nil),            // 29: nitella.hub.PushRevisionRequest
-	(*PushRevisionResponse)(nil),           // 30: nitella.hub.PushRevisionResponse
-	(*GetRevisionRequest)(nil),             // 31: nitella.hub.GetRevisionRequest
-	(*GetRevisionResponse)(nil),            // 32: nitella.hub.GetRevisionResponse
-	(*ListRevisionsRequest)(nil),           // 33: nitella.hub.ListRevisionsRequest
-	(*ListRevisionsResponse)(nil),          // 34: nitella.hub.ListRevisionsResponse
-	(*RevisionMeta)(nil),                   // 35: nitella.hub.RevisionMeta
-	(*FlushRevisionsRequest)(nil),          // 36: nitella.hub.FlushRevisionsRequest
-	(*FlushRevisionsResponse)(nil),         // 37: nitella.hub.FlushRevisionsResponse
-	(*Node)(nil),                           // 38: nitella.hub.Node
-	(*common.EncryptedPayload)(nil),        // 39: nitella.EncryptedPayload
-	(*timestamp.Timestamp)(nil),            // 40: google.protobuf.Timestamp
-	(*EncryptedMetrics)(nil),               // 41: nitella.hub.EncryptedMetrics
-	(*SignalMessage)(nil),                  // 42: nitella.hub.SignalMessage
-	(*empty.Empty)(nil),                    // 43: google.protobuf.Empty
-	(*Empty)(nil),                          // 44: nitella.hub.Empty
-	(*CommandResponse)(nil),                // 45: nitella.hub.CommandResponse
-	(*common.Alert)(nil),                   // 46: nitella.Alert
+	(PakeMessage_MessageType)(0),      // 0: nitella.hub.PakeMessage.MessageType
+	(*RegisterNodeViaCSRRequest)(nil), // 1: nitella.hub.RegisterNodeViaCSRRequest
+	(*ListNodesRequest)(nil),          // 2: nitella.hub.ListNodesRequest
+	(*ListNodesResponse)(nil),         // 3: nitella.hub.ListNodesResponse
+	(*GetNodeRequest)(nil),            // 4: nitella.hub.GetNodeRequest
+	(*RegisterNodeRequest)(nil),       // 5: nitella.hub.RegisterNodeRequest
+	(*RegisterNodeResponse)(nil),      // 6: nitella.hub.RegisterNodeResponse
+	(*ApproveNodeRequest)(nil),        // 7: nitella.hub.ApproveNodeRequest
+	(*DeleteNodeRequest)(nil),         // 8: nitella.hub.DeleteNodeRequest
+	(*CommandRequest)(nil),            // 9: nitella.hub.CommandRequest
+	(*StreamMetricsRequest)(nil),      // 10: nitella.hub.StreamMetricsRequest
+	(*GetMetricsHistoryRequest)(nil),  // 11: nitella.hub.GetMetricsHistoryRequest
+	(*GetMetricsHistoryResponse)(nil), // 12: nitella.hub.GetMetricsHistoryResponse
+	(*StreamAlertsRequest)(nil),       // 13: nitella.hub.StreamAlertsRequest
+	(*SubmitSignedCertRequest)(nil),   // 14: nitella.hub.SubmitSignedCertRequest
+	(*PakeMessage)(nil),               // 15: nitella.hub.PakeMessage
+	(*RegisterUserRequest)(nil),       // 16: nitella.hub.RegisterUserRequest
+	(*RegisterUserResponse)(nil),      // 17: nitella.hub.RegisterUserResponse
+	(*RegisterDeviceRequest)(nil),     // 18: nitella.hub.RegisterDeviceRequest
+	(*UpdateLicenseRequest)(nil),      // 19: nitella.hub.UpdateLicenseRequest
+	(*UpdateLicenseResponse)(nil),     // 20: nitella.hub.UpdateLicenseResponse
+	(*CreateProxyConfigRequest)(nil),  // 21: nitella.hub.CreateProxyConfigRequest
+	(*CreateProxyConfigResponse)(nil), // 22: nitella.hub.CreateProxyConfigResponse
+	(*ListProxyConfigsRequest)(nil),   // 23: nitella.hub.ListProxyConfigsRequest
+	(*ListProxyConfigsResponse)(nil),  // 24: nitella.hub.ListProxyConfigsResponse
+	(*ProxyConfigInfo)(nil),           // 25: nitella.hub.ProxyConfigInfo
+	(*DeleteProxyConfigRequest)(nil),  // 26: nitella.hub.DeleteProxyConfigRequest
+	(*PushRevisionRequest)(nil),       // 27: nitella.hub.PushRevisionRequest
+	(*PushRevisionResponse)(nil),      // 28: nitella.hub.PushRevisionResponse
+	(*GetRevisionRequest)(nil),        // 29: nitella.hub.GetRevisionRequest
+	(*GetRevisionResponse)(nil),       // 30: nitella.hub.GetRevisionResponse
+	(*ListRevisionsRequest)(nil),      // 31: nitella.hub.ListRevisionsRequest
+	(*ListRevisionsResponse)(nil),     // 32: nitella.hub.ListRevisionsResponse
+	(*RevisionMeta)(nil),              // 33: nitella.hub.RevisionMeta
+	(*FlushRevisionsRequest)(nil),     // 34: nitella.hub.FlushRevisionsRequest
+	(*FlushRevisionsResponse)(nil),    // 35: nitella.hub.FlushRevisionsResponse
+	(*Node)(nil),                      // 36: nitella.hub.Node
+	(*common.EncryptedPayload)(nil),   // 37: nitella.EncryptedPayload
+	(*timestamp.Timestamp)(nil),       // 38: google.protobuf.Timestamp
+	(*EncryptedMetrics)(nil),          // 39: nitella.hub.EncryptedMetrics
+	(*SignalMessage)(nil),             // 40: nitella.hub.SignalMessage
+	(*empty.Empty)(nil),               // 41: google.protobuf.Empty
+	(*Empty)(nil),                     // 42: nitella.hub.Empty
+	(*CommandResponse)(nil),           // 43: nitella.hub.CommandResponse
+	(*common.Alert)(nil),              // 44: nitella.Alert
 }
 var file_hub_hub_mobile_proto_depIdxs = []int32{
-	38, // 0: nitella.hub.ListNodesResponse.nodes:type_name -> nitella.hub.Node
-	39, // 1: nitella.hub.CommandRequest.encrypted:type_name -> nitella.EncryptedPayload
-	40, // 2: nitella.hub.GetMetricsHistoryRequest.start_time:type_name -> google.protobuf.Timestamp
-	40, // 3: nitella.hub.GetMetricsHistoryRequest.end_time:type_name -> google.protobuf.Timestamp
-	41, // 4: nitella.hub.GetMetricsHistoryResponse.samples:type_name -> nitella.hub.EncryptedMetrics
+	36, // 0: nitella.hub.ListNodesResponse.nodes:type_name -> nitella.hub.Node
+	37, // 1: nitella.hub.CommandRequest.encrypted:type_name -> nitella.EncryptedPayload
+	38, // 2: nitella.hub.GetMetricsHistoryRequest.start_time:type_name -> google.protobuf.Timestamp
+	38, // 3: nitella.hub.GetMetricsHistoryRequest.end_time:type_name -> google.protobuf.Timestamp
+	39, // 4: nitella.hub.GetMetricsHistoryResponse.samples:type_name -> nitella.hub.EncryptedMetrics
 	0,  // 5: nitella.hub.PakeMessage.type:type_name -> nitella.hub.PakeMessage.MessageType
-	27, // 6: nitella.hub.ListProxyConfigsResponse.proxies:type_name -> nitella.hub.ProxyConfigInfo
-	40, // 7: nitella.hub.ProxyConfigInfo.created_at:type_name -> google.protobuf.Timestamp
-	40, // 8: nitella.hub.ProxyConfigInfo.updated_at:type_name -> google.protobuf.Timestamp
-	40, // 9: nitella.hub.GetRevisionResponse.created_at:type_name -> google.protobuf.Timestamp
-	35, // 10: nitella.hub.ListRevisionsResponse.revisions:type_name -> nitella.hub.RevisionMeta
-	40, // 11: nitella.hub.RevisionMeta.created_at:type_name -> google.protobuf.Timestamp
+	25, // 6: nitella.hub.ListProxyConfigsResponse.proxies:type_name -> nitella.hub.ProxyConfigInfo
+	38, // 7: nitella.hub.ProxyConfigInfo.created_at:type_name -> google.protobuf.Timestamp
+	38, // 8: nitella.hub.ProxyConfigInfo.updated_at:type_name -> google.protobuf.Timestamp
+	38, // 9: nitella.hub.GetRevisionResponse.created_at:type_name -> google.protobuf.Timestamp
+	33, // 10: nitella.hub.ListRevisionsResponse.revisions:type_name -> nitella.hub.RevisionMeta
+	38, // 11: nitella.hub.RevisionMeta.created_at:type_name -> google.protobuf.Timestamp
 	1,  // 12: nitella.hub.MobileService.RegisterNodeViaCSR:input_type -> nitella.hub.RegisterNodeViaCSRRequest
 	2,  // 13: nitella.hub.MobileService.ListNodes:input_type -> nitella.hub.ListNodesRequest
 	4,  // 14: nitella.hub.MobileService.GetNode:input_type -> nitella.hub.GetNodeRequest
@@ -2597,46 +2482,44 @@ var file_hub_hub_mobile_proto_depIdxs = []int32{
 	10, // 19: nitella.hub.MobileService.StreamMetrics:input_type -> nitella.hub.StreamMetricsRequest
 	11, // 20: nitella.hub.MobileService.GetMetricsHistory:input_type -> nitella.hub.GetMetricsHistoryRequest
 	13, // 21: nitella.hub.MobileService.StreamAlerts:input_type -> nitella.hub.StreamAlertsRequest
-	42, // 22: nitella.hub.MobileService.StreamSignaling:input_type -> nitella.hub.SignalMessage
-	23, // 23: nitella.hub.MobileService.CreateProxyConfig:input_type -> nitella.hub.CreateProxyConfigRequest
-	25, // 24: nitella.hub.MobileService.ListProxyConfigs:input_type -> nitella.hub.ListProxyConfigsRequest
-	28, // 25: nitella.hub.MobileService.DeleteProxyConfig:input_type -> nitella.hub.DeleteProxyConfigRequest
-	29, // 26: nitella.hub.MobileService.PushRevision:input_type -> nitella.hub.PushRevisionRequest
-	31, // 27: nitella.hub.MobileService.GetRevision:input_type -> nitella.hub.GetRevisionRequest
-	33, // 28: nitella.hub.MobileService.ListRevisions:input_type -> nitella.hub.ListRevisionsRequest
-	36, // 29: nitella.hub.MobileService.FlushRevisions:input_type -> nitella.hub.FlushRevisionsRequest
-	21, // 30: nitella.hub.MobileService.SubmitApprovalDecision:input_type -> nitella.hub.SubmitApprovalDecisionRequest
-	15, // 31: nitella.hub.PairingService.PakeExchange:input_type -> nitella.hub.PakeMessage
-	14, // 32: nitella.hub.PairingService.SubmitSignedCert:input_type -> nitella.hub.SubmitSignedCertRequest
-	16, // 33: nitella.hub.AuthService.RegisterUser:input_type -> nitella.hub.RegisterUserRequest
-	18, // 34: nitella.hub.AuthService.RegisterDevice:input_type -> nitella.hub.RegisterDeviceRequest
-	19, // 35: nitella.hub.AuthService.UpdateLicense:input_type -> nitella.hub.UpdateLicenseRequest
-	43, // 36: nitella.hub.MobileService.RegisterNodeViaCSR:output_type -> google.protobuf.Empty
-	3,  // 37: nitella.hub.MobileService.ListNodes:output_type -> nitella.hub.ListNodesResponse
-	38, // 38: nitella.hub.MobileService.GetNode:output_type -> nitella.hub.Node
-	6,  // 39: nitella.hub.MobileService.RegisterNode:output_type -> nitella.hub.RegisterNodeResponse
-	44, // 40: nitella.hub.MobileService.ApproveNode:output_type -> nitella.hub.Empty
-	44, // 41: nitella.hub.MobileService.DeleteNode:output_type -> nitella.hub.Empty
-	45, // 42: nitella.hub.MobileService.SendCommand:output_type -> nitella.hub.CommandResponse
-	41, // 43: nitella.hub.MobileService.StreamMetrics:output_type -> nitella.hub.EncryptedMetrics
-	12, // 44: nitella.hub.MobileService.GetMetricsHistory:output_type -> nitella.hub.GetMetricsHistoryResponse
-	46, // 45: nitella.hub.MobileService.StreamAlerts:output_type -> nitella.Alert
-	42, // 46: nitella.hub.MobileService.StreamSignaling:output_type -> nitella.hub.SignalMessage
-	24, // 47: nitella.hub.MobileService.CreateProxyConfig:output_type -> nitella.hub.CreateProxyConfigResponse
-	26, // 48: nitella.hub.MobileService.ListProxyConfigs:output_type -> nitella.hub.ListProxyConfigsResponse
-	44, // 49: nitella.hub.MobileService.DeleteProxyConfig:output_type -> nitella.hub.Empty
-	30, // 50: nitella.hub.MobileService.PushRevision:output_type -> nitella.hub.PushRevisionResponse
-	32, // 51: nitella.hub.MobileService.GetRevision:output_type -> nitella.hub.GetRevisionResponse
-	34, // 52: nitella.hub.MobileService.ListRevisions:output_type -> nitella.hub.ListRevisionsResponse
-	37, // 53: nitella.hub.MobileService.FlushRevisions:output_type -> nitella.hub.FlushRevisionsResponse
-	22, // 54: nitella.hub.MobileService.SubmitApprovalDecision:output_type -> nitella.hub.SubmitApprovalDecisionResponse
-	15, // 55: nitella.hub.PairingService.PakeExchange:output_type -> nitella.hub.PakeMessage
-	44, // 56: nitella.hub.PairingService.SubmitSignedCert:output_type -> nitella.hub.Empty
-	17, // 57: nitella.hub.AuthService.RegisterUser:output_type -> nitella.hub.RegisterUserResponse
-	44, // 58: nitella.hub.AuthService.RegisterDevice:output_type -> nitella.hub.Empty
-	20, // 59: nitella.hub.AuthService.UpdateLicense:output_type -> nitella.hub.UpdateLicenseResponse
-	36, // [36:60] is the sub-list for method output_type
-	12, // [12:36] is the sub-list for method input_type
+	40, // 22: nitella.hub.MobileService.StreamSignaling:input_type -> nitella.hub.SignalMessage
+	21, // 23: nitella.hub.MobileService.CreateProxyConfig:input_type -> nitella.hub.CreateProxyConfigRequest
+	23, // 24: nitella.hub.MobileService.ListProxyConfigs:input_type -> nitella.hub.ListProxyConfigsRequest
+	26, // 25: nitella.hub.MobileService.DeleteProxyConfig:input_type -> nitella.hub.DeleteProxyConfigRequest
+	27, // 26: nitella.hub.MobileService.PushRevision:input_type -> nitella.hub.PushRevisionRequest
+	29, // 27: nitella.hub.MobileService.GetRevision:input_type -> nitella.hub.GetRevisionRequest
+	31, // 28: nitella.hub.MobileService.ListRevisions:input_type -> nitella.hub.ListRevisionsRequest
+	34, // 29: nitella.hub.MobileService.FlushRevisions:input_type -> nitella.hub.FlushRevisionsRequest
+	15, // 30: nitella.hub.PairingService.PakeExchange:input_type -> nitella.hub.PakeMessage
+	14, // 31: nitella.hub.PairingService.SubmitSignedCert:input_type -> nitella.hub.SubmitSignedCertRequest
+	16, // 32: nitella.hub.AuthService.RegisterUser:input_type -> nitella.hub.RegisterUserRequest
+	18, // 33: nitella.hub.AuthService.RegisterDevice:input_type -> nitella.hub.RegisterDeviceRequest
+	19, // 34: nitella.hub.AuthService.UpdateLicense:input_type -> nitella.hub.UpdateLicenseRequest
+	41, // 35: nitella.hub.MobileService.RegisterNodeViaCSR:output_type -> google.protobuf.Empty
+	3,  // 36: nitella.hub.MobileService.ListNodes:output_type -> nitella.hub.ListNodesResponse
+	36, // 37: nitella.hub.MobileService.GetNode:output_type -> nitella.hub.Node
+	6,  // 38: nitella.hub.MobileService.RegisterNode:output_type -> nitella.hub.RegisterNodeResponse
+	42, // 39: nitella.hub.MobileService.ApproveNode:output_type -> nitella.hub.Empty
+	42, // 40: nitella.hub.MobileService.DeleteNode:output_type -> nitella.hub.Empty
+	43, // 41: nitella.hub.MobileService.SendCommand:output_type -> nitella.hub.CommandResponse
+	39, // 42: nitella.hub.MobileService.StreamMetrics:output_type -> nitella.hub.EncryptedMetrics
+	12, // 43: nitella.hub.MobileService.GetMetricsHistory:output_type -> nitella.hub.GetMetricsHistoryResponse
+	44, // 44: nitella.hub.MobileService.StreamAlerts:output_type -> nitella.Alert
+	40, // 45: nitella.hub.MobileService.StreamSignaling:output_type -> nitella.hub.SignalMessage
+	22, // 46: nitella.hub.MobileService.CreateProxyConfig:output_type -> nitella.hub.CreateProxyConfigResponse
+	24, // 47: nitella.hub.MobileService.ListProxyConfigs:output_type -> nitella.hub.ListProxyConfigsResponse
+	42, // 48: nitella.hub.MobileService.DeleteProxyConfig:output_type -> nitella.hub.Empty
+	28, // 49: nitella.hub.MobileService.PushRevision:output_type -> nitella.hub.PushRevisionResponse
+	30, // 50: nitella.hub.MobileService.GetRevision:output_type -> nitella.hub.GetRevisionResponse
+	32, // 51: nitella.hub.MobileService.ListRevisions:output_type -> nitella.hub.ListRevisionsResponse
+	35, // 52: nitella.hub.MobileService.FlushRevisions:output_type -> nitella.hub.FlushRevisionsResponse
+	15, // 53: nitella.hub.PairingService.PakeExchange:output_type -> nitella.hub.PakeMessage
+	42, // 54: nitella.hub.PairingService.SubmitSignedCert:output_type -> nitella.hub.Empty
+	17, // 55: nitella.hub.AuthService.RegisterUser:output_type -> nitella.hub.RegisterUserResponse
+	42, // 56: nitella.hub.AuthService.RegisterDevice:output_type -> nitella.hub.Empty
+	20, // 57: nitella.hub.AuthService.UpdateLicense:output_type -> nitella.hub.UpdateLicenseResponse
+	35, // [35:58] is the sub-list for method output_type
+	12, // [12:35] is the sub-list for method input_type
 	12, // [12:12] is the sub-list for extension type_name
 	12, // [12:12] is the sub-list for extension extendee
 	0,  // [0:12] is the sub-list for field type_name
@@ -2654,7 +2537,7 @@ func file_hub_hub_mobile_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_hub_hub_mobile_proto_rawDesc), len(file_hub_hub_mobile_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   37,
+			NumMessages:   35,
 			NumExtensions: 0,
 			NumServices:   3,
 		},

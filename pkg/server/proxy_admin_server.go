@@ -2,6 +2,9 @@ package server
 
 import (
 	"context"
+	"crypto/subtle"
+	"net"
+	"strings"
 	"sync"
 	"time"
 
@@ -35,6 +38,26 @@ func NewProxyAdminServer(pm *node.ProxyManager) *ProxyAdminServer {
 // RegisterProxyAdmin registers the ProxyControlService with a gRPC server.
 func RegisterProxyAdmin(s *grpc.Server, srv *ProxyAdminServer) {
 	pb.RegisterProxyControlServiceServer(s, srv)
+}
+
+// validateIPOrCIDR validates that the input is a valid IP address or CIDR range
+func validateIPOrCIDR(input string) error {
+	if input == "" {
+		return status.Error(codes.InvalidArgument, "IP/CIDR cannot be empty")
+	}
+	// Try parsing as CIDR first (e.g., "192.168.1.0/24")
+	if strings.Contains(input, "/") {
+		_, _, err := net.ParseCIDR(input)
+		if err != nil {
+			return status.Errorf(codes.InvalidArgument, "invalid CIDR: %v", err)
+		}
+		return nil
+	}
+	// Try parsing as IP address
+	if net.ParseIP(input) == nil {
+		return status.Errorf(codes.InvalidArgument, "invalid IP address: %s", input)
+	}
+	return nil
 }
 
 // ============================================================================
@@ -123,7 +146,21 @@ func (s *ProxyAdminServer) ListProxies(ctx context.Context, req *pb.ListProxiesR
 // ============================================================================
 
 func (s *ProxyAdminServer) BlockIP(ctx context.Context, req *pb.BlockIPRequest) (*emptypb.Empty, error) {
-	// Add block rule to all proxies
+	// Validate IP or CIDR
+	if err := validateIPOrCIDR(req.Ip); err != nil {
+		return nil, status.Errorf(codes.InvalidArgument, "invalid IP/CIDR: %v", err)
+	}
+
+	// Use GlobalRulesStore for runtime global rules with duration support
+	globalRules := s.pm.GetGlobalRules()
+	if globalRules != nil {
+		duration := time.Duration(req.DurationSeconds) * time.Second
+		globalRules.BlockIP(req.Ip, duration)
+		log.Printf("[Admin] Global block added: %s (duration: %v)", req.Ip, duration)
+		return &emptypb.Empty{}, nil
+	}
+
+	// Fallback: Add block rule to all proxies (no duration support)
 	statuses := s.pm.GetAllStatuses()
 	for _, st := range statuses {
 		rule := &pb.Rule{
@@ -148,7 +185,21 @@ func (s *ProxyAdminServer) BlockIP(ctx context.Context, req *pb.BlockIPRequest) 
 }
 
 func (s *ProxyAdminServer) AllowIP(ctx context.Context, req *pb.AllowIPRequest) (*emptypb.Empty, error) {
-	// Add allow rule to all proxies
+	// Validate IP or CIDR
+	if err := validateIPOrCIDR(req.Ip); err != nil {
+		return nil, status.Errorf(codes.InvalidArgument, "invalid IP/CIDR: %v", err)
+	}
+
+	// Use GlobalRulesStore for runtime global rules with duration support
+	globalRules := s.pm.GetGlobalRules()
+	if globalRules != nil {
+		duration := time.Duration(req.DurationSeconds) * time.Second
+		globalRules.AllowIP(req.Ip, duration)
+		log.Printf("[Admin] Global allow added: %s (duration: %v)", req.Ip, duration)
+		return &emptypb.Empty{}, nil
+	}
+
+	// Fallback: Add allow rule to all proxies (no duration support)
 	statuses := s.pm.GetAllStatuses()
 	for _, st := range statuses {
 		rule := &pb.Rule{
@@ -170,6 +221,179 @@ func (s *ProxyAdminServer) AllowIP(ctx context.Context, req *pb.AllowIPRequest) 
 		})
 	}
 	return &emptypb.Empty{}, nil
+}
+
+func (s *ProxyAdminServer) ListGlobalRules(ctx context.Context, req *pb.ListGlobalRulesRequest) (*pb.ListGlobalRulesResponse, error) {
+	globalRules := s.pm.GetGlobalRules()
+	if globalRules == nil {
+		return &pb.ListGlobalRulesResponse{}, nil
+	}
+
+	rules := globalRules.List()
+	pbRules := make([]*pb.GlobalRule, 0, len(rules))
+	for _, r := range rules {
+		pbRule := &pb.GlobalRule{
+			Id:        r.ID,
+			Name:      r.Name,
+			SourceIp:  r.SourceIP,
+			Action:    r.Action,
+			CreatedAt: timestamppb.New(r.CreatedAt),
+		}
+		if !r.ExpiresAt.IsZero() {
+			pbRule.ExpiresAt = timestamppb.New(r.ExpiresAt)
+		}
+		pbRules = append(pbRules, pbRule)
+	}
+
+	return &pb.ListGlobalRulesResponse{Rules: pbRules}, nil
+}
+
+func (s *ProxyAdminServer) RemoveGlobalRule(ctx context.Context, req *pb.RemoveGlobalRuleRequest) (*pb.RemoveGlobalRuleResponse, error) {
+	globalRules := s.pm.GetGlobalRules()
+	if globalRules == nil {
+		return &pb.RemoveGlobalRuleResponse{
+			Success:      false,
+			ErrorMessage: "Global rules not configured",
+		}, nil
+	}
+
+	if removed := globalRules.Remove(req.RuleId); !removed {
+		return &pb.RemoveGlobalRuleResponse{
+			Success:      false,
+			ErrorMessage: "Rule not found",
+		}, nil
+	}
+
+	log.Printf("[Admin] Global rule removed: %s", req.RuleId)
+	return &pb.RemoveGlobalRuleResponse{Success: true}, nil
+}
+
+// ============================================================================
+// Active Approval Management
+// ============================================================================
+
+func (s *ProxyAdminServer) ListActiveApprovals(ctx context.Context, req *pb.ListActiveApprovalsRequest) (*pb.ListActiveApprovalsResponse, error) {
+	if s.pm.Approval == nil {
+		return &pb.ListActiveApprovalsResponse{}, nil
+	}
+
+	entries := s.pm.Approval.GetActiveApprovals()
+	approvals := make([]*pb.ActiveApproval, 0, len(entries))
+
+	for _, e := range entries {
+		// Apply filters
+		if req.ProxyId != "" && e.ProxyID != req.ProxyId {
+			continue
+		}
+		if req.SourceIp != "" && e.SourceIP != req.SourceIp {
+			continue
+		}
+
+		// Extract connection IDs from LiveConns map
+		connIDs := make([]string, 0, len(e.LiveConns))
+		for connID := range e.LiveConns {
+			connIDs = append(connIDs, connID)
+		}
+
+		approval := &pb.ActiveApproval{
+			Key:          e.Key(),
+			SourceIp:     e.SourceIP,
+			RuleId:       e.RuleID,
+			ProxyId:      e.ProxyID,
+			TlsSessionId: e.TLSSessionID,
+			Allowed:      e.Decision,
+			CreatedAt:    timestamppb.New(e.CreatedAt),
+			ExpiresAt:    timestamppb.New(e.ExpiresAt),
+			BytesIn:      e.BytesIn,
+			BytesOut:     e.BytesOut,
+			BlockedCount: int64(e.BlockedCount),
+			ConnIds:      connIDs,
+			GeoCountry:   e.GeoCountry,
+			GeoCity:      e.GeoCity,
+			GeoIsp:       e.GeoISP,
+		}
+		approvals = append(approvals, approval)
+	}
+
+	return &pb.ListActiveApprovalsResponse{Approvals: approvals}, nil
+}
+
+func (s *ProxyAdminServer) CancelApproval(ctx context.Context, req *pb.CancelApprovalRequest) (*pb.CancelApprovalResponse, error) {
+	if s.pm.Approval == nil {
+		return &pb.CancelApprovalResponse{
+			Success:      false,
+			ErrorMessage: "Approval system not configured",
+		}, nil
+	}
+
+	// Parse the key (format: sourceIP\x00ruleID\x00tlsSessionID - uses null byte separator)
+	parts := strings.Split(req.Key, node.KeySeparator)
+	if len(parts) < 2 {
+		return &pb.CancelApprovalResponse{
+			Success:      false,
+			ErrorMessage: "Invalid approval key format",
+		}, nil
+	}
+
+	sourceIP := parts[0]
+	ruleID := parts[1]
+	tlsSessionID := ""
+	if len(parts) > 2 {
+		tlsSessionID = parts[2]
+	}
+
+	// Get entry before removing to count connections
+	entry := s.pm.Approval.GetEntry(sourceIP, ruleID, tlsSessionID)
+	if entry == nil {
+		return &pb.CancelApprovalResponse{
+			Success:      false,
+			ErrorMessage: "Approval not found",
+		}, nil
+	}
+
+	connectionsClosed := int32(0)
+	if req.CloseConnections && len(entry.LiveConns) > 0 {
+		for connID := range entry.LiveConns {
+			if err := s.pm.CloseConnection(entry.ProxyID, connID); err == nil {
+				connectionsClosed++
+			}
+		}
+	}
+
+	// Remove the approval
+	s.pm.Approval.RemoveApproval(sourceIP, ruleID, tlsSessionID)
+
+	log.Printf("[Admin] Approval cancelled: %s (connections closed: %d)", req.Key, connectionsClosed)
+	return &pb.CancelApprovalResponse{
+		Success:           true,
+		ConnectionsClosed: connectionsClosed,
+	}, nil
+}
+
+func (s *ProxyAdminServer) ResolveApproval(ctx context.Context, req *pb.ResolveApprovalRequest) (*pb.ResolveApprovalResponse, error) {
+	if s.pm.Approval == nil {
+		return &pb.ResolveApprovalResponse{
+			Success:      false,
+			ErrorMessage: "Approval system not configured",
+		}, nil
+	}
+
+	durationSeconds := req.DurationSeconds
+	if durationSeconds <= 0 {
+		durationSeconds = 3600 // Default 1 hour
+	}
+
+	allowed := req.Action == common.ApprovalActionType_APPROVAL_ACTION_TYPE_ALLOW
+	meta := s.pm.Approval.Resolve(req.ReqId, allowed, durationSeconds, req.Reason)
+	if meta == nil {
+		return &pb.ResolveApprovalResponse{
+			Success:      false,
+			ErrorMessage: "Approval request not found or already resolved",
+		}, nil
+	}
+
+	log.Printf("[Admin] Approval resolved: %s -> %v (duration: %ds)", req.ReqId, allowed, durationSeconds)
+	return &pb.ResolveApprovalResponse{Success: true}, nil
 }
 
 // ============================================================================
@@ -352,7 +576,8 @@ func ProxyAdminAuthInterceptor(token string) grpc.UnaryServerInterceptor {
 			authToken = authToken[7:]
 		}
 
-		if authToken != token {
+		// Constant-time comparison to prevent timing side-channel attacks
+		if subtle.ConstantTimeCompare([]byte(authToken), []byte(token)) != 1 {
 			log.Printf("[Admin] Auth failed from %s: invalid token", clientAddr)
 			return nil, status.Error(codes.Unauthenticated, "invalid token")
 		}
@@ -384,7 +609,8 @@ func ProxyAdminStreamAuthInterceptor(token string) grpc.StreamServerInterceptor 
 			authToken = authToken[7:]
 		}
 
-		if authToken != token {
+		// Constant-time comparison to prevent timing side-channel attacks
+		if subtle.ConstantTimeCompare([]byte(authToken), []byte(token)) != 1 {
 			return status.Error(codes.Unauthenticated, "invalid token")
 		}
 

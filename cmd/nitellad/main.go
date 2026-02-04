@@ -20,9 +20,19 @@ import (
 	"github.com/ivere27/nitella/pkg/geoip"
 	"github.com/ivere27/nitella/pkg/log"
 	"github.com/ivere27/nitella/pkg/node"
+	"github.com/ivere27/nitella/pkg/node/admincert"
 	"github.com/ivere27/nitella/pkg/node/stats"
 	"github.com/ivere27/nitella/pkg/server"
+	"github.com/ivere27/synurang/pkg/synurang"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials"
+)
+
+var (
+	tlsCert *string
+	tlsKey  *string
+	tlsCA   *string
+	mtls    *bool
 )
 
 func main() {
@@ -39,6 +49,7 @@ func main() {
 	dbPath := flag.String("db-path", "nitella.db", "Path to SQLite database")
 	statsDB := flag.String("stats-db", "", "Path to statistics database (default: same dir as config)")
 	processMode := flag.Bool("process-mode", false, "Run each proxy as a separate child process (for isolation)")
+	adminDataDir := flag.String("admin-data-dir", "", "Data directory for admin API certificates (default: same as db-path directory)")
 
 	// GeoIP flags
 	geoipCity := flag.String("geoip-city", "", "Path to GeoIP2 City DB")
@@ -49,11 +60,11 @@ func main() {
 	geoipTimeout := flag.Int("geoip-timeout", 3000, "GeoIP Remote Provider timeout in milliseconds")
 	geoipAddr := flag.String("geoip-addr", "", "Address of external GeoIP service")
 
-	// TLS flags
-	tlsCert := flag.String("tls-cert", "", "Path to TLS Certificate")
-	tlsKey := flag.String("tls-key", "", "Path to TLS Private Key")
-	tlsCA := flag.String("tls-ca", "", "Path to Client CA Certificate")
-	mtls := flag.Bool("mtls", false, "Require Client Certificates (mTLS)")
+	// TLS flags (package-level for hub.go access)
+	tlsCert = flag.String("tls-cert", "", "Path to TLS Certificate")
+	tlsKey = flag.String("tls-key", "", "Path to TLS Private Key")
+	tlsCA = flag.String("tls-ca", "", "Path to Client CA Certificate")
+	mtls = flag.Bool("mtls", false, "Require Client Certificates (mTLS)")
 
 	// Admin API flags
 	adminPort := flag.Int("admin-port", 0, "Port for Admin gRPC API (0 = disabled)")
@@ -107,7 +118,7 @@ func main() {
 	var geoIPClient geoip.GeoIPClient
 	if *geoipAddr != "" {
 		log.Printf("Connecting to external GeoIP service at %s...", *geoipAddr)
-		client, err := geoip.NewRemoteClient(*geoipAddr)
+		client, err := geoip.NewRemoteClient(*geoipAddr, "") // Uses system CA pool
 		if err != nil {
 			log.Fatalf("Failed to connect to GeoIP service: %v", err)
 		}
@@ -153,9 +164,12 @@ func main() {
 	}
 
 	// Create ProxyManager
-	// useEmbedded=true means goroutines, useEmbedded=false means child processes
-	useEmbedded := !*processMode
-	pm := node.NewProxyManager(useEmbedded)
+	// ListenerModeFfi = in-process (default), ListenerModeProcess = child processes
+	mode := node.ListenerModeFfi
+	if *processMode {
+		mode = node.ListenerModeProcess
+	}
+	pm := node.NewProxyManager(mode)
 	if *processMode {
 		log.Println("[INFO] Process mode enabled: each proxy runs as a separate child process")
 	}
@@ -332,7 +346,7 @@ func main() {
 	}
 	_ = hubActive // Hub mode active - node can receive commands even without proxies
 
-	// Start Admin API Server
+	// Start Admin API Server with TLS
 	var adminServer *grpc.Server
 	if *adminPort > 0 {
 		// Generate token if not provided
@@ -341,18 +355,33 @@ func main() {
 			log.Printf("[Admin] Generated token (keep secret): %s", *adminToken)
 		}
 
+		// Determine admin data directory for certificates
+		adminCertDir := *adminDataDir
+		if adminCertDir == "" {
+			adminCertDir = filepath.Dir(*dbPath)
+		}
+
+		// Initialize certificate manager (auto-generates CA and server cert)
+		certMgr, err := admincert.New(adminCertDir)
+		if err != nil {
+			log.Fatalf("Failed to initialize admin TLS: %v", err)
+		}
+
 		adminLis, err := net.Listen("tcp", fmt.Sprintf(":%d", *adminPort))
 		if err != nil {
 			log.Fatalf("Failed to listen on admin port %d: %v", *adminPort, err)
 		}
 
+		// Create gRPC server with TLS credentials
 		adminServer = grpc.NewServer(
+			grpc.Creds(credentials.NewTLS(certMgr.GetTLSConfig())),
 			grpc.UnaryInterceptor(server.ProxyAdminAuthInterceptor(*adminToken)),
 			grpc.StreamInterceptor(server.ProxyAdminStreamAuthInterceptor(*adminToken)),
 		)
 		server.RegisterProxyAdmin(adminServer, server.NewProxyAdminServer(pm))
 
-		log.Printf("[Admin] gRPC API listening on :%d", *adminPort)
+		log.Printf("[Admin] gRPC API listening on :%d (TLS enabled)", *adminPort)
+		log.Printf("[Admin] Clients should use: --tls-ca %s", certMgr.GetCACertPath())
 
 		go func() {
 			if err := adminServer.Serve(adminLis); err != nil {
@@ -470,50 +499,43 @@ Examples:
 }
 
 // runChild runs in child process mode.
-// Child processes handle a single listener and communicate with parent via Unix socket.
+// Child processes handle a single listener and communicate with parent via IPC (socketpair or TCP).
 func runChild() {
 	// Parse child-specific flags
 	childFlags := flag.NewFlagSet("child", flag.ExitOnError)
-	socketPath := childFlags.String("socket", "", "Unix socket path for IPC")
 	listenAddr := childFlags.String("listen", "", "Listen address")
 	proxyID := childFlags.String("id", "", "Proxy ID")
-	_ = childFlags.String("name", "", "Proxy name") // Used by parent to identify listener
+	_ = childFlags.String("name", "", "Proxy name") 
 	backendAddr := childFlags.String("backend", "", "Default backend address")
+	
+	// Legacy flags ignored (ipc-fd, ipc-addr handled by synurang via env vars)
+	_ = childFlags.String("ipc-fd", "", "ignored")
+	_ = childFlags.String("ipc-addr", "", "ignored")
 
 	if err := childFlags.Parse(os.Args[2:]); err != nil {
 		log.Fatalf("[child] Failed to parse flags: %v", err)
 	}
 
-	if *socketPath == "" {
-		log.Fatal("[child] --socket is required")
-	}
-
-	log.Printf("[child] Starting child process (id=%s, socket=%s)", *proxyID, *socketPath)
-
-	// Create ProxyManager for this child (embedded listeners)
-	pm := node.NewProxyManager(true)
-
-	// Create gRPC server on Unix socket
-	listener, err := net.Listen("unix", *socketPath)
+	// Establish IPC listener using Synurang
+	listener, err := synurang.NewIPCListener()
 	if err != nil {
-		log.Fatalf("[child] Failed to create Unix socket: %v", err)
+		log.Fatalf("[child] Failed to create IPC listener: %v", err)
 	}
 	defer listener.Close()
 
-	// Secure socket immediately after creation (closes TOCTOU race window)
-	// Critical on Linux where /tmp is world-writable; harmless on macOS/Windows
-	if err := os.Chmod(*socketPath, 0600); err != nil {
-		log.Printf("[child] Warning: failed to secure socket permissions: %v", err)
-	}
+	log.Printf("[child] Starting child process (id=%s)", *proxyID)
 
+	// Create ProxyManager for this child (FFI listeners)
+	pm := node.NewProxyManager(node.ListenerModeFfi)
+
+	// Create gRPC server with NO TLS (IPC is local/anonymous)
 	grpcServer := grpc.NewServer()
 	processServer := server.NewProcessServer(pm)
 
 	// Register process control service
 	server.RegisterProcessControl(grpcServer, processServer)
 
-	log.Printf("[child] Unix socket ready: %s", *socketPath)
-	log.Printf("[child] Waiting for parent to initialize listener (listen=%s, backend=%s)", *listenAddr, *backendAddr)
+	log.Printf("[child] IPC ready. Waiting for parent to initialize listener (listen=%s, backend=%s)", *listenAddr, *backendAddr)
 
 	// Handle shutdown signals
 	sigCh := make(chan os.Signal, 1)
@@ -525,7 +547,7 @@ func runChild() {
 		grpcServer.GracefulStop()
 	}()
 
-	// Serve gRPC
+	// Serve gRPC over the IPC connection
 	if err := grpcServer.Serve(listener); err != nil {
 		log.Printf("[child] gRPC server error: %v", err)
 	}

@@ -18,6 +18,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/ivere27/nitella/pkg/api/common"
 	pb "github.com/ivere27/nitella/pkg/api/hub"
+	"github.com/ivere27/nitella/pkg/cli"
 	"github.com/ivere27/nitella/pkg/config"
 	nitellacrypto "github.com/ivere27/nitella/pkg/crypto"
 	"github.com/ivere27/nitella/pkg/hub/routing"
@@ -351,8 +352,14 @@ func cmdProxyList(args []string) {
 		if len(index) == 0 {
 			fmt.Println("No local proxies. Use 'proxy import' to add one.")
 		} else {
-			fmt.Printf("\n%-12s  %-30s  %-10s  %-6s  %s\n", "ID", "NAME", "STATUS", "REV", "LAST MODIFIED")
-			fmt.Println(strings.Repeat("-", 85))
+			tbl := cli.NewTable(
+				cli.Column{Header: "ID", Width: 12},
+				cli.Column{Header: "NAME", Width: 30},
+				cli.Column{Header: "STATUS", Width: 10},
+				cli.Column{Header: "REV", Width: 6},
+				cli.Column{Header: "LAST MODIFIED", Width: 16},
+			)
+			tbl.PrintHeader()
 
 			// Sort by name
 			var proxies []*ProxyMeta
@@ -373,17 +380,14 @@ func cmdProxyList(args []string) {
 					rev = fmt.Sprintf("%d", p.RevisionNum)
 				}
 				modified := p.UpdatedAt.Format("2006-01-02 15:04")
-				fmt.Printf("%-12s  %-30s  %-10s  %-6s  %s\n",
-					truncate(p.ID, 12), truncate(p.Name, 30), status, rev, modified)
+				tbl.PrintRow(truncate(p.ID, 12), truncate(p.Name, 30), status, rev, modified)
 			}
-			fmt.Println()
+			tbl.PrintFooter()
 		}
 	}
 
 	if showRemote {
-		cfg := loadHubConfig()
-		if err := connectToHub(cfg); err != nil {
-			fmt.Printf("Error connecting to Hub: %v\n", err)
+		if ensureHubConnected() == nil {
 			return
 		}
 
@@ -624,9 +628,7 @@ func cmdProxyDelete(args []string) {
 
 	// Delete from Hub if requested
 	if deleteRemote && meta.RevisionNum > 0 {
-		cfg := loadHubConfig()
-		if err := connectToHub(cfg); err != nil {
-			fmt.Printf("Error connecting to Hub: %v\n", err)
+		if ensureHubConnected() == nil {
 			return
 		}
 
@@ -735,9 +737,7 @@ func cmdProxyPush(args []string) {
 	}
 
 	// Connect to Hub
-	cfg := loadHubConfig()
-	if err := connectToHub(cfg); err != nil {
-		fmt.Printf("Error connecting to Hub: %v\n", err)
+	if ensureHubConnected() == nil {
 		return
 	}
 
@@ -845,9 +845,7 @@ func cmdProxyPull(args []string) {
 	}
 
 	// Connect to Hub
-	cfg := loadHubConfig()
-	if err := connectToHub(cfg); err != nil {
-		fmt.Printf("Error connecting to Hub: %v\n", err)
+	if ensureHubConnected() == nil {
 		return
 	}
 
@@ -928,9 +926,7 @@ func cmdProxyHistory(args []string) {
 		return
 	}
 
-	cfg := loadHubConfig()
-	if err := connectToHub(cfg); err != nil {
-		fmt.Printf("Error connecting to Hub: %v\n", err)
+	if ensureHubConnected() == nil {
 		return
 	}
 
@@ -998,9 +994,7 @@ func cmdProxyDiff(args []string) {
 		}
 	}
 
-	cfg := loadHubConfig()
-	if err := connectToHub(cfg); err != nil {
-		fmt.Printf("Error connecting to Hub: %v\n", err)
+	if ensureHubConnected() == nil {
 		return
 	}
 
@@ -1203,9 +1197,7 @@ func cmdProxyFlush(args []string) {
 		}
 	}
 
-	cfg := loadHubConfig()
-	if err := connectToHub(cfg); err != nil {
-		fmt.Printf("Error connecting to Hub: %v\n", err)
+	if ensureHubConnected() == nil {
 		return
 	}
 
@@ -1257,9 +1249,7 @@ func cmdProxyApply(args []string) {
 	}
 
 	// Connect to Hub
-	cfg := loadHubConfig()
-	if err := connectToHub(cfg); err != nil {
-		fmt.Printf("Error connecting to Hub: %v\n", err)
+	if ensureHubConnected() == nil {
 		return
 	}
 
@@ -1396,9 +1386,7 @@ func cmdProxyStatus(args []string) {
 	nodeID := args[0]
 
 	// Connect to Hub
-	cfg := loadHubConfig()
-	if err := connectToHub(cfg); err != nil {
-		fmt.Printf("Error connecting to Hub: %v\n", err)
+	if ensureHubConnected() == nil {
 		return
 	}
 
@@ -1500,9 +1488,7 @@ func cmdProxyUnapply(args []string) {
 	}
 
 	// Connect to Hub
-	cfg := loadHubConfig()
-	if err := connectToHub(cfg); err != nil {
-		fmt.Printf("Error connecting to Hub: %v\n", err)
+	if ensureHubConnected() == nil {
 		return
 	}
 

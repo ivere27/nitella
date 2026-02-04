@@ -155,6 +155,11 @@ func (trl *TieredRateLimiter) cleanup() {
 	}
 }
 
+// RoutingTokenGetter is implemented by protobuf messages with routing_token field
+type RoutingTokenGetter interface {
+	GetRoutingToken() string
+}
+
 // UnaryInterceptor creates a gRPC unary interceptor for tier-aware rate limiting
 func (trl *TieredRateLimiter) UnaryInterceptor() grpc.UnaryServerInterceptor {
 	return func(
@@ -163,8 +168,15 @@ func (trl *TieredRateLimiter) UnaryInterceptor() grpc.UnaryServerInterceptor {
 		info *grpc.UnaryServerInfo,
 		handler grpc.UnaryHandler,
 	) (interface{}, error) {
-		// Extract routing_token from context (set by auth interceptor)
+		// Extract routing_token from context (set by auth interceptor for NodeService)
 		routingToken, _ := ctx.Value(contextKeyRoutingToken).(string)
+
+		// Try extracting from request body (for MobileService)
+		if routingToken == "" {
+			if getter, ok := req.(RoutingTokenGetter); ok {
+				routingToken = getter.GetRoutingToken()
+			}
+		}
 
 		if routingToken != "" && !trl.Allow(routingToken) {
 			tierID := trl.getTier(routingToken)

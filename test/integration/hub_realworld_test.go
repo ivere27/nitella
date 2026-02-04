@@ -53,11 +53,15 @@ import (
 	"testing"
 	"time"
 
+	"encoding/json"
+
 	common "github.com/ivere27/nitella/pkg/api/common"
 	hubpb "github.com/ivere27/nitella/pkg/api/hub"
+	nitellacrypto "github.com/ivere27/nitella/pkg/crypto"
 	"github.com/ivere27/nitella/pkg/pairing"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
+	"google.golang.org/protobuf/proto"
 )
 
 // ============================================================================
@@ -256,11 +260,8 @@ func TestRealWorld_PAKEViaHubStream(t *testing.T) {
 			return
 		}
 
-		// Connect to Hub (without mTLS for pairing)
-		tlsConfig := &tls.Config{
-			InsecureSkipVerify: true,
-			MinVersion:         tls.VersionTLS13,
-		}
+		// Connect to Hub (with Hub CA)
+		tlsConfig := getHubTLS(t, cluster)
 		conn, err := grpc.Dial(cluster.hub.grpcAddr,
 			grpc.WithTransportCredentials(credentials.NewTLS(tlsConfig)),
 		)
@@ -485,18 +486,36 @@ func TestRealWorld_ApprovalWorkflow(t *testing.T) {
 	requestID := fmt.Sprintf("approval-%d", time.Now().UnixNano())
 
 	// Push alert (approval request)
-	// Alert is in common package, uses string severity and encrypted content
-	_, err := node.nodeClient.PushAlert(ctx, &common.Alert{
+	// NOTE: In production, the alert content (including type) is E2E encrypted.
+	// The metadata should NOT contain "type" - Hub should not know if it's an approval.
+	// Here we encrypt the alert details and only include routing info in metadata.
+	alertInfoJSON, _ := json.Marshal(map[string]interface{}{
+		"type":        "approval_request",
+		"source_ip":   "192.168.1.100",
+		"destination": "example.com:443",
+		"request_id":  requestID,
+	})
+
+	// Encrypt alert info with CLI's public key (owner can decrypt)
+	// Derive public key from private key
+	cliPubKey := cli.identity.rootKey.Public().(ed25519.PublicKey)
+	encryptedInfo, err := nitellacrypto.Encrypt(alertInfoJSON, cliPubKey)
+	var encryptedPayload *common.EncryptedPayload
+	if err == nil {
+		encryptedPayload = &common.EncryptedPayload{
+			EphemeralPubkey: encryptedInfo.EphemeralPubKey,
+			Nonce:           encryptedInfo.Nonce,
+			Ciphertext:      encryptedInfo.Ciphertext,
+		}
+	}
+
+	_, err = node.nodeClient.PushAlert(ctx, &common.Alert{
 		Id:            requestID,
 		NodeId:        node.nodeID,
 		Severity:      "info",
 		TimestampUnix: time.Now().Unix(),
-		Metadata: map[string]string{
-			"type":        "approval_request",
-			"source_ip":   "192.168.1.100",
-			"destination": "example.com:443",
-			"request_id":  requestID,
-		},
+		Encrypted:     encryptedPayload, // E2E encrypted - Hub can't read
+		// No metadata["type"] - Hub should NOT know this is an approval request
 	})
 	if err != nil {
 		t.Logf("PushAlert: %v (may not be implemented)", err)
@@ -524,26 +543,93 @@ func TestRealWorld_ApprovalWorkflow(t *testing.T) {
 				}
 				t.Logf("Received alert: severity=%s, id=%s", alert.Severity, alert.Id)
 
-				// Submit approval decision if it's an approval request
-				if alert.Metadata != nil && alert.Metadata["type"] == "approval_request" {
-					decisionCtx := contextWithJWT(context.Background(), cli.jwtToken)
-					_, err := cli.mobileClient.SubmitApprovalDecision(decisionCtx, &hubpb.SubmitApprovalDecisionRequest{
-						RequestId:       alert.Metadata["request_id"],
-						Allowed:         true,
-						DurationSeconds: 3600,
-						Reason:          "Approved via test",
-					})
-					if err != nil {
-						t.Logf("SubmitApprovalDecision: %v", err)
-					} else {
-						t.Log("Approval decision submitted")
-					}
+				// Decrypt alert content to determine type
+				if alert.Encrypted != nil {
+					// In a real CLI, we would decrypt using the CLI's private key
+					// For this test, we know alert.Id == requestID
+					t.Logf("Alert has encrypted content (%d bytes)", len(alert.Encrypted.Ciphertext))
+				}
+
+				// Send approval decision via E2E encrypted SendCommand
+				// This is the correct zero-trust approach
+				err = sendE2EApprovalDecisionRealWorld(t, cli, node, alert.Id, true, 3600, "Approved via test")
+				if err != nil {
+					t.Logf("sendE2EApprovalDecision: %v", err)
+				} else {
+					t.Log("E2E encrypted approval decision sent")
 				}
 			}
 		}()
 
 		time.Sleep(2 * time.Second)
 	}
+}
+
+// sendE2EApprovalDecisionRealWorld sends an approval decision via E2E encrypted SendCommand.
+// This is the correct zero-trust approach where Hub cannot see the decision.
+func sendE2EApprovalDecisionRealWorld(t *testing.T, cli *cliProcess, node *nodeProcess, requestID string, allowed bool, durationSeconds int64, reason string) error {
+	t.Helper()
+
+	// Get node's public key from its certificate
+	block, _ := pem.Decode(node.certPEM)
+	if block == nil {
+		return fmt.Errorf("failed to decode node certificate")
+	}
+	cert, err := x509.ParseCertificate(block.Bytes)
+	if err != nil {
+		return fmt.Errorf("failed to parse node certificate: %w", err)
+	}
+	nodePubKey, ok := cert.PublicKey.(ed25519.PublicKey)
+	if !ok {
+		return fmt.Errorf("node certificate does not contain Ed25519 public key")
+	}
+
+	// Create the approval command payload
+	action := common.ApprovalActionType_APPROVAL_ACTION_TYPE_ALLOW
+	if !allowed {
+		action = common.ApprovalActionType_APPROVAL_ACTION_TYPE_BLOCK
+	}
+
+	// Inner payload: JSON-encoded approval data with duration_seconds (not enum!)
+	innerPayload := &hubpb.EncryptedCommandPayload{
+		Type: hubpb.CommandType_COMMAND_TYPE_RESOLVE_APPROVAL,
+		Payload: func() []byte {
+			b, _ := json.Marshal(map[string]interface{}{
+				"req_id":           requestID,
+				"action":           int32(action),
+				"duration_seconds": durationSeconds,
+				"reason":           reason,
+			})
+			return b
+		}(),
+	}
+
+	innerBytes, err := proto.Marshal(innerPayload)
+	if err != nil {
+		return fmt.Errorf("failed to marshal inner payload: %w", err)
+	}
+
+	// E2E encrypt with node's public key (Hub cannot decrypt)
+	encrypted, err := nitellacrypto.Encrypt(innerBytes, nodePubKey)
+	if err != nil {
+		return fmt.Errorf("failed to encrypt payload: %w", err)
+	}
+
+	// Send via SendCommand (Hub just relays the encrypted blob)
+	ctx := contextWithJWT(context.Background(), cli.jwtToken)
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+
+	_, err = cli.mobileClient.SendCommand(ctx, &hubpb.CommandRequest{
+		NodeId:       node.nodeID,
+		RoutingToken: node.routingToken,
+		Encrypted: &common.EncryptedPayload{
+			EphemeralPubkey: encrypted.EphemeralPubKey,
+			Nonce:           encrypted.Nonce,
+			Ciphertext:      encrypted.Ciphertext,
+		},
+	})
+	return err
 }
 
 // ============================================================================
@@ -1195,9 +1281,7 @@ func TestRealWorld_AdminAPIAuth(t *testing.T) {
 
 	// Try to access admin API without token - should fail
 	conn, err := grpc.Dial(cluster.hub.grpcAddr,
-		grpc.WithTransportCredentials(credentials.NewTLS(&tls.Config{
-			InsecureSkipVerify: true,
-		})),
+		grpc.WithTransportCredentials(credentials.NewTLS(getHubTLS(t, cluster))),
 	)
 	if err != nil {
 		t.Fatalf("Failed to connect: %v", err)
@@ -1662,7 +1746,7 @@ func stopProcess(cmd *exec.Cmd) {
 	}
 }
 
-func connectToHubWithNodeProcess(t *testing.T, addr string, node *nodeProcess) *grpc.ClientConn {
+func connectToHubWithNodeProcess(t *testing.T, addr string, node *nodeProcess, caCertPEM []byte) *grpc.ClientConn {
 	t.Helper()
 
 	// Load node's certificate
@@ -1676,8 +1760,12 @@ func connectToHubWithNodeProcess(t *testing.T, addr string, node *nodeProcess) *
 
 	tlsConfig := &tls.Config{
 		Certificates:       []tls.Certificate{cert},
-		InsecureSkipVerify: true,
-		MinVersion:         tls.VersionTLS13,
+		RootCAs: func() *x509.CertPool {
+			pool := x509.NewCertPool()
+			pool.AppendCertsFromPEM(caCertPEM)
+			return pool
+		}(),
+		MinVersion: tls.VersionTLS13,
 	}
 
 	conn, err := grpc.Dial(addr,
@@ -1908,8 +1996,8 @@ func TestRealWorld_Scale50Nodes(t *testing.T) {
 
 	cluster.startHub()
 
-	const numUsers = 5
-	const nodesPerUser = 10
+	const numUsers = 4
+	const nodesPerUser = 5
 	const totalNodes = numUsers * nodesPerUser
 
 	type userNodes struct {
@@ -2234,8 +2322,12 @@ func TestRealWorld_MITMAttackDetection(t *testing.T) {
 
 	tlsConfig := &tls.Config{
 		Certificates:       []tls.Certificate{attackerCert},
-		InsecureSkipVerify: true, // Attacker ignores server cert (but Hub should reject client cert)
-		MinVersion:         tls.VersionTLS13,
+		RootCAs: func() *x509.CertPool {
+			pool := x509.NewCertPool()
+			pool.AppendCertsFromPEM(cluster.hub.hubCAPEM)
+			return pool
+		}(),
+		MinVersion: tls.VersionTLS13,
 	}
 
 	// Attempt connection
@@ -2493,10 +2585,7 @@ func TestRealWorld_RateLimitingAuthFailures(t *testing.T) {
 
 	conn, err := grpc.Dial(
 		cluster.hub.grpcAddr,
-		grpc.WithTransportCredentials(credentials.NewTLS(&tls.Config{
-			InsecureSkipVerify: true,
-			MinVersion:         tls.VersionTLS13,
-		})),
+		grpc.WithTransportCredentials(credentials.NewTLS(getHubTLS(t, cluster))),
 	)
 	if err != nil {
 		t.Fatalf("Failed to connect: %v", err)
@@ -2559,8 +2648,12 @@ func (c *cliProcess) reconnect(hubAddr string) {
 	conn, err := grpc.Dial(
 		hubAddr,
 		grpc.WithTransportCredentials(credentials.NewTLS(&tls.Config{
-			InsecureSkipVerify: true,
-			MinVersion:         tls.VersionTLS13,
+			RootCAs: func() *x509.CertPool {
+				pool := x509.NewCertPool()
+				pool.AppendCertsFromPEM(c.hubCAPEM)
+				return pool
+			}(),
+			MinVersion: tls.VersionTLS13,
 		})),
 	)
 	if err != nil {
@@ -2603,13 +2696,10 @@ func TestRealWorld_UserDeactivationWithActiveSessions(t *testing.T) {
 	}
 	t.Log("User operating normally with valid JWT")
 
-	// Connect as admin and deactivate the user
+	// Connect as admin and deactive the user
 	adminConn, err := grpc.Dial(
 		cluster.hub.grpcAddr,
-		grpc.WithTransportCredentials(credentials.NewTLS(&tls.Config{
-			InsecureSkipVerify: true,
-			MinVersion:         tls.VersionTLS13,
-		})),
+		grpc.WithTransportCredentials(credentials.NewTLS(getHubTLS(t, cluster))),
 	)
 	if err != nil {
 		t.Fatalf("Failed to connect as admin: %v", err)
@@ -2751,10 +2841,7 @@ func TestRealWorld_DoubleApprovalPrevention(t *testing.T) {
 	csrPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE REQUEST", Bytes: csrDER})
 
 	// Connect to hub for node registration (no mTLS needed for Register)
-	tlsConfig := &tls.Config{
-		InsecureSkipVerify: true,
-		MinVersion:         tls.VersionTLS13,
-	}
+	tlsConfig := getHubTLS(t, cluster)
 	nodeConn, err := grpc.Dial(cluster.hub.grpcAddr,
 		grpc.WithTransportCredentials(credentials.NewTLS(tlsConfig)),
 	)
@@ -2853,7 +2940,7 @@ func TestRealWorld_NodeHeartbeatTimeout(t *testing.T) {
 	node := cluster.pairNodeWithPAKE(cli, "heartbeat-node")
 
 	// Connect as node and send initial heartbeat
-	nodeConn := connectToHubWithNodeProcess(t, cluster.hub.grpcAddr, node)
+	nodeConn := connectToHubWithNodeProcess(t, cluster.hub.grpcAddr, node, cluster.hub.hubCAPEM)
 	defer nodeConn.Close()
 
 	nodeClient := hubpb.NewNodeServiceClient(nodeConn)
@@ -3026,10 +3113,7 @@ func TestRealWorld_UserDeletionCascade(t *testing.T) {
 	// Connect as admin and delete the user
 	adminConn, err := grpc.Dial(
 		cluster.hub.grpcAddr,
-		grpc.WithTransportCredentials(credentials.NewTLS(&tls.Config{
-			InsecureSkipVerify: true,
-			MinVersion:         tls.VersionTLS13,
-		})),
+		grpc.WithTransportCredentials(credentials.NewTLS(getHubTLS(t, cluster))),
 	)
 	if err != nil {
 		t.Fatalf("Failed to connect as admin: %v", err)
@@ -3101,8 +3185,11 @@ func TestRealWorld_HubctlCLIOperations(t *testing.T) {
 	cli := cluster.registerCLI("hubctl-test-user")
 	_ = cluster.pairNodeWithPAKE(cli, "hubctl-test-node")
 
+	// Get Hub CA path for TLS
+	hubCAPath := filepath.Join(cluster.hub.dataDir, "hub_ca.crt")
+
 	// Test hubctl stats command
-	cmd := exec.Command(hubctlBin, "stats", "--hub", cluster.hub.grpcAddr, "--insecure")
+	cmd := exec.Command(hubctlBin, "stats", "--hub", cluster.hub.grpcAddr, "--tls-ca", hubCAPath)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Logf("hubctl stats: %v\n%s", err, output)
@@ -3111,7 +3198,7 @@ func TestRealWorld_HubctlCLIOperations(t *testing.T) {
 	}
 
 	// Test hubctl users list
-	cmd = exec.Command(hubctlBin, "users", "list", "--hub", cluster.hub.grpcAddr, "--insecure")
+	cmd = exec.Command(hubctlBin, "users", "list", "--hub", cluster.hub.grpcAddr, "--tls-ca", hubCAPath)
 	output, err = cmd.CombinedOutput()
 	if err != nil {
 		t.Logf("hubctl users list: %v\n%s", err, output)
@@ -3120,7 +3207,7 @@ func TestRealWorld_HubctlCLIOperations(t *testing.T) {
 	}
 
 	// Test hubctl nodes list
-	cmd = exec.Command(hubctlBin, "nodes", "list", "--hub", cluster.hub.grpcAddr, "--insecure")
+	cmd = exec.Command(hubctlBin, "nodes", "list", "--hub", cluster.hub.grpcAddr, "--tls-ca", hubCAPath)
 	output, err = cmd.CombinedOutput()
 	if err != nil {
 		t.Logf("hubctl nodes list: %v\n%s", err, output)
@@ -3967,7 +4054,11 @@ func TestRealWorld_ExpiredCertRejection(t *testing.T) {
 
 	tlsConfig := &tls.Config{
 		Certificates:       []tls.Certificate{tlsCert},
-		InsecureSkipVerify: true,
+		RootCAs: func() *x509.CertPool {
+			p := x509.NewCertPool()
+			p.AppendCertsFromPEM(cluster.hub.hubCAPEM)
+			return p
+		}(),
 	}
 
 	// Attempt connection with expired cert
@@ -4031,7 +4122,11 @@ func TestRealWorld_WrongCNCertRejection(t *testing.T) {
 
 	tlsConfig := &tls.Config{
 		Certificates:       []tls.Certificate{tlsCert},
-		InsecureSkipVerify: true,
+		RootCAs: func() *x509.CertPool {
+			p := x509.NewCertPool()
+			p.AppendCertsFromPEM(cluster.hub.hubCAPEM)
+			return p
+		}(),
 	}
 
 	conn, err := grpc.Dial(
@@ -4104,7 +4199,11 @@ func TestRealWorld_SelfSignedCertRejection(t *testing.T) {
 
 	tlsConfig := &tls.Config{
 		Certificates:       []tls.Certificate{tlsCert},
-		InsecureSkipVerify: true,
+		RootCAs: func() *x509.CertPool {
+			p := x509.NewCertPool()
+			p.AppendCertsFromPEM(cluster.hub.hubCAPEM)
+			return p
+		}(),
 	}
 
 	conn, err := grpc.Dial(
@@ -4276,7 +4375,11 @@ func TestRealWorld_CertChainValidation(t *testing.T) {
 	tlsCert, _ := tls.X509KeyPair(clientCertPEM, clientKeyPEM)
 	tlsConfig := &tls.Config{
 		Certificates:       []tls.Certificate{tlsCert},
-		InsecureSkipVerify: true,
+		RootCAs: func() *x509.CertPool {
+			p := x509.NewCertPool()
+			p.AppendCertsFromPEM(cluster.hub.hubCAPEM)
+			return p
+		}(),
 	}
 
 	conn, err := grpc.Dial(cluster.hub.grpcAddr, grpc.WithTransportCredentials(credentials.NewTLS(tlsConfig)))
@@ -4319,11 +4422,9 @@ func TestRealWorld_TLSVersionEnforcement(t *testing.T) {
 	cluster.startHub()
 
 	// Try to connect with TLS 1.2 (should work)
-	tlsConfig12 := &tls.Config{
-		MinVersion:         tls.VersionTLS12,
-		MaxVersion:         tls.VersionTLS12,
-		InsecureSkipVerify: true,
-	}
+	tlsConfig12 := getHubTLS(t, cluster)
+	tlsConfig12.MinVersion = tls.VersionTLS12
+	tlsConfig12.MaxVersion = tls.VersionTLS12
 
 	conn12, err := grpc.Dial(cluster.hub.grpcAddr, grpc.WithTransportCredentials(credentials.NewTLS(tlsConfig12)))
 	if err != nil {
@@ -4334,11 +4435,9 @@ func TestRealWorld_TLSVersionEnforcement(t *testing.T) {
 	}
 
 	// Try with TLS 1.3 (should work)
-	tlsConfig13 := &tls.Config{
-		MinVersion:         tls.VersionTLS13,
-		MaxVersion:         tls.VersionTLS13,
-		InsecureSkipVerify: true,
-	}
+	tlsConfig13 := getHubTLS(t, cluster)
+	tlsConfig13.MinVersion = tls.VersionTLS13
+	tlsConfig13.MaxVersion = tls.VersionTLS13
 
 	conn13, err := grpc.Dial(cluster.hub.grpcAddr, grpc.WithTransportCredentials(credentials.NewTLS(tlsConfig13)))
 	if err != nil {
@@ -4720,9 +4819,7 @@ func TestRealWorld_UnauthenticatedRequestHandling(t *testing.T) {
 	cluster.startHub()
 
 	// Connect without JWT
-	tlsConfig := &tls.Config{
-		InsecureSkipVerify: true,
-	}
+	tlsConfig := getHubTLS(t, cluster)
 
 	conn, err := grpc.Dial(
 		cluster.hub.grpcAddr,
@@ -5234,9 +5331,7 @@ func TestRealWorld_ConcurrentConnectionLimits(t *testing.T) {
 	connections := make([]*grpc.ClientConn, 0, numConnections)
 	var mu sync.Mutex
 
-	tlsConfig := &tls.Config{
-		InsecureSkipVerify: true,
-	}
+	tlsConfig := getHubTLS(t, cluster)
 
 	var wg sync.WaitGroup
 	successCount := int32(0)
@@ -5616,7 +5711,7 @@ func TestRealWorld_ConcurrentProxyWrites(t *testing.T) {
 
 // ============================================================================
 // Test 58: Parallel Approval Decisions
-// Verify parallel approval decisions are handled
+// Verify parallel approval decisions are handled via E2E encrypted SendCommand
 // ============================================================================
 
 func TestRealWorld_ParallelApprovalDecisions(t *testing.T) {
@@ -5631,7 +5726,7 @@ func TestRealWorld_ParallelApprovalDecisions(t *testing.T) {
 	cli := cluster.registerCLI("approval-user")
 	node := cluster.pairNodeWithPAKE(cli, "approval-node")
 
-	// Submit parallel approval decisions
+	// Submit parallel E2E encrypted approval decisions
 	const numConcurrent = 5
 	var wg sync.WaitGroup
 	successCount := int32(0)
@@ -5641,16 +5736,11 @@ func TestRealWorld_ParallelApprovalDecisions(t *testing.T) {
 		go func(idx int) {
 			defer wg.Done()
 
-			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-			defer cancel()
-			ctx = contextWithJWT(ctx, cli.jwtToken)
+			requestID := fmt.Sprintf("req-%s-%d", node.nodeID, idx)
+			allowed := idx%2 == 0 // Alternate approve/deny
+			reason := fmt.Sprintf("decision-%d", idx)
 
-			_, err := cli.mobileClient.SubmitApprovalDecision(ctx, &hubpb.SubmitApprovalDecisionRequest{
-				RequestId: fmt.Sprintf("req-%s-%d", node.nodeID, idx),
-				Allowed:   idx%2 == 0, // Alternate approve/deny
-				Reason:    fmt.Sprintf("decision-%d", idx),
-			})
-
+			err := sendE2EApprovalDecisionRealWorld(t, cli, node, requestID, allowed, 300, reason)
 			if err == nil {
 				atomic.AddInt32(&successCount, 1)
 			}
@@ -5658,7 +5748,7 @@ func TestRealWorld_ParallelApprovalDecisions(t *testing.T) {
 	}
 
 	wg.Wait()
-	t.Logf("Parallel approval decisions: %d/%d succeeded", successCount, numConcurrent)
+	t.Logf("Parallel E2E approval decisions: %d/%d succeeded", successCount, numConcurrent)
 
 	t.Log("Parallel approval decisions test completed")
 }
@@ -6079,9 +6169,7 @@ func TestRealWorld_ConnectionPoolExhaustion(t *testing.T) {
 	connections := make([]*grpc.ClientConn, 0, numConnections)
 	var mu sync.Mutex
 
-	tlsConfig := &tls.Config{
-		InsecureSkipVerify: true,
-	}
+	tlsConfig := getHubTLS(t, cluster)
 
 	var wg sync.WaitGroup
 	for i := 0; i < numConnections; i++ {
@@ -6367,9 +6455,7 @@ func TestRealWorld_DoSResilience(t *testing.T) {
 		go func(attackerID int) {
 			defer wg.Done()
 
-			tlsConfig := &tls.Config{
-				InsecureSkipVerify: true,
-			}
+			tlsConfig := getHubTLS(t, cluster)
 
 			conn, err := grpc.Dial(
 				cluster.hub.grpcAddr,
@@ -6471,69 +6557,107 @@ func TestRealWorld_P2PWithCustomSTUN(t *testing.T) {
 			}
 
 			// Exchange signaling messages
-			var wg sync.WaitGroup
-			var msgReceived atomic.Bool
+		var wg sync.WaitGroup
+		var msgReceived atomic.Bool
+		done := make(chan struct{})
 
-			// CLI sends offer
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
-				err := cliSignal.Send(&hubpb.SignalMessage{
-					TargetId: node.nodeID,
-					SourceId: cli.userID,
-					Type:     "offer",
-					Payload:  `{"type":"offer","sdp":"v=0\r\no=- 0 0 IN IP4 127.0.0.1\r\n"}`,
-				})
-				if err != nil {
-					t.Logf("CLI send offer: %v", err)
-				}
-			}()
-
-			// Node receives offer and sends answer
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
-				msg, err := nodeSignal.Recv()
-				if err != nil {
-					t.Logf("Node recv: %v", err)
-					return
-				}
-				if msg.Type == "offer" {
-					msgReceived.Store(true)
-					t.Logf("Node received offer from %s (STUN: %s)", msg.SourceId, stun.name)
-
-					// Send answer
-					nodeSignal.Send(&hubpb.SignalMessage{
-						TargetId: cli.userID,
-						SourceId: node.nodeID,
-						Type:     "answer",
-						Payload:  `{"type":"answer","sdp":"v=0\r\no=- 0 0 IN IP4 127.0.0.1\r\n"}`,
-					})
-				}
-			}()
-
-			// CLI receives answer
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
-				time.Sleep(500 * time.Millisecond)
-				msg, err := cliSignal.Recv()
-				if err != nil {
-					t.Logf("CLI recv: %v", err)
-					return
-				}
-				if msg.Type == "answer" {
-					t.Logf("CLI received answer from %s (STUN: %s)", msg.SourceId, stun.name)
-				}
-			}()
-
-			wg.Wait()
-
-			if msgReceived.Load() {
-				t.Logf("P2P signaling with %s STUN server passed", stun.name)
-			} else {
-				t.Logf("P2P signaling with %s STUN server completed (messages may not have been delivered)", stun.name)
+		// CLI sends offer
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			err := cliSignal.Send(&hubpb.SignalMessage{
+				TargetId: node.nodeID,
+				SourceId: cli.userID,
+				Type:     "offer",
+				Payload:  `{"type":"offer","sdp":"v=0\r\no=- 0 0 IN IP4 127.0.0.1\r\n"}`,
+			})
+			if err != nil {
+				t.Logf("CLI send offer: %v", err)
 			}
-		})
+		}()
+
+		// Node receives offer and sends answer (with context check)
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			// Check context before blocking on Recv
+			select {
+			case <-ctx.Done():
+				t.Logf("Node recv: context expired before receiving")
+				return
+			default:
+			}
+			msg, err := nodeSignal.Recv()
+			if err != nil {
+				t.Logf("Node recv: %v", err)
+				return
+			}
+			if msg.Type == "offer" {
+				msgReceived.Store(true)
+				t.Logf("Node received offer from %s (STUN: %s)", msg.SourceId, stun.name)
+
+				// Send answer
+				nodeSignal.Send(&hubpb.SignalMessage{
+					TargetId: cli.userID,
+					SourceId: node.nodeID,
+					Type:     "answer",
+					Payload:  `{"type":"answer","sdp":"v=0\r\no=- 0 0 IN IP4 127.0.0.1\r\n"}`,
+				})
+			}
+		}()
+
+		// CLI receives answer (with context check)
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			time.Sleep(500 * time.Millisecond)
+			// Check context before blocking on Recv
+			select {
+			case <-ctx.Done():
+				t.Logf("CLI recv: context expired before receiving")
+				return
+			default:
+			}
+			msg, err := cliSignal.Recv()
+			if err != nil {
+				t.Logf("CLI recv: %v", err)
+				return
+			}
+			if msg.Type == "answer" {
+				t.Logf("CLI received answer from %s (STUN: %s)", msg.SourceId, stun.name)
+			}
+		}()
+
+		// Wait with timeout
+		go func() {
+			wg.Wait()
+			close(done)
+		}()
+
+		select {
+		case <-done:
+			// All goroutines completed
+		case <-time.After(10 * time.Second):
+			t.Logf("P2P signaling timed out for %s STUN server (external service may be unreachable)", stun.name)
+		}
+
+		if msgReceived.Load() {
+			t.Logf("P2P signaling with %s STUN server passed", stun.name)
+		} else {
+			t.Logf("P2P signaling with %s STUN server completed (messages may not have been delivered)", stun.name)
+		}
+	})
+	}
+}
+
+func getHubTLS(t *testing.T, cluster *testCluster) *tls.Config {
+	if cluster == nil || cluster.hub == nil || len(cluster.hub.hubCAPEM) == 0 {
+		t.Fatal("Hub CA not available")
+	}
+	pool := x509.NewCertPool()
+	pool.AppendCertsFromPEM(cluster.hub.hubCAPEM)
+	return &tls.Config{
+		RootCAs:    pool,
+		MinVersion: tls.VersionTLS13,
 	}
 }

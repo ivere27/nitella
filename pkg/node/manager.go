@@ -23,6 +23,31 @@ import (
 	"github.com/ivere27/nitella/pkg/node/stats"
 )
 
+// ListenerMode defines how proxy listeners are created.
+type ListenerMode int
+
+const (
+	// ListenerModeFfi uses FFI transport (in-process, zero-copy).
+	// This is the most efficient mode for single-process deployments.
+	ListenerModeFfi ListenerMode = iota
+
+	// ListenerModeProcess spawns child processes via IPC.
+	// This provides isolation - if a listener crashes, only that listener is affected.
+	ListenerModeProcess
+)
+
+// String returns the string representation of ListenerMode.
+func (m ListenerMode) String() string {
+	switch m {
+	case ListenerModeFfi:
+		return "ffi"
+	case ListenerModeProcess:
+		return "process"
+	default:
+		return "unknown"
+	}
+}
+
 type ManagedProxy struct {
 	Listener   Listener // nil if stopped
 	Model      *ProxyModel
@@ -31,10 +56,10 @@ type ManagedProxy struct {
 }
 
 type ProxyManager struct {
-	proxies     map[string]*ManagedProxy
-	mu          sync.RWMutex
-	useEmbedded bool
-	ConfigPath  string
+	proxies    map[string]*ManagedProxy
+	mu         sync.RWMutex
+	mode       ListenerMode
+	ConfigPath string
 
 	db *xorm.Engine
 
@@ -46,17 +71,28 @@ type ProxyManager struct {
 	GeoIP       *GeoIPService
 	Stats       *stats.StatsService
 	HealthCheck *health.HealthChecker
+
+	// Global Runtime Rules (block/allow across all proxies)
+	GlobalRules *GlobalRulesStore
+
+	// Approval System
+	Approval *ApprovalManager
+
+	// Node Identity
+	NodeID string
 }
 
-func NewProxyManager(useEmbedded bool) *ProxyManager {
+// NewProxyManager creates a new ProxyManager with the specified listener mode.
+func NewProxyManager(mode ListenerMode) *ProxyManager {
 	// GeoIP service starts with nil client - caller should set it via GeoIP.SetClient()
 	geoIP := NewGeoIPService(nil)
 
 	pm := &ProxyManager{
 		proxies:     make(map[string]*ManagedProxy),
-		useEmbedded: useEmbedded,
+		mode:        mode,
 		globalSubs:  make(map[chan *pb.ConnectionEvent]struct{}),
 		GeoIP:       geoIP,
+		GlobalRules: NewGlobalRulesStore(),
 	}
 
 	// Initialize HealthCheck immediately so we can add services dynamically
@@ -66,6 +102,61 @@ func NewProxyManager(useEmbedded bool) *ProxyManager {
 	return pm
 }
 
+// NewProxyManagerWithBool creates a ProxyManager for backward compatibility.
+// Deprecated: Use NewProxyManager(ListenerMode) instead.
+func NewProxyManagerWithBool(useEmbedded bool) *ProxyManager {
+	mode := ListenerModeProcess
+	if useEmbedded {
+		mode = ListenerModeFfi
+	}
+	return NewProxyManager(mode)
+}
+
+// SetApprovalManager sets the approval manager and wires it to all proxies
+func (m *ProxyManager) SetApprovalManager(am *ApprovalManager) {
+	m.Approval = am
+	// Wire to existing proxies
+	m.mu.RLock()
+	for _, p := range m.proxies {
+		if p.Listener != nil {
+			switch l := p.Listener.(type) {
+			case *EmbeddedListener:
+				l.SetApprovalManager(am)
+				l.SetGlobalRules(m.GlobalRules)
+				l.SetNodeID(m.NodeID)
+			case *FfiListener:
+				l.SetApprovalManager(am)
+				l.SetGlobalRules(m.GlobalRules)
+				l.SetNodeID(m.NodeID)
+			}
+		}
+	}
+	m.mu.RUnlock()
+}
+
+// SetNodeID sets the node identifier for approval requests
+func (m *ProxyManager) SetNodeID(nodeID string) {
+	m.NodeID = nodeID
+	// Wire to existing proxies
+	m.mu.RLock()
+	for _, p := range m.proxies {
+		if p.Listener != nil {
+			switch l := p.Listener.(type) {
+			case *EmbeddedListener:
+				l.SetNodeID(nodeID)
+			case *FfiListener:
+				l.SetNodeID(nodeID)
+			}
+		}
+	}
+	m.mu.RUnlock()
+}
+
+// GetGlobalRules returns the global rules store
+func (m *ProxyManager) GetGlobalRules() *GlobalRulesStore {
+	return m.GlobalRules
+}
+
 // SetStatsService sets the statistics service for all proxies
 func (m *ProxyManager) SetStatsService(s *stats.StatsService) {
 	m.Stats = s
@@ -73,8 +164,11 @@ func (m *ProxyManager) SetStatsService(s *stats.StatsService) {
 	m.mu.RLock()
 	for _, p := range m.proxies {
 		if p.Listener != nil {
-			if emp, ok := p.Listener.(*EmbeddedListener); ok {
-				emp.SetStatsService(s)
+			switch l := p.Listener.(type) {
+			case *EmbeddedListener:
+				l.SetStatsService(s)
+			case *FfiListener:
+				l.SetStatsService(s)
 			}
 		}
 	}
@@ -219,16 +313,31 @@ func (m *ProxyManager) CreateProxyWithID(id string, req *pb.CreateProxyRequest) 
 	// Use Enum directly
 	action := req.DefaultAction
 
-	if m.useEmbedded {
-		proxy = NewEmbeddedListener(id, req.Name, req.ListenAddr, req.DefaultBackend, action, req.DefaultMock, req.CertPem, req.KeyPem, req.CaPem, req.ClientAuthType, m.GeoIP)
-		if emp, ok := proxy.(*EmbeddedListener); ok {
-			if m.Stats != nil {
-				emp.SetStatsService(m.Stats)
-			}
-			// Set Fallback
-			emp.SetFallback(req.FallbackAction, req.FallbackMock)
+	// Auto-set DefaultAction to MOCK if DefaultMock is specified but action is unspecified
+	if action == common.ActionType_ACTION_TYPE_UNSPECIFIED && req.DefaultMock != common.MockPreset_MOCK_PRESET_UNSPECIFIED {
+		action = common.ActionType_ACTION_TYPE_MOCK
+	}
+
+	switch m.mode {
+	case ListenerModeFfi:
+		// FFI mode: use FfiListener (in-process via synurang FFI)
+		fl := NewFfiListener(id, req.Name, req.ListenAddr, req.DefaultBackend, action, req.DefaultMock, req.CertPem, req.KeyPem, req.CaPem, req.ClientAuthType, m.GeoIP)
+		if m.Stats != nil {
+			fl.SetStatsService(m.Stats)
 		}
-	} else {
+		fl.SetFallback(req.FallbackAction, req.FallbackMock)
+		if m.GlobalRules != nil {
+			fl.SetGlobalRules(m.GlobalRules)
+		}
+		if m.Approval != nil {
+			fl.SetApprovalManager(m.Approval)
+		}
+		if m.NodeID != "" {
+			fl.SetNodeID(m.NodeID)
+		}
+		proxy = fl
+
+	case ListenerModeProcess:
 		// Process mode: spawn a child process for each proxy
 		pl := NewProcessListener(id, req.Name, req.ListenAddr, req.DefaultBackend, action, req.DefaultMock, req.CertPem, req.KeyPem, req.CaPem, req.ClientAuthType)
 		pl.SetFallback(req.FallbackAction, req.FallbackMock)
@@ -409,15 +518,25 @@ func (m *ProxyManager) EnableProxy(id string) (*pb.EnableProxyResponse, error) {
 	mockPreset := StringToMockPreset(model.DefaultMock)
 
 	var proxy Listener
-	if m.useEmbedded {
-		proxy = NewEmbeddedListener(id, model.Name, model.ListenAddr, model.DefaultBackend, action, mockPreset, model.CertPEM, model.KeyPEM, model.CaPEM, pb.ClientAuthType(model.ClientAuthType), m.GeoIP)
-		if emp, ok := proxy.(*EmbeddedListener); ok {
-			if m.Stats != nil {
-				emp.SetStatsService(m.Stats)
-			}
-			emp.SetFallback(common.FallbackAction(model.FallbackAction), StringToMockPreset(model.FallbackMock))
+	switch m.mode {
+	case ListenerModeFfi:
+		fl := NewFfiListener(id, model.Name, model.ListenAddr, model.DefaultBackend, action, mockPreset, model.CertPEM, model.KeyPEM, model.CaPEM, pb.ClientAuthType(model.ClientAuthType), m.GeoIP)
+		if m.Stats != nil {
+			fl.SetStatsService(m.Stats)
 		}
-	} else {
+		fl.SetFallback(common.FallbackAction(model.FallbackAction), StringToMockPreset(model.FallbackMock))
+		if m.GlobalRules != nil {
+			fl.SetGlobalRules(m.GlobalRules)
+		}
+		if m.Approval != nil {
+			fl.SetApprovalManager(m.Approval)
+		}
+		if m.NodeID != "" {
+			fl.SetNodeID(m.NodeID)
+		}
+		proxy = fl
+
+	case ListenerModeProcess:
 		pl := NewProcessListener(id, model.Name, model.ListenAddr, model.DefaultBackend, action, mockPreset, model.CertPEM, model.KeyPEM, model.CaPEM, pb.ClientAuthType(model.ClientAuthType))
 		pl.SetFallback(common.FallbackAction(model.FallbackAction), StringToMockPreset(model.FallbackMock))
 		proxy = pl
@@ -519,15 +638,25 @@ func (m *ProxyManager) RestartListeners() (*pb.RestartListenersResponse, error) 
 		mockPreset := StringToMockPreset(model.DefaultMock)
 
 		var proxy Listener
-		if m.useEmbedded {
-			proxy = NewEmbeddedListener(pid, model.Name, model.ListenAddr, model.DefaultBackend, action, mockPreset, model.CertPEM, model.KeyPEM, model.CaPEM, pb.ClientAuthType(model.ClientAuthType), m.GeoIP)
-			if emp, ok := proxy.(*EmbeddedListener); ok {
-				if m.Stats != nil {
-					emp.SetStatsService(m.Stats)
-				}
-				emp.SetFallback(common.FallbackAction(model.FallbackAction), StringToMockPreset(model.FallbackMock))
+		switch m.mode {
+		case ListenerModeFfi:
+			fl := NewFfiListener(pid, model.Name, model.ListenAddr, model.DefaultBackend, action, mockPreset, model.CertPEM, model.KeyPEM, model.CaPEM, pb.ClientAuthType(model.ClientAuthType), m.GeoIP)
+			if m.Stats != nil {
+				fl.SetStatsService(m.Stats)
 			}
-		} else {
+			fl.SetFallback(common.FallbackAction(model.FallbackAction), StringToMockPreset(model.FallbackMock))
+			if m.GlobalRules != nil {
+				fl.SetGlobalRules(m.GlobalRules)
+			}
+			if m.Approval != nil {
+				fl.SetApprovalManager(m.Approval)
+			}
+			if m.NodeID != "" {
+				fl.SetNodeID(m.NodeID)
+			}
+			proxy = fl
+
+		case ListenerModeProcess:
 			pl := NewProcessListener(pid, model.Name, model.ListenAddr, model.DefaultBackend, action, mockPreset, model.CertPEM, model.KeyPEM, model.CaPEM, pb.ClientAuthType(model.ClientAuthType))
 			pl.SetFallback(common.FallbackAction(model.FallbackAction), StringToMockPreset(model.FallbackMock))
 			proxy = pl
@@ -1110,6 +1239,16 @@ func (m *ProxyManager) LoadState() error {
 			proxy.SetStatsService(m.Stats)
 		}
 		proxy.SetFallback(common.FallbackAction(p.FallbackAction), StringToMockPreset(p.FallbackMock))
+		// Wire global rules and approval
+		if m.GlobalRules != nil {
+			proxy.SetGlobalRules(m.GlobalRules)
+		}
+		if m.Approval != nil {
+			proxy.SetApprovalManager(m.Approval)
+		}
+		if m.NodeID != "" {
+			proxy.SetNodeID(m.NodeID)
+		}
 
 		if err := proxy.Start(); err != nil {
 			log.Printf("Failed to restore proxy %s: %v\n", p.Name, err)

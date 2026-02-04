@@ -3,6 +3,8 @@ package main
 import (
 	"bufio"
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"flag"
 	"fmt"
 	"os"
@@ -13,16 +15,16 @@ import (
 	"syscall"
 	"time"
 
+	pb "github.com/ivere27/nitella/pkg/api/proxy"
+	"github.com/ivere27/nitella/pkg/cli"
 	nitellacrypto "github.com/ivere27/nitella/pkg/crypto"
 	"github.com/ivere27/nitella/pkg/identity"
 	"github.com/ivere27/nitella/pkg/shell"
 	"golang.org/x/term"
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/protobuf/types/known/emptypb"
-
-	pb "github.com/ivere27/nitella/pkg/api/proxy"
 )
 
 var (
@@ -55,6 +57,7 @@ func main() {
 	// Local mode flags (only used with --local)
 	addr := flag.String("addr", "localhost:50051", "Local nitellad server address (with --local)")
 	token := flag.String("token", os.Getenv("NITELLA_TOKEN"), "Authentication token for local nitellad (env: NITELLA_TOKEN)")
+	tlsCA := flag.String("tls-ca", os.Getenv("NITELLA_TLS_CA"), "Path to nitellad CA certificate for TLS verification (env: NITELLA_TLS_CA)")
 
 	// Hub mode flags
 	flag.StringVar(&hubAddress, "hub", os.Getenv("NITELLA_HUB"), "Hub server address (env: NITELLA_HUB)")
@@ -82,7 +85,31 @@ func main() {
 		}
 
 		var err error
-		conn, err = grpc.NewClient(serverAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+		// Load TLS credentials with proper CA verification
+		var tlsConfig *tls.Config
+		if *tlsCA != "" {
+			// Load CA certificate for verification
+			caPEM, err := os.ReadFile(*tlsCA)
+			if err != nil {
+				fmt.Printf("Failed to read CA certificate: %v\n", err)
+				os.Exit(1)
+			}
+			caPool := x509.NewCertPool()
+			if !caPool.AppendCertsFromPEM(caPEM) {
+				fmt.Println("Failed to parse CA certificate")
+				os.Exit(1)
+			}
+			tlsConfig = &tls.Config{
+				RootCAs:    caPool,
+				MinVersion: tls.VersionTLS13,
+			}
+		} else {
+			fmt.Println("Error: --tls-ca is required for local mode")
+			fmt.Println("nitellad generates CA at: <admin-data-dir>/admin_ca.crt")
+			fmt.Println("Example: nitella --local --tls-ca /path/to/admin_ca.crt")
+			os.Exit(1)
+		}
+		conn, err = grpc.NewClient(serverAddr, grpc.WithTransportCredentials(credentials.NewTLS(tlsConfig)))
 		if err != nil {
 			fmt.Printf("Failed to connect to %s: %v\n", serverAddr, err)
 			os.Exit(1)
@@ -134,6 +161,9 @@ func main() {
 		fmt.Println("Type 'help' for available commands, 'exit' to quit.")
 		fmt.Println()
 
+		// Start background alert streaming (will silently fail if not connected)
+		startBackgroundAlertStream()
+
 		shell.StartREPL("nitella> ", func(line string) error {
 			parts := strings.Fields(line)
 			if len(parts) == 0 {
@@ -147,6 +177,7 @@ func main() {
 			case "help":
 				printHubModeHelp()
 			case "exit", "quit":
+				CleanupHubResources()
 				os.Exit(0)
 			case "identity":
 				cmdIdentity(cmdArgs)
@@ -409,7 +440,7 @@ func newHubCompletion() *shell.SimpleCompletion {
 	return &shell.SimpleCompletion{
 		RootCommands: []string{
 			"config", "login", "register", "status", "nodes", "node",
-			"approvals", "approve", "deny", "templates", "proxy", "send",
+			"alerts", "pending", "approve", "deny", "templates", "proxy", "send",
 			"identity", "help", "exit",
 		},
 		SubCommands: map[string][]string{
@@ -445,9 +476,10 @@ Node Management:
   node <node_id> rules           - List node rules
   node <node_id> metrics         - Stream node metrics
 
-Approvals:
-  approvals                      - List pending approvals
-  approve <request_id>           - Approve a pending request
+Alerts & Approvals (auto-streaming in background):
+  alerts                         - Start manual alert streaming (foreground)
+  pending                        - List pending approval requests
+  approve <request_id> [dur]     - Approve request (dur: 1h, 24h, 7d, forever)
   deny <request_id>              - Deny a pending request
 
 Templates:
@@ -473,17 +505,19 @@ func newCompletion() *shell.SimpleCompletion {
 	return &shell.SimpleCompletion{
 		RootCommands: []string{
 			"status", "list", "ls", "proxy", "rule", "conn", "connections",
-			"block", "allow", "stream", "metrics", "restart",
+			"block", "allow", "global-rules", "approvals", "stream", "metrics", "restart",
 			"geoip", "lookup", "help", "exit",
 		},
 		SubCommands: map[string][]string{
-			"proxy":       {"create", "delete", "enable", "disable", "update"},
-			"rule":        {"list", "add", "remove"},
-			"conn":        {"close", "closeall"},
-			"connections": {"close", "closeall"},
-			"geoip":       {"status", "config"},
-			"config":      {"local", "remote", "set"},
-			"add":         {"allow", "block"},
+			"proxy":        {"create", "delete", "enable", "disable", "update"},
+			"rule":         {"list", "add", "remove"},
+			"conn":         {"close", "closeall"},
+			"connections":  {"close", "closeall"},
+			"geoip":        {"status", "config"},
+			"config":       {"local", "remote", "set"},
+			"add":          {"allow", "block"},
+			"global-rules": {"list", "remove"},
+			"approvals":    {"list", "cancel"},
 		},
 	}
 }
@@ -516,6 +550,10 @@ func handleCommand(input string) {
 		cmdBlockIP(args)
 	case "allow":
 		cmdAllowIP(args)
+	case "global-rules":
+		cmdGlobalRules(args)
+	case "approvals":
+		cmdApprovals(args)
 	case "stream":
 		cmdStream()
 	case "metrics":
@@ -552,8 +590,15 @@ Nitella CLI (Local Mode) Commands:
   conn close <proxy_id> <conn_id>    - Close a connection
   conn closeall <proxy_id>     - Close all connections
 
-  block <ip>                   - Quick block an IP (all proxies)
-  allow <ip>                   - Quick allow an IP (all proxies)
+  block <ip> [duration_seconds]  - Quick block an IP (all proxies)
+  allow <ip> [duration_seconds]  - Quick allow an IP (all proxies)
+  global-rules                   - List all global rules
+  global-rules remove <rule_id>  - Remove a global rule
+  Note: Global ALLOW prevents blocking but does NOT bypass REQUIRE_APPROVAL.
+        Use per-proxy rules with action=allow to fully whitelist an IP.
+
+  approvals                      - List active approvals
+  approvals cancel <key> [-c]    - Cancel approval (-c to close connections)
 
   geoip status                 - Show GeoIP service status
   geoip config local <city_db> [isp_db]  - Configure local MaxMind DB
@@ -581,13 +626,18 @@ func authCtx() context.Context {
 	return ctx
 }
 
+// authAPICtx returns a context with authentication and the default API timeout.
+func authAPICtx() (context.Context, context.CancelFunc) {
+	return context.WithTimeout(authCtx(), cli.DefaultAPITimeout)
+}
+
 func cmdStatus(args []string) {
 	proxyID := ""
 	if len(args) > 0 {
 		proxyID = args[0]
 	}
 
-	ctx, cancel := context.WithTimeout(authCtx(), 5*time.Second)
+	ctx, cancel := authAPICtx()
 	defer cancel()
 
 	if proxyID == "" {
@@ -601,17 +651,22 @@ func cmdStatus(args []string) {
 			fmt.Println("No proxies running.")
 			return
 		}
-		fmt.Printf("\n%-36s  %-20s  %-8s  %-10s  %-10s\n", "ID", "Address", "Status", "Active", "Total")
-		fmt.Println(strings.Repeat("-", 90))
+		tbl := cli.NewTable(
+			cli.Column{Header: "ID", Width: 36},
+			cli.Column{Header: "Address", Width: 20},
+			cli.Column{Header: "Status", Width: 8},
+			cli.Column{Header: "Active", Width: 10},
+			cli.Column{Header: "Total", Width: 10},
+		)
+		tbl.PrintHeader()
 		for _, p := range resp.Proxies {
 			status := "stopped"
 			if p.Running {
 				status = "running"
 			}
-			fmt.Printf("%-36s  %-20s  %-8s  %-10d  %-10d\n",
-				p.ProxyId, p.ListenAddr, status, p.ActiveConnections, p.TotalConnections)
+			tbl.PrintRow(p.ProxyId, p.ListenAddr, status, p.ActiveConnections, p.TotalConnections)
 		}
-		fmt.Println()
+		tbl.PrintFooter()
 	} else {
 		resp, err := client.GetStatus(ctx, &pb.GetStatusRequest{ProxyId: proxyID})
 		if err != nil {
@@ -641,13 +696,12 @@ func cmdProxy(args []string) {
 		return
 	}
 
-	ctx, cancel := context.WithTimeout(authCtx(), 5*time.Second)
+	ctx, cancel := authAPICtx()
 	defer cancel()
 
 	switch args[0] {
 	case "create":
-		if len(args) < 3 {
-			fmt.Println("Usage: proxy create <listen_addr> <backend_addr> [name]")
+		if !cli.RequireArgs(args, 3, "Usage: proxy create <listen_addr> <backend_addr> [name]") {
 			return
 		}
 		name := "cli-proxy"
@@ -663,15 +717,13 @@ func cmdProxy(args []string) {
 			fmt.Printf("Error: %v\n", err)
 			return
 		}
-		if !resp.Success {
-			fmt.Printf("Failed: %s\n", resp.ErrorMessage)
+		if !cli.CheckResponse(resp) {
 			return
 		}
 		fmt.Printf("Proxy created: %s\n", resp.ProxyId)
 
 	case "delete":
-		if len(args) < 2 {
-			fmt.Println("Usage: proxy delete <proxy_id>")
+		if !cli.RequireArgs(args, 2, "Usage: proxy delete <proxy_id>") {
 			return
 		}
 		resp, err := client.DeleteProxy(ctx, &pb.DeleteProxyRequest{ProxyId: args[1]})
@@ -679,15 +731,13 @@ func cmdProxy(args []string) {
 			fmt.Printf("Error: %v\n", err)
 			return
 		}
-		if !resp.Success {
-			fmt.Printf("Failed: %s\n", resp.ErrorMessage)
+		if !cli.CheckResponse(resp) {
 			return
 		}
 		fmt.Println("Proxy deleted.")
 
 	case "enable":
-		if len(args) < 2 {
-			fmt.Println("Usage: proxy enable <proxy_id>")
+		if !cli.RequireArgs(args, 2, "Usage: proxy enable <proxy_id>") {
 			return
 		}
 		resp, err := client.EnableProxy(ctx, &pb.EnableProxyRequest{ProxyId: args[1]})
@@ -695,15 +745,13 @@ func cmdProxy(args []string) {
 			fmt.Printf("Error: %v\n", err)
 			return
 		}
-		if !resp.Success {
-			fmt.Printf("Failed: %s\n", resp.ErrorMessage)
+		if !cli.CheckResponse(resp) {
 			return
 		}
 		fmt.Println("Proxy enabled.")
 
 	case "disable":
-		if len(args) < 2 {
-			fmt.Println("Usage: proxy disable <proxy_id>")
+		if !cli.RequireArgs(args, 2, "Usage: proxy disable <proxy_id>") {
 			return
 		}
 		resp, err := client.DisableProxy(ctx, &pb.DisableProxyRequest{ProxyId: args[1]})
@@ -711,15 +759,13 @@ func cmdProxy(args []string) {
 			fmt.Printf("Error: %v\n", err)
 			return
 		}
-		if !resp.Success {
-			fmt.Printf("Failed: %s\n", resp.ErrorMessage)
+		if !cli.CheckResponse(resp) {
 			return
 		}
 		fmt.Println("Proxy disabled.")
 
 	case "update":
-		if len(args) < 2 {
-			fmt.Println("Usage: proxy update <proxy_id> [--backend <addr>] [--name <name>]")
+		if !cli.RequireArgs(args, 2, "Usage: proxy update <proxy_id> [--backend <addr>] [--name <name>]") {
 			return
 		}
 		proxyID := args[1]
@@ -746,8 +792,7 @@ func cmdProxy(args []string) {
 			fmt.Printf("Error: %v\n", err)
 			return
 		}
-		if !resp.Success {
-			fmt.Printf("Failed: %s\n", resp.ErrorMessage)
+		if !cli.CheckResponse(resp) {
 			return
 		}
 		fmt.Println("Proxy updated.")
@@ -763,13 +808,12 @@ func cmdRule(args []string) {
 		return
 	}
 
-	ctx, cancel := context.WithTimeout(authCtx(), 5*time.Second)
+	ctx, cancel := authAPICtx()
 	defer cancel()
 
 	switch args[0] {
 	case "list":
-		if len(args) < 2 {
-			fmt.Println("Usage: rule list <proxy_id>")
+		if !cli.RequireArgs(args, 2, "Usage: rule list <proxy_id>") {
 			return
 		}
 		resp, err := client.ListRules(ctx, &pb.ListRulesRequest{ProxyId: args[1]})
@@ -790,8 +834,7 @@ func cmdRule(args []string) {
 		fmt.Println()
 
 	case "add":
-		if len(args) < 4 {
-			fmt.Println("Usage: rule add <proxy_id> <allow|block> <ip>")
+		if !cli.RequireArgs(args, 4, "Usage: rule add <proxy_id> <allow|block> <ip>") {
 			return
 		}
 		proxyID := args[1]
@@ -834,8 +877,7 @@ func cmdRule(args []string) {
 		fmt.Printf("Rule added: %s\n", resp.Id)
 
 	case "remove":
-		if len(args) < 3 {
-			fmt.Println("Usage: rule remove <proxy_id> <rule_id>")
+		if !cli.RequireArgs(args, 3, "Usage: rule remove <proxy_id> <rule_id>") {
 			return
 		}
 		_, err := client.RemoveRule(ctx, &pb.RemoveRuleRequest{
@@ -854,14 +896,13 @@ func cmdRule(args []string) {
 }
 
 func cmdConnections(args []string) {
-	ctx, cancel := context.WithTimeout(authCtx(), 5*time.Second)
+	ctx, cancel := authAPICtx()
 	defer cancel()
 
 	if len(args) >= 1 {
 		switch args[0] {
 		case "close":
-			if len(args) < 3 {
-				fmt.Println("Usage: conn close <proxy_id> <conn_id>")
+			if !cli.RequireArgs(args, 3, "Usage: conn close <proxy_id> <conn_id>") {
 				return
 			}
 			resp, err := client.CloseConnection(ctx, &pb.CloseConnectionRequest{
@@ -872,8 +913,7 @@ func cmdConnections(args []string) {
 				fmt.Printf("Error: %v\n", err)
 				return
 			}
-			if !resp.Success {
-				fmt.Printf("Failed: %s\n", resp.ErrorMessage)
+			if !cli.CheckResponse(resp) {
 				return
 			}
 			fmt.Println("Connection closed.")
@@ -895,8 +935,7 @@ func cmdConnections(args []string) {
 					fmt.Printf("Error: %v\n", err)
 					return
 				}
-				if !resp.Success {
-					fmt.Printf("Failed: %s\n", resp.ErrorMessage)
+				if !cli.CheckResponse(resp) {
 					return
 				}
 				fmt.Println("All connections closed on proxy", proxyID)
@@ -950,56 +989,214 @@ func cmdConnections(args []string) {
 	fmt.Println()
 }
 
-func cmdBlockIP(args []string) {
-	if len(args) < 1 {
-		fmt.Println("Usage: block <ip>")
+// cmdIPAction handles both block and allow IP actions.
+func cmdIPAction(args []string, action string) {
+	usage := fmt.Sprintf("Usage: %s <ip> [duration_seconds]", action)
+	if !cli.RequireArgs(args, 1, usage) {
 		return
 	}
 
-	ctx, cancel := context.WithTimeout(authCtx(), 5*time.Second)
+	ctx, cancel := authAPICtx()
 	defer cancel()
 
 	duration := int64(0)
 	if len(args) > 1 {
-		d, _ := strconv.ParseInt(args[1], 10, 64)
+		d, err := cli.ParseDuration(args[1], 0)
+		if err != nil {
+			fmt.Printf("Warning: %v, using 0 (permanent)\n", err)
+		}
 		duration = d
 	}
 
-	_, err := client.BlockIP(ctx, &pb.BlockIPRequest{
-		Ip:              args[0],
-		DurationSeconds: duration,
-	})
+	var err error
+	if action == "block" {
+		_, err = client.BlockIP(ctx, &pb.BlockIPRequest{
+			Ip:              args[0],
+			DurationSeconds: duration,
+		})
+	} else {
+		_, err = client.AllowIP(ctx, &pb.AllowIPRequest{
+			Ip:              args[0],
+			DurationSeconds: duration,
+		})
+	}
 	if err != nil {
 		fmt.Printf("Error: %v\n", err)
 		return
 	}
-	fmt.Printf("IP %s blocked.\n", args[0])
+	fmt.Printf("IP %s %sed.\n", args[0], action)
 }
 
-func cmdAllowIP(args []string) {
-	if len(args) < 1 {
-		fmt.Println("Usage: allow <ip>")
+func cmdBlockIP(args []string) { cmdIPAction(args, "block") }
+func cmdAllowIP(args []string) { cmdIPAction(args, "allow") }
+
+func cmdGlobalRules(args []string) {
+	if len(args) == 0 {
+		// List all global rules
+		ctx, cancel := authAPICtx()
+		defer cancel()
+
+		resp, err := client.ListGlobalRules(ctx, &pb.ListGlobalRulesRequest{})
+		if err != nil {
+			fmt.Printf("Error: %v\n", err)
+			return
+		}
+
+		if len(resp.Rules) == 0 {
+			fmt.Println("No global rules configured.")
+			return
+		}
+
+		// Calculate dynamic column widths
+		widths := []int{2, 4, 9, 6, 7} // minimum: "ID", "Name", "Source IP", "Action", "Expires"
+		type row struct {
+			id, name, sourceIP, action, expires string
+		}
+		rows := make([]row, len(resp.Rules))
+
+		for i, r := range resp.Rules {
+			expires := "permanent"
+			if r.ExpiresAt != nil && !r.ExpiresAt.AsTime().IsZero() {
+				expires = r.ExpiresAt.AsTime().Format("2006-01-02 15:04:05")
+			}
+			rows[i] = row{r.Id, r.Name, r.SourceIp, r.Action.String(), expires}
+
+			if len(r.Id) > widths[0] {
+				widths[0] = len(r.Id)
+			}
+			if len(r.Name) > widths[1] {
+				widths[1] = len(r.Name)
+			}
+			if len(r.SourceIp) > widths[2] {
+				widths[2] = len(r.SourceIp)
+			}
+			if len(rows[i].action) > widths[3] {
+				widths[3] = len(rows[i].action)
+			}
+			if len(expires) > widths[4] {
+				widths[4] = len(expires)
+			}
+		}
+
+		// Print header
+		fmt.Println()
+		fmt.Printf("%-*s  %-*s  %-*s  %-*s  %-*s\n",
+			widths[0], "ID", widths[1], "Name", widths[2], "Source IP", widths[3], "Action", widths[4], "Expires")
+		totalWidth := widths[0] + widths[1] + widths[2] + widths[3] + widths[4] + 8 // 8 for spacing
+		fmt.Println(strings.Repeat("-", totalWidth))
+
+		// Print rows
+		for _, r := range rows {
+			fmt.Printf("%-*s  %-*s  %-*s  %-*s  %-*s\n",
+				widths[0], r.id, widths[1], r.name, widths[2], r.sourceIP, widths[3], r.action, widths[4], r.expires)
+		}
+		fmt.Println()
 		return
 	}
 
-	ctx, cancel := context.WithTimeout(authCtx(), 5*time.Second)
-	defer cancel()
+	switch args[0] {
+	case "list":
+		cmdGlobalRules(nil) // Call with no args to list
 
-	duration := int64(0)
-	if len(args) > 1 {
-		d, _ := strconv.ParseInt(args[1], 10, 64)
-		duration = d
+	case "remove":
+		if !cli.RequireArgs(args, 2, "Usage: global-rules remove <rule_id>") {
+			return
+		}
+		ctx, cancel := authAPICtx()
+		defer cancel()
+
+		resp, err := client.RemoveGlobalRule(ctx, &pb.RemoveGlobalRuleRequest{
+			RuleId: args[1],
+		})
+		if err != nil {
+			fmt.Printf("Error: %v\n", err)
+			return
+		}
+		if !cli.CheckResponse(resp) {
+			return
+		}
+		fmt.Printf("Global rule %s removed.\n", args[1])
+
+	default:
+		fmt.Println("Usage: global-rules [list|remove <rule_id>]")
 	}
+}
 
-	_, err := client.AllowIP(ctx, &pb.AllowIPRequest{
-		Ip:              args[0],
-		DurationSeconds: duration,
-	})
-	if err != nil {
-		fmt.Printf("Error: %v\n", err)
+func cmdApprovals(args []string) {
+	if len(args) == 0 {
+		// List all active approvals
+		ctx, cancel := authAPICtx()
+		defer cancel()
+
+		resp, err := client.ListActiveApprovals(ctx, &pb.ListActiveApprovalsRequest{})
+		if err != nil {
+			fmt.Printf("Error: %v\n", err)
+			return
+		}
+
+		if len(resp.Approvals) == 0 {
+			fmt.Println("No active approvals.")
+			return
+		}
+
+		fmt.Printf("\nActive Approvals (%d):\n", len(resp.Approvals))
+		fmt.Println(strings.Repeat("-", 100))
+		for _, a := range resp.Approvals {
+			decision := "ALLOW"
+			if !a.Allowed {
+				decision = "BLOCK"
+			}
+			expires := "permanent"
+			if a.ExpiresAt != nil && !a.ExpiresAt.AsTime().IsZero() {
+				remaining := time.Until(a.ExpiresAt.AsTime()).Round(time.Second)
+				if remaining > 0 {
+					expires = remaining.String()
+				} else {
+					expires = "expired"
+				}
+			}
+			fmt.Printf("%-50s  %s  %s  conns:%d  in:%d  out:%d\n",
+				a.Key, decision, expires, len(a.ConnIds), a.BytesIn, a.BytesOut)
+			if a.GeoCountry != "" {
+				fmt.Printf("  Geo: %s, %s (%s)\n", a.GeoCity, a.GeoCountry, a.GeoIsp)
+			}
+		}
+		fmt.Println()
 		return
 	}
-	fmt.Printf("IP %s allowed.\n", args[0])
+
+	switch args[0] {
+	case "list":
+		cmdApprovals(nil) // Call with no args to list
+
+	case "cancel":
+		if !cli.RequireArgs(args, 2, "Usage: approvals cancel <key> [--close-connections]") {
+			return
+		}
+		closeConns := false
+		if len(args) > 2 && (args[2] == "--close-connections" || args[2] == "-c") {
+			closeConns = true
+		}
+
+		ctx, cancel := authAPICtx()
+		defer cancel()
+
+		resp, err := client.CancelApproval(ctx, &pb.CancelApprovalRequest{
+			Key:              args[1],
+			CloseConnections: closeConns,
+		})
+		if err != nil {
+			fmt.Printf("Error: %v\n", err)
+			return
+		}
+		if !cli.CheckResponse(resp) {
+			return
+		}
+		fmt.Printf("Approval cancelled. Connections closed: %d\n", resp.ConnectionsClosed)
+
+	default:
+		fmt.Println("Usage: approvals [list|cancel <key> [--close-connections]]")
+	}
 }
 
 func cmdStream() {
@@ -1103,8 +1300,7 @@ func cmdRestart() {
 		fmt.Printf("Error: %v\n", err)
 		return
 	}
-	if !resp.Success {
-		fmt.Printf("Failed: %s\n", resp.ErrorMessage)
+	if !cli.CheckResponse(resp) {
 		return
 	}
 	fmt.Printf("Restarted %d listeners.\n", resp.RestartedCount)
@@ -1130,13 +1326,36 @@ func truncate(s string, maxLen int) string {
 	return s[:maxLen-3] + "..."
 }
 
+// configureGeoIP sends a GeoIP configuration request to the server.
+func configureGeoIP(ctx context.Context, mode pb.ConfigureGeoIPRequest_Mode, primary, optional, successMsg string) {
+	req := &pb.ConfigureGeoIPRequest{Mode: mode}
+	switch mode {
+	case pb.ConfigureGeoIPRequest_MODE_LOCAL_DB:
+		req.CityDbPath = primary
+		req.IspDbPath = optional
+	case pb.ConfigureGeoIPRequest_MODE_REMOTE_API:
+		req.Provider = primary
+		req.ApiKey = optional
+	}
+
+	resp, err := client.ConfigureGeoIP(ctx, req)
+	if err != nil {
+		fmt.Printf("Error: %v\n", err)
+		return
+	}
+	if !cli.CheckResponseWithField(resp.Success, resp.Error) {
+		return
+	}
+	fmt.Println(successMsg)
+}
+
 func cmdGeoIP(args []string) {
 	if len(args) == 0 {
 		fmt.Println("Usage: geoip <status|config> ...")
 		return
 	}
 
-	ctx, cancel := context.WithTimeout(authCtx(), 5*time.Second)
+	ctx, cancel := authAPICtx()
 	defer cancel()
 
 	switch args[0] {
@@ -1173,50 +1392,26 @@ func cmdGeoIP(args []string) {
 
 		switch args[1] {
 		case "local":
-			if len(args) < 3 {
-				fmt.Println("Usage: geoip config local <city_db_path> [isp_db_path]")
+			if !cli.RequireArgs(args, 3, "Usage: geoip config local <city_db_path> [isp_db_path]") {
 				return
 			}
-			req := &pb.ConfigureGeoIPRequest{
-				Mode:       pb.ConfigureGeoIPRequest_MODE_LOCAL_DB,
-				CityDbPath: args[2],
-			}
+			optional := ""
 			if len(args) > 3 {
-				req.IspDbPath = args[3]
+				optional = args[3]
 			}
-			resp, err := client.ConfigureGeoIP(ctx, req)
-			if err != nil {
-				fmt.Printf("Error: %v\n", err)
-				return
-			}
-			if !resp.Success {
-				fmt.Printf("Failed: %s\n", resp.Error)
-				return
-			}
-			fmt.Println("GeoIP configured with local databases.")
+			configureGeoIP(ctx, pb.ConfigureGeoIPRequest_MODE_LOCAL_DB, args[2], optional,
+				"GeoIP configured with local databases.")
 
 		case "remote":
-			if len(args) < 3 {
-				fmt.Println("Usage: geoip config remote <provider_url> [api_key]")
+			if !cli.RequireArgs(args, 3, "Usage: geoip config remote <provider_url> [api_key]") {
 				return
 			}
-			req := &pb.ConfigureGeoIPRequest{
-				Mode:     pb.ConfigureGeoIPRequest_MODE_REMOTE_API,
-				Provider: args[2],
-			}
+			optional := ""
 			if len(args) > 3 {
-				req.ApiKey = args[3]
+				optional = args[3]
 			}
-			resp, err := client.ConfigureGeoIP(ctx, req)
-			if err != nil {
-				fmt.Printf("Error: %v\n", err)
-				return
-			}
-			if !resp.Success {
-				fmt.Printf("Failed: %s\n", resp.Error)
-				return
-			}
-			fmt.Println("GeoIP configured with remote provider.")
+			configureGeoIP(ctx, pb.ConfigureGeoIPRequest_MODE_REMOTE_API, args[2], optional,
+				"GeoIP configured with remote provider.")
 
 		default:
 			fmt.Println("Usage: geoip config <local|remote> ...")
@@ -1228,8 +1423,7 @@ func cmdGeoIP(args []string) {
 }
 
 func cmdLookupIP(args []string) {
-	if len(args) < 1 {
-		fmt.Println("Usage: lookup <ip>")
+	if !cli.RequireArgs(args, 1, "Usage: lookup <ip>") {
 		return
 	}
 

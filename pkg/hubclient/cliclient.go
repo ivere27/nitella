@@ -612,16 +612,16 @@ func (c *CLIClient) RemoveNodeRule(ctx context.Context, nodeID string, ruleID st
 }
 
 // ResolveApproval resolves a pending connection approval
-func (c *CLIClient) ResolveApproval(ctx context.Context, nodeID, reqID string, allow bool, duration common.ApprovalDuration, nodePubKey ed25519.PublicKey) error {
+func (c *CLIClient) ResolveApproval(ctx context.Context, nodeID, reqID string, allow bool, durationSeconds int64, nodePubKey ed25519.PublicKey) error {
 	action := common.ApprovalActionType_APPROVAL_ACTION_TYPE_BLOCK
 	if allow {
 		action = common.ApprovalActionType_APPROVAL_ACTION_TYPE_ALLOW
 	}
 
 	req := &pbProxy.ResolveApprovalRequest{
-		ReqId:    reqID,
-		Action:   action,
-		Duration: duration,
+		ReqId:           reqID,
+		Action:          action,
+		DurationSeconds: durationSeconds,
 	}
 	payload, _ := proto.Marshal(req)
 	result, err := c.SendCommand(ctx, nodeID, pb.CommandType_COMMAND_TYPE_EXECUTE, payload, nodePubKey)

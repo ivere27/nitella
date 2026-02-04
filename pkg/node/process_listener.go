@@ -2,12 +2,9 @@ package node
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"fmt"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -17,8 +14,8 @@ import (
 	process_pb "github.com/ivere27/nitella/pkg/api/process"
 	pb "github.com/ivere27/nitella/pkg/api/proxy"
 	"github.com/ivere27/nitella/pkg/log"
+	"github.com/ivere27/synurang/pkg/synurang"
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -45,10 +42,9 @@ type ProcessListener struct {
 	mu      sync.Mutex
 	running bool
 
-	// IPC via Unix socket
+	// IPC
 	conn   *grpc.ClientConn
 	client process_pb.ProcessControlClient
-	socket string
 
 	// Subscription management (sync.Map eliminates lock ordering concerns)
 	subs sync.Map // map[chan *pb.ConnectionEvent]context.CancelFunc
@@ -84,25 +80,19 @@ func (p *ProcessListener) Start() error {
 		return fmt.Errorf("already running")
 	}
 
-	// Get executable path (no env override - security risk)
-	exe, err := os.Executable()
-	if err != nil {
-		return fmt.Errorf("failed to get executable path: %w", err)
+	// 1. Determine executable path
+	exe := os.Getenv("NITELLA_CHILD_BINARY")
+	if exe == "" {
+		var err error
+		exe, err = os.Executable()
+		if err != nil {
+			return fmt.Errorf("failed to get executable path: %w", err)
+		}
 	}
 
-	// Generate unpredictable socket path (random suffix prevents symlink attacks)
-	randomBytes := make([]byte, 16)
-	if _, err := rand.Read(randomBytes); err != nil {
-		return fmt.Errorf("failed to generate random socket name: %w", err)
-	}
-	p.socket = filepath.Join(os.TempDir(), fmt.Sprintf("nitella_%s.sock", hex.EncodeToString(randomBytes)))
-	// Cleanup old socket (unlikely to exist with random name, but just in case)
-	os.Remove(p.socket)
-
-	// Build child arguments
+	// 2. Build arguments
 	args := []string{
 		"child",
-		"--socket", p.socket,
 		"--listen", p.ListenAddr,
 		"--id", p.ID,
 		"--name", p.Name,
@@ -112,65 +102,32 @@ func (p *ProcessListener) Start() error {
 	}
 
 	cmd := exec.Command(exe, args...)
-
-	// Redirect stdout/stderr to parent
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 
-	if err := cmd.Start(); err != nil {
+	// Set Pdeathsig to ensure child dies if parent dies (Linux only)
+	setSysProcAttr(cmd)
+
+	// 3. Start process via synurang (handles IPC setup)
+	// We use a background context for the connection, but we could use one tied to lifecycle
+	conn, err := synurang.StartProcess(context.Background(), cmd)
+	if err != nil {
 		return fmt.Errorf("failed to start child process: %w", err)
 	}
 
 	p.cmd = cmd
+	p.conn = conn
+	p.client = process_pb.NewProcessControlClient(conn)
 	p.running = true
 	p.startTime = time.Now()
 
-	// Monitor process exit
-	go func() {
-		err := cmd.Wait()
-		log.Printf("[ProcessListener] %s exited: %v", p.ID, err)
-		p.mu.Lock()
-		p.running = false
-		if p.conn != nil {
-			p.conn.Close()
-		}
-		p.conn = nil
-		p.client = nil
-		p.mu.Unlock()
-		// Cleanup socket
-		os.Remove(p.socket)
-	}()
+	// Monitor exit
+	go p.monitorExit()
 
-	// Wait for socket to appear (max 5s)
-	socketReady := false
-	for i := 0; i < 50; i++ {
-		if _, err := os.Stat(p.socket); err == nil {
-			socketReady = true
-			break
-		}
-		time.Sleep(100 * time.Millisecond)
-	}
-	if !socketReady {
-		p.Stop()
-		return fmt.Errorf("child process socket did not appear within timeout")
-	}
-
-	// Secure the socket (owner-only access)
-	if err := os.Chmod(p.socket, 0600); err != nil {
-		log.Printf("[ProcessListener] Failed to chmod socket: %v", err)
-	}
-
-	// Connect gRPC
-	conn, err := grpc.NewClient("unix:"+p.socket, grpc.WithTransportCredentials(insecure.NewCredentials()))
-	if err != nil {
-		p.Stop()
-		return fmt.Errorf("failed to connect to child process: %w", err)
-	}
-
-	p.conn = conn
-	p.client = process_pb.NewProcessControlClient(conn)
-
-	// Initialize the listener in the child process
+	// 4. Initialize the listener in the child process
+	// We might need a small delay or retry if the server isn't instantly ready?
+	// synurang returns when the connection is established (on Windows it waits, on Unix it's pre-connected).
+	// However, the gRPC server inside the child needs to actually Start serving.
 	_, err = p.client.StartListener(context.Background(), &process_pb.StartListenerRequest{
 		Id:             p.ID,
 		Name:           p.Name,
@@ -476,8 +433,26 @@ func (p *ProcessListener) SetFallback(action common.FallbackAction, mock common.
 	p.FallbackMock = mock
 }
 
+// monitorExit waits for the process to exit and cleans up resources.
+func (p *ProcessListener) monitorExit() {
+	if p.cmd == nil {
+		return
+	}
+	err := p.cmd.Wait()
+	log.Printf("[ProcessListener] %s exited: %v", p.ID, err)
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.running = false
+	if p.conn != nil {
+		p.conn.Close()
+	}
+	p.conn = nil
+	p.client = nil
+}
+
 // getRSS reads RSS (Resident Set Size) from /proc for a PID.
 func getRSS(pid int) int64 {
+	// This is Linux specific, but safe to fail on other OS
 	data, err := os.ReadFile(fmt.Sprintf("/proc/%d/stat", pid))
 	if err != nil {
 		return 0
@@ -530,3 +505,6 @@ func (m *ConnectionMetadata) ToActiveConnection() *pb.ActiveConnection {
 		BytesOut:   bytesOut,
 	}
 }
+
+// Note: setSysProcAttr is defined in platform-specific files.
+// See process_attr_unix.go and process_attr_windows.go

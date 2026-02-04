@@ -39,6 +39,11 @@ type Store interface {
 	DeleteRegistrationRequest(code string) error
 	// ApproveRegistration atomically approves a pending registration (optimistic locking)
 	ApproveRegistration(code, certPEM, caPEM, routingToken string) (*model.RegistrationRequest, error)
+	// ApproveNodeAtomic atomically approves registration, saves node, and saves routing token info.
+	// All three operations succeed together or none do (prevents billing bypass on partial failure).
+	ApproveNodeAtomic(code, certPEM, caPEM, routingToken string, node *model.Node, info *model.RoutingTokenInfo) (*model.RegistrationRequest, error)
+	// GetApprovedCLICAs returns all unique CLI CA PEMs from approved registrations
+	GetApprovedCLICAs() ([]string, error)
 
 	// Nodes (Zero-Trust: no owner lookups)
 	SaveNode(node *model.Node) error
@@ -266,6 +271,85 @@ func (s *XORMStore) ApproveRegistration(code, certPEM, caPEM, routingToken strin
 	}
 
 	return req, nil
+}
+
+// ApproveNodeAtomic atomically approves registration, saves node, and saves routing token info.
+// All three operations succeed together or none do (prevents billing bypass on partial failure).
+func (s *XORMStore) ApproveNodeAtomic(code, certPEM, caPEM, routingToken string, node *model.Node, info *model.RoutingTokenInfo) (*model.RegistrationRequest, error) {
+	session := s.engine.NewSession()
+	defer session.Close()
+
+	if err := session.Begin(); err != nil {
+		return nil, err
+	}
+
+	// Step 1: Approve registration
+	req := &model.RegistrationRequest{Code: code}
+	has, err := session.Get(req)
+	if err != nil {
+		return nil, err
+	}
+	if !has {
+		return nil, errors.New("registration not found")
+	}
+	if req.Status == "APPROVED" {
+		return nil, errors.New("registration already approved")
+	}
+	if req.Status == "REJECTED" {
+		return nil, errors.New("registration was rejected")
+	}
+
+	req.Status = "APPROVED"
+	req.CertPEM = certPEM
+	req.CaPEM = caPEM
+	req.RoutingToken = routingToken
+
+	affected, err := session.ID(code).Update(req)
+	if err != nil {
+		return nil, err
+	}
+	if affected == 0 {
+		return nil, errors.New("registration was modified by another request")
+	}
+
+	// Step 2: Save node
+	if _, err := session.Insert(node); err != nil {
+		return nil, fmt.Errorf("failed to save node: %w", err)
+	}
+
+	// Step 3: Save routing token info
+	if info != nil {
+		if _, err := session.Insert(info); err != nil {
+			return nil, fmt.Errorf("failed to save routing token info: %w", err)
+		}
+	}
+
+	if err := session.Commit(); err != nil {
+		return nil, err
+	}
+
+	return req, nil
+}
+
+// GetApprovedCLICAs returns all unique CLI CA PEMs from approved registrations
+func (s *XORMStore) GetApprovedCLICAs() ([]string, error) {
+	var reqs []model.RegistrationRequest
+	// Use struct field conditions for XORM compatibility
+	err := s.engine.Where("status = ?", "APPROVED").Find(&reqs)
+	if err != nil {
+		return nil, err
+	}
+
+	// Deduplicate CA PEMs
+	seen := make(map[string]bool)
+	var cas []string
+	for _, req := range reqs {
+		if req.CaPEM != "" && !seen[req.CaPEM] {
+			seen[req.CaPEM] = true
+			cas = append(cas, req.CaPEM)
+		}
+	}
+	return cas, nil
 }
 
 // Node methods

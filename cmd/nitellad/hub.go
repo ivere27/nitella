@@ -13,14 +13,16 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"net"
 	"os"
 	"path/filepath"
 	"sync"
 	"time"
 
+	"github.com/ivere27/nitella/pkg/api/common"
 	hubpb "github.com/ivere27/nitella/pkg/api/hub"
 	pb "github.com/ivere27/nitella/pkg/api/proxy"
+	"github.com/ivere27/nitella/pkg/cli"
+	"github.com/ivere27/nitella/pkg/config"
 	"github.com/ivere27/nitella/pkg/hubclient"
 	"github.com/ivere27/nitella/pkg/log"
 	"github.com/ivere27/nitella/pkg/node"
@@ -177,24 +179,19 @@ func initHub(pm *node.ProxyManager) (bool, error) {
 	}
 
 	// Load Hub CA - mTLS requires proper certificate verification
+	var hubCACert []byte
 	if *hubCAPEM != "" {
 		caPEM, err := os.ReadFile(*hubCAPEM)
 		if err != nil {
 			return false, fmt.Errorf("failed to read Hub CA certificate: %w", err)
 		}
-		roots := x509.NewCertPool()
-		if !roots.AppendCertsFromPEM(caPEM) {
-			return false, fmt.Errorf("failed to parse Hub CA certificate")
-		}
-		tlsConfig.RootCAs = roots
-	} else {
-		// No explicit Hub CA - try system CAs
-		systemRoots, err := x509.SystemCertPool()
-		if err != nil || systemRoots == nil {
-			return false, fmt.Errorf("hub CA not configured (--hub-ca) and system CA pool unavailable")
-		}
-		tlsConfig.RootCAs = systemRoots
+		hubCACert = caPEM
 	}
+	roots, err := cli.LoadCertPoolFromPEM(hubCACert)
+	if err != nil {
+		return false, fmt.Errorf("hub CA not configured (--hub-ca) and system CA pool unavailable: %w", err)
+	}
+	tlsConfig.RootCAs = roots
 
 	// Create gRPC connection with mTLS
 	conn, err := grpc.Dial(*hubAddr,
@@ -206,6 +203,11 @@ func initHub(pm *node.ProxyManager) (bool, error) {
 
 	// Create Hub client for node operations
 	hubClient = hubclient.NewClientWithConn(conn, nodeDataDir)
+	hubClient.SetHubAddr(*hubAddr) // Set hubAddr explicitly for reconnection
+	// Pass Hub CA for internal reconnections
+	if len(hubCACert) > 0 {
+		hubClient.SetTransportCA(hubCACert)
+	}
 	hubClient.SetUseP2P(*hubP2P)
 	if *hubSTUN != "" {
 		hubClient.SetSTUNServer(*hubSTUN)
@@ -216,6 +218,24 @@ func initHub(pm *node.ProxyManager) (bool, error) {
 
 	// Set metrics provider
 	hubClient.SetMetricsProvider(&proxyMetricsProvider{pm: pm})
+
+	// Create ApprovalManager with HubClient as AlertSender
+	approvalManager := node.NewApprovalManager(hubClient)
+	pm.SetApprovalManager(approvalManager)
+
+	// Set P2P approval decision handler
+	hubClient.SetApprovalDecisionHandler(func(reqID string, allowed bool, durationSeconds int64, reason string) {
+		log.Printf("[P2P] Received approval decision for %s: allowed=%v, duration=%ds, reason=%q",
+			reqID, allowed, durationSeconds, reason)
+		if pm.Approval != nil {
+			meta := pm.Approval.Resolve(reqID, allowed, durationSeconds, reason)
+			if meta != nil {
+				log.Printf("[P2P] Resolved approval for %s from %s", reqID, meta.SourceIP)
+			} else {
+				log.Printf("[P2P] No pending approval found for %s (may have timed out)", reqID)
+			}
+		}
+	})
 
 	// Start Hub connection in background
 	go func() {
@@ -293,24 +313,11 @@ func doPairingPAKE(privateKey ed25519.PrivateKey) error {
 		MinVersion: tls.VersionTLS13,
 	}
 
-	if *hubCAPEM != "" {
-		caPEM, err := os.ReadFile(*hubCAPEM)
-		if err != nil {
-			return fmt.Errorf("failed to read Hub CA certificate: %w", err)
-		}
-		roots := x509.NewCertPool()
-		if !roots.AppendCertsFromPEM(caPEM) {
-			return fmt.Errorf("failed to parse Hub CA certificate")
-		}
-		tlsConfig.RootCAs = roots
-	} else {
-		// No explicit Hub CA - try system CAs
-		systemRoots, err := x509.SystemCertPool()
-		if err != nil || systemRoots == nil {
-			return fmt.Errorf("hub CA required for pairing (--hub-ca) - system CA pool unavailable")
-		}
-		tlsConfig.RootCAs = systemRoots
+	roots, err := cli.LoadCertPool(*hubCAPEM)
+	if err != nil {
+		return fmt.Errorf("hub CA required for pairing (--hub-ca): %w", err)
 	}
+	tlsConfig.RootCAs = roots
 
 	conn, err := grpc.Dial(*hubAddr,
 		grpc.WithTransportCredentials(credentials.NewTLS(tlsConfig)),
@@ -507,11 +514,23 @@ func doPairingOffline(privateKey ed25519.PrivateKey) error {
 func doPairingWeb(csrPEM []byte, nodeName, fingerprint string) error {
 	log.Printf("[Pairing] Starting web UI pairing on %s", *pairPort)
 
+	// check for custom cert
+	var cert *tls.Certificate
+	if *tlsCert != "" && *tlsKey != "" {
+		loadedCert, err := tls.LoadX509KeyPair(*tlsCert, *tlsKey)
+		if err != nil {
+			return fmt.Errorf("failed to load TLS cert: %w", err)
+		}
+		cert = &loadedCert
+		log.Printf("[Pairing] Using provided TLS certificate: %s", *tlsCert)
+	}
+
 	// Create pairing web server
 	server, err := pairing.NewPairingWebServer(pairing.PairingWebConfig{
-		CSR:     csrPEM,
-		NodeID:  nodeName,
-		Timeout: *pairTimeout,
+		CSR:         csrPEM,
+		NodeID:      nodeName,
+		Timeout:     *pairTimeout,
+		Certificate: cert,
 		OnComplete: func(certPEM, caCertPEM []byte) error {
 			// Save certificates
 			certPath := filepath.Join(nodeDataDir, "node.crt")
@@ -745,10 +764,6 @@ func handleHubCommandInternal(pm *node.ProxyManager, cmd string, params json.Raw
 		return addRule(pm, params)
 	case "COMMAND_TYPE_REMOVE_RULE", "remove_rule":
 		return removeRule(pm, params)
-	case "COMMAND_TYPE_BLOCK_IP", "block_ip":
-		return blockIP(pm, params)
-	case "COMMAND_TYPE_ALLOW_IP", "allow_ip":
-		return allowIP(pm, params)
 	case "COMMAND_TYPE_GET_CONNECTIONS", "get_connections":
 		return getConnections(pm, params)
 	case "COMMAND_TYPE_CLOSE_CONNECTION", "close_connection":
@@ -763,6 +778,8 @@ func handleHubCommandInternal(pm *node.ProxyManager, cmd string, params json.Raw
 		return getAppliedProxies(pm, params)
 	case "COMMAND_TYPE_PROXY_UPDATE", "proxy_update":
 		return handleProxyUpdate(pm, params)
+	case "COMMAND_TYPE_RESOLVE_APPROVAL", "resolve_approval":
+		return resolveApproval(pm, params)
 	default:
 		return json.Marshal(map[string]string{"error": "unknown command: " + cmd})
 	}
@@ -826,62 +843,6 @@ func removeRule(pm *node.ProxyManager, params json.RawMessage) ([]byte, error) {
 		return nil, err
 	}
 	return json.Marshal(map[string]string{"status": "ok"})
-}
-
-func blockIP(pm *node.ProxyManager, params json.RawMessage) ([]byte, error) {
-	// TODO: Implement BlockIP in ProxyManager
-	var req struct {
-		IP       string `json:"ip"`
-		Duration int64  `json:"duration_seconds"`
-	}
-	if err := json.Unmarshal(params, &req); err != nil {
-		return nil, err
-	}
-	// Validate IP
-	if req.IP == "" {
-		return nil, errors.New("ip is required")
-	}
-	if net.ParseIP(req.IP) == nil {
-		return nil, fmt.Errorf("invalid ip address: %s", req.IP)
-	}
-	// Validate duration (0 = permanent, max 24 hours)
-	if req.Duration < 0 {
-		return nil, errors.New("duration cannot be negative")
-	}
-	if req.Duration > 86400 {
-		return nil, errors.New("duration cannot exceed 24 hours (86400 seconds)")
-	}
-	// For now, return success but log the action
-	log.Printf("[Hub] BlockIP requested for %s (duration: %ds) - not yet implemented", req.IP, req.Duration)
-	return json.Marshal(map[string]string{"status": "blocked", "ip": req.IP})
-}
-
-func allowIP(pm *node.ProxyManager, params json.RawMessage) ([]byte, error) {
-	// TODO: Implement AllowIP in ProxyManager
-	var req struct {
-		IP       string `json:"ip"`
-		Duration int64  `json:"duration_seconds"`
-	}
-	if err := json.Unmarshal(params, &req); err != nil {
-		return nil, err
-	}
-	// Validate IP
-	if req.IP == "" {
-		return nil, errors.New("ip is required")
-	}
-	if net.ParseIP(req.IP) == nil {
-		return nil, fmt.Errorf("invalid ip address: %s", req.IP)
-	}
-	// Validate duration (0 = permanent, max 24 hours)
-	if req.Duration < 0 {
-		return nil, errors.New("duration cannot be negative")
-	}
-	if req.Duration > 86400 {
-		return nil, errors.New("duration cannot exceed 24 hours (86400 seconds)")
-	}
-	// For now, return success but log the action
-	log.Printf("[Hub] AllowIP requested for %s (duration: %ds) - not yet implemented", req.IP, req.Duration)
-	return json.Marshal(map[string]string{"status": "allowed", "ip": req.IP})
 }
 
 func getConnections(pm *node.ProxyManager, params json.RawMessage) ([]byte, error) {
@@ -1159,4 +1120,45 @@ func loadAppliedProxies() {
 	if err := json.Unmarshal(data, &appliedProxies); err != nil {
 		log.Printf("[Hub] Failed to load applied proxies: %v", err)
 	}
+}
+
+// resolveApproval handles approval decisions from the Hub
+func resolveApproval(pm *node.ProxyManager, params json.RawMessage) ([]byte, error) {
+	var req struct {
+		ReqID           string `json:"req_id"`
+		Action          int32  `json:"action"`
+		DurationSeconds int64  `json:"duration_seconds"`
+		Reason          string `json:"reason"`
+	}
+
+	if err := json.Unmarshal(params, &req); err != nil {
+		return nil, fmt.Errorf("failed to parse resolve approval request: %w", err)
+	}
+
+	if pm.Approval == nil {
+		return nil, fmt.Errorf("approval manager not initialized")
+	}
+
+	allowed := req.Action == int32(common.ApprovalActionType_APPROVAL_ACTION_TYPE_ALLOW)
+	durationSeconds := req.DurationSeconds
+	if durationSeconds <= 0 {
+		durationSeconds = config.DefaultApprovalDurationSeconds
+	}
+
+	log.Printf("[Hub] Resolving approval request %s (action=%d, duration=%ds)",
+		req.ReqID, req.Action, durationSeconds)
+
+	meta := pm.Approval.Resolve(req.ReqID, allowed, durationSeconds, req.Reason)
+	if meta == nil {
+		return nil, fmt.Errorf("no pending approval found for request %s", req.ReqID)
+	}
+
+	log.Printf("[Hub] Approval %s resolved: allowed=%v, duration=%ds, reason=%q, source=%s",
+		req.ReqID, allowed, durationSeconds, req.Reason, meta.SourceIP)
+
+	return json.Marshal(map[string]interface{}{
+		"success":    true,
+		"allowed":    allowed,
+		"duration_s": durationSeconds,
+	})
 }

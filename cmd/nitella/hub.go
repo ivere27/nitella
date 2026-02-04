@@ -16,18 +16,32 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"regexp"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
+	"github.com/ivere27/nitella/pkg/api/common"
 	pb "github.com/ivere27/nitella/pkg/api/hub"
+	"github.com/ivere27/nitella/pkg/cli"
+	"github.com/ivere27/nitella/pkg/config"
+	nitellacrypto "github.com/ivere27/nitella/pkg/crypto"
 	"github.com/ivere27/nitella/pkg/hub/routing"
 	"github.com/ivere27/nitella/pkg/hubclient"
+	"github.com/ivere27/nitella/pkg/identity"
+	"github.com/ivere27/nitella/pkg/p2p"
 	"github.com/ivere27/nitella/pkg/pairing"
+	"github.com/ivere27/nitella/pkg/shell"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
+
+// PendingAlertExpiry is how long to keep pending alerts before cleanup.
+// Must match Hub's PendingAlertExpiry so CLI doesn't expire alerts before Hub does.
+const PendingAlertExpiry = 5 * time.Minute
 
 var (
 	// Hub mode configuration
@@ -41,6 +55,21 @@ var (
 	mobileClient pb.MobileServiceClient
 	nodeClient   pb.NodeServiceClient
 	adminClient  pb.AdminServiceClient
+
+	// Background alert streaming
+	alertStreamCancel  context.CancelFunc
+	alertStreamRunning bool
+	pendingAlerts      = make(map[string]*common.Alert) // ID -> Alert
+	pendingAlertsMu    sync.RWMutex
+
+	// Pending alerts cleanup
+	pendingAlertsCleanupOnce   sync.Once
+	pendingAlertsCleanupCancel context.CancelFunc
+
+	// P2P transport for direct connection to nodes
+	p2pTransport       *p2p.Transport
+	p2pTransportMu     sync.RWMutex
+	p2pTransportCancel context.CancelFunc
 )
 
 // HubConfig stores Hub CLI configuration
@@ -50,6 +79,303 @@ type HubConfig struct {
 	DataDir    string `json:"data_dir"`
 	HubCAPEM   string `json:"hub_ca_pem,omitempty"` // Stored Hub CA for TOFU
 	STUNServer string `json:"stun_server,omitempty"` // STUN server URL for P2P
+}
+
+// startBackgroundAlertStream starts a background goroutine that streams alerts from Hub
+func startBackgroundAlertStream() {
+	if alertStreamRunning {
+		return
+	}
+
+	cfg := loadHubConfig()
+	if err := connectToHub(cfg); err != nil {
+		// Silently fail - user can run 'alerts' manually
+		return
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	alertStreamCancel = cancel
+	alertStreamRunning = true
+
+	// Start cleanup goroutine for stale alerts
+	startPendingAlertsCleanup()
+
+	go func() {
+		defer func() {
+			alertStreamRunning = false
+			alertStreamCancel = nil
+		}()
+
+		stream, err := mobileClient.StreamAlerts(ctx, &pb.StreamAlertsRequest{})
+		if err != nil {
+			return
+		}
+
+		for {
+			alert, err := stream.Recv()
+			if err != nil {
+				if ctx.Err() != nil {
+					return // Context cancelled, clean exit
+				}
+				// Try to reconnect after a delay
+				time.Sleep(5 * time.Second)
+				stream, err = mobileClient.StreamAlerts(ctx, &pb.StreamAlertsRequest{})
+				if err != nil {
+					return
+				}
+				continue
+			}
+
+			// Store pending alert for later approval
+			pendingAlertsMu.Lock()
+			pendingAlerts[alert.Id] = alert
+			pendingAlertsMu.Unlock()
+
+			// Display alert notification
+			displayAlertNotification(alert)
+		}
+	}()
+}
+
+// stopBackgroundAlertStream stops the background alert streaming
+func stopBackgroundAlertStream() {
+	if alertStreamCancel != nil {
+		alertStreamCancel()
+	}
+}
+
+// stopP2PTransport stops the P2P transport and closes all connections
+func stopP2PTransport() {
+	p2pTransportMu.Lock()
+	defer p2pTransportMu.Unlock()
+
+	if p2pTransportCancel != nil {
+		p2pTransportCancel()
+		p2pTransportCancel = nil
+	}
+	if p2pTransport != nil {
+		p2pTransport.Close()
+		p2pTransport = nil
+	}
+}
+
+// CleanupHubResources cleans up all Hub mode resources before exit
+func CleanupHubResources() {
+	stopBackgroundAlertStream()
+	stopP2PTransport()
+
+	// Stop pending alerts cleanup
+	if pendingAlertsCleanupCancel != nil {
+		pendingAlertsCleanupCancel()
+	}
+
+	// Close Hub connection
+	if hubConn != nil {
+		hubConn.Close()
+	}
+}
+
+// ansiEscapeRegex matches ANSI escape sequences
+var ansiEscapeRegex = regexp.MustCompile(`\x1b\[[0-9;]*[a-zA-Z]|\x1b\][^\x07]*\x07|\x1b[PX^_][^\x1b]*\x1b\\`)
+
+// sanitizeForTerminal removes ANSI escape sequences and control characters from untrusted input.
+// This prevents "termojacking" attacks where malicious data could manipulate the terminal display.
+// Preserves printable ASCII, UTF-8 characters, newlines, and tabs.
+func sanitizeForTerminal(s string) string {
+	// Remove ANSI escape sequences
+	s = ansiEscapeRegex.ReplaceAllString(s, "")
+
+	// Remove other control characters (keep newline, tab, and printable chars)
+	var result strings.Builder
+	result.Grow(len(s))
+	for _, r := range s {
+		if r == '\n' || r == '\t' || r >= 32 {
+			result.WriteRune(r)
+		}
+	}
+	return result.String()
+}
+
+// AlertInfo contains unified alert display information.
+type AlertInfo struct {
+	ID         string
+	NodeID     string
+	Severity   string
+	Timestamp  time.Time
+	Source     string // "HUB" or "P2P"
+	SourceIP   string
+	DestAddr   string
+	ProxyID    string
+	GeoCountry string
+	GeoCity    string
+	GeoISP     string
+}
+
+// displayAlert shows an alert notification with unified formatting.
+func displayAlert(info AlertInfo) {
+	ts := info.Timestamp.Format("15:04:05")
+	color := "\033[1;33m" // yellow for HUB
+	if info.Source == "P2P" {
+		color = "\033[1;35m" // magenta for P2P
+	}
+
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("%s[%s] %s ALERT: %s\033[0m\n", color, ts, info.Source, sanitizeForTerminal(info.Severity)))
+	sb.WriteString(fmt.Sprintf("  ID:     %s\n", sanitizeForTerminal(info.ID)))
+	sb.WriteString(fmt.Sprintf("  Node:   %s\n", sanitizeForTerminal(info.NodeID)))
+	sb.WriteString(fmt.Sprintf("  Type:   \033[1;36mCONNECTION APPROVAL REQUEST (%s)\033[0m\n", info.Source))
+
+	if info.SourceIP != "" {
+		sb.WriteString(fmt.Sprintf("  Source: %s\n", sanitizeForTerminal(info.SourceIP)))
+	}
+	if info.DestAddr != "" {
+		sb.WriteString(fmt.Sprintf("  Dest:   %s\n", sanitizeForTerminal(info.DestAddr)))
+	}
+	if info.ProxyID != "" {
+		sb.WriteString(fmt.Sprintf("  Proxy:  %s\n", sanitizeForTerminal(info.ProxyID)))
+	}
+	if info.GeoCountry != "" {
+		geo := "  Geo:    " + sanitizeForTerminal(info.GeoCountry)
+		if info.GeoCity != "" {
+			geo += ", " + sanitizeForTerminal(info.GeoCity)
+		}
+		sb.WriteString(geo + "\n")
+	}
+	if info.GeoISP != "" {
+		sb.WriteString(fmt.Sprintf("  ISP:    %s\n", sanitizeForTerminal(info.GeoISP)))
+	}
+
+	safeID := sanitizeForTerminal(info.ID)
+	sb.WriteString(fmt.Sprintf("  \033[1;32m→ approve %s [duration]\033[0m  or  \033[1;31m→ deny %s\033[0m", safeID, safeID))
+
+	shell.NotifyActive(sb.String())
+}
+
+// displayAlertNotification shows an alert in the terminal
+func displayAlertNotification(alert *common.Alert) {
+	info := AlertInfo{
+		ID:        alert.Id,
+		NodeID:    alert.NodeId,
+		Severity:  alert.Severity,
+		Timestamp: time.Unix(alert.TimestampUnix, 0),
+		Source:    "HUB",
+	}
+
+	// Try to decrypt the encrypted payload if present
+	if alert.Encrypted != nil && cliIdentity != nil && cliIdentity.RootKey != nil {
+		envelope := &nitellacrypto.EncryptedPayload{
+			EphemeralPubKey: alert.Encrypted.EphemeralPubkey,
+			Nonce:           alert.Encrypted.Nonce,
+			Ciphertext:      alert.Encrypted.Ciphertext,
+		}
+		if decrypted, err := nitellacrypto.Decrypt(envelope, cliIdentity.RootKey); err == nil {
+			var details map[string]interface{}
+			if json.Unmarshal(decrypted, &details) == nil {
+				if v, ok := details["source_ip"].(string); ok {
+					info.SourceIP = v
+				}
+				if v, ok := details["destination"].(string); ok {
+					info.DestAddr = v
+				}
+				if v, ok := details["proxy_id"].(string); ok {
+					info.ProxyID = v
+				}
+				if v, ok := details["geo_country"].(string); ok {
+					info.GeoCountry = v
+				}
+				if v, ok := details["geo_city"].(string); ok {
+					info.GeoCity = v
+				}
+				if v, ok := details["geo_isp"].(string); ok {
+					info.GeoISP = v
+				}
+			}
+		}
+	}
+
+	// Fallback to unencrypted metadata
+	if alert.Metadata != nil {
+		if info.SourceIP == "" {
+			if v, ok := alert.Metadata["source_ip"]; ok {
+				info.SourceIP = v
+			}
+		}
+		if info.DestAddr == "" {
+			if v, ok := alert.Metadata["destination"]; ok {
+				info.DestAddr = v
+			}
+		}
+		if info.GeoCountry == "" {
+			if v, ok := alert.Metadata["geo_country"]; ok {
+				info.GeoCountry = v
+			}
+		}
+	}
+
+	displayAlert(info)
+}
+
+// getPendingAlert retrieves a pending alert by ID
+func getPendingAlert(id string) *common.Alert {
+	pendingAlertsMu.RLock()
+	defer pendingAlertsMu.RUnlock()
+	return pendingAlerts[id]
+}
+
+// removePendingAlert removes a pending alert after it's been handled
+func removePendingAlert(id string) {
+	pendingAlertsMu.Lock()
+	defer pendingAlertsMu.Unlock()
+	delete(pendingAlerts, id)
+}
+
+// listPendingAlerts returns all pending alerts
+func listPendingAlerts() []*common.Alert {
+	pendingAlertsMu.RLock()
+	defer pendingAlertsMu.RUnlock()
+	alerts := make([]*common.Alert, 0, len(pendingAlerts))
+	for _, a := range pendingAlerts {
+		alerts = append(alerts, a)
+	}
+	return alerts
+}
+
+// startPendingAlertsCleanup starts a background goroutine to clean up stale alerts
+// Alerts older than PendingAlertExpiry are removed (matches Hub's expiry time)
+func startPendingAlertsCleanup() {
+	pendingAlertsCleanupOnce.Do(func() {
+		ctx, cancel := context.WithCancel(context.Background())
+		pendingAlertsCleanupCancel = cancel
+
+		go func() {
+			ticker := time.NewTicker(30 * time.Second)
+			defer ticker.Stop()
+
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-ticker.C:
+					cleanupStaleAlerts()
+				}
+			}
+		}()
+	})
+}
+
+// cleanupStaleAlerts removes alerts older than PendingAlertExpiry
+func cleanupStaleAlerts() {
+	pendingAlertsMu.Lock()
+	defer pendingAlertsMu.Unlock()
+
+	// Calculate threshold inside lock to avoid race condition
+	staleThreshold := time.Now().Add(-PendingAlertExpiry).Unix()
+
+	for id, alert := range pendingAlerts {
+		if alert.TimestampUnix < staleThreshold {
+			delete(pendingAlerts, id)
+		}
+	}
 }
 
 // loadHubConfig loads Hub configuration from file
@@ -134,20 +460,11 @@ func connectToHub(cfg *HubConfig) error {
 	}
 
 	// Load Hub CA - mTLS requires proper certificate verification
-	if cfg.HubCAPEM != "" {
-		rootCAs := x509.NewCertPool()
-		if ok := rootCAs.AppendCertsFromPEM([]byte(cfg.HubCAPEM)); ok {
-			tlsConfig.RootCAs = rootCAs
-		}
-	} else {
-		// No Hub CA configured - try system CAs, fail if Hub uses self-signed
-		// mTLS requires proper certificate chain verification
-		systemRoots, err := x509.SystemCertPool()
-		if err != nil || systemRoots == nil {
-			return fmt.Errorf("hub CA not configured and system CA pool unavailable - configure hub_ca_pem or use 'register' to obtain Hub CA")
-		}
-		tlsConfig.RootCAs = systemRoots
+	rootCAs, err := cli.LoadCertPoolFromPEM([]byte(cfg.HubCAPEM))
+	if err != nil {
+		return fmt.Errorf("hub CA not configured and system CA pool unavailable - configure hub_ca_pem or use 'register' to obtain Hub CA: %w", err)
 	}
+	tlsConfig.RootCAs = rootCAs
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -164,7 +481,237 @@ func connectToHub(cfg *HubConfig) error {
 	nodeClient = pb.NewNodeServiceClient(conn)
 	adminClient = pb.NewAdminServiceClient(conn)
 
+	// Start P2P transport if not already running
+	startP2PTransport(cfg)
+
 	return nil
+}
+
+// ensureHubConnected loads config and connects to Hub.
+// Returns the config on success, or nil after printing an error.
+func ensureHubConnected() *HubConfig {
+	cfg := loadHubConfig()
+	if err := connectToHub(cfg); err != nil {
+		fmt.Printf("Error connecting to Hub: %v\n", err)
+		return nil
+	}
+	return cfg
+}
+
+// startP2PTransport initializes the P2P transport for direct connections to nodes
+func startP2PTransport(cfg *HubConfig) {
+	p2pTransportMu.Lock()
+	defer p2pTransportMu.Unlock()
+
+	// Already running?
+	if p2pTransport != nil {
+		return
+	}
+
+	// Need identity for P2P authentication
+	if cliIdentity == nil || cliIdentity.RootKey == nil {
+		return
+	}
+
+	// Create P2P transport - use fingerprint as user ID
+	userID := ""
+	if cliIdentity != nil {
+		userID = cliIdentity.Fingerprint
+	}
+	transport := p2p.NewTransport(userID, mobileClient)
+
+	// Set identity for authentication
+	transport.SetIdentity(cliIdentity.RootKey)
+	if cfg.STUNServer != "" {
+		transport.SetSTUNServer(cfg.STUNServer)
+	}
+
+	// Set handler for incoming P2P approval requests
+	transport.SetApprovalRequestHandler(func(nodeID string, req *p2p.ApprovalRequest) {
+		handleP2PApprovalRequest(nodeID, req)
+	})
+
+	// Start signaling in background
+	ctx, cancel := context.WithCancel(context.Background())
+	p2pTransportCancel = cancel
+	p2pTransport = transport
+
+	go func() {
+		if err := transport.StartSignaling(ctx); err != nil {
+			// Signaling failed - clear transport
+			p2pTransportMu.Lock()
+			if p2pTransport == transport {
+				p2pTransport = nil
+				p2pTransportCancel = nil
+			}
+			p2pTransportMu.Unlock()
+		}
+	}()
+}
+
+// handleP2PApprovalRequest processes an incoming approval request via P2P
+func handleP2PApprovalRequest(nodeID string, req *p2p.ApprovalRequest) {
+	// Store as pending alert
+	alert := &common.Alert{
+		Id:            req.RequestID,
+		NodeId:        req.NodeID,
+		Severity:      req.Severity,
+		TimestampUnix: time.Now().Unix(),
+		Metadata: map[string]string{
+			"source_ip":   req.SourceIP,
+			"destination": req.DestAddr,
+			"proxy_id":    req.ProxyID,
+			"rule_id":     req.RuleID,
+			"geo_country": req.GeoCountry,
+			"geo_city":    req.GeoCity,
+			"geo_isp":     req.GeoISP,
+			"via_p2p":     "true",
+		},
+	}
+
+	pendingAlertsMu.Lock()
+	pendingAlerts[alert.Id] = alert
+	pendingAlertsMu.Unlock()
+
+	// Display alert notification with P2P indicator
+	displayP2PAlertNotification(req)
+}
+
+// displayP2PAlertNotification shows a P2P approval request in the terminal
+func displayP2PAlertNotification(req *p2p.ApprovalRequest) {
+	displayAlert(AlertInfo{
+		ID:         req.RequestID,
+		NodeID:     req.NodeID,
+		Severity:   req.Severity,
+		Timestamp:  time.Now(),
+		Source:     "P2P",
+		SourceIP:   req.SourceIP,
+		DestAddr:   req.DestAddr,
+		ProxyID:    req.ProxyID,
+		GeoCountry: req.GeoCountry,
+		GeoCity:    req.GeoCity,
+		GeoISP:     req.GeoISP,
+	})
+}
+
+// tryP2PApproval attempts to send approval decision via P2P
+// Returns true if sent via P2P, false if should fall back to Hub
+func tryP2PApproval(requestID string, allowed bool, durationSeconds int64, reason string) bool {
+	p2pTransportMu.RLock()
+	transport := p2pTransport
+	p2pTransportMu.RUnlock()
+
+	if transport == nil {
+		return false
+	}
+
+	// Find the node for this request
+	pendingAlertsMu.RLock()
+	alert, ok := pendingAlerts[requestID]
+	pendingAlertsMu.RUnlock()
+
+	if !ok || alert == nil {
+		return false
+	}
+
+	// Check if this was a P2P request
+	if alert.Metadata == nil || alert.Metadata["via_p2p"] != "true" {
+		return false
+	}
+
+	nodeID := alert.NodeId
+	if !transport.IsConnected(nodeID) {
+		return false
+	}
+
+	// Send decision via P2P
+	action := int32(2) // block
+	if allowed {
+		action = 1 // allow
+	}
+
+	decision := &p2p.ApprovalDecision{
+		RequestID:       requestID,
+		Action:          action,
+		DurationSeconds: durationSeconds,
+		Reason:          reason,
+	}
+
+	if err := transport.SendApprovalDecision(nodeID, decision); err != nil {
+		return false
+	}
+
+	return true
+}
+
+// sendE2EApprovalViaHub sends an E2E encrypted approval decision via Hub
+// The Hub cannot see the decision - it's encrypted with the node's public key
+func sendE2EApprovalViaHub(ctx context.Context, cfg *HubConfig, nodeID, requestID string, allowed bool, durationSeconds int64, reason string) error {
+	// Load node's public key from stored certificate
+	nodePubKey, err := identity.LoadNodePublicKey(dataDir, nodeID)
+	if err != nil {
+		return fmt.Errorf("failed to load node public key (node may not be paired): %w", err)
+	}
+
+	// Create the resolve approval payload
+	action := common.ApprovalActionType_APPROVAL_ACTION_TYPE_ALLOW
+	if !allowed {
+		action = common.ApprovalActionType_APPROVAL_ACTION_TYPE_BLOCK
+	}
+
+	// Create inner command payload (this is what gets encrypted)
+	// Uses duration_seconds for arbitrary duration support (not enum)
+	innerPayload := &pb.EncryptedCommandPayload{
+		Type: pb.CommandType_COMMAND_TYPE_RESOLVE_APPROVAL,
+		Payload: mustMarshalJSON(map[string]interface{}{
+			"req_id":           requestID,
+			"action":           int32(action),
+			"duration_seconds": durationSeconds,
+			"reason":           reason,
+		}),
+	}
+
+	innerBytes, err := proto.Marshal(innerPayload)
+	if err != nil {
+		return fmt.Errorf("failed to marshal inner payload: %w", err)
+	}
+
+	// Encrypt with node's public key (E2E - Hub cannot decrypt)
+	encrypted, err := nitellacrypto.Encrypt(innerBytes, nodePubKey)
+	if err != nil {
+		return fmt.Errorf("failed to encrypt payload: %w", err)
+	}
+
+	// Convert to protobuf EncryptedPayload
+	pbEncrypted := &common.EncryptedPayload{
+		EphemeralPubkey: encrypted.EphemeralPubKey,
+		Nonce:           encrypted.Nonce,
+		Ciphertext:      encrypted.Ciphertext,
+	}
+
+	// Generate routing token for this node
+	routingToken := routing.GenerateRoutingToken(nodeID, cliIdentity.RootKey)
+
+	// Send via Hub (Hub just forwards the encrypted blob)
+	_, err = mobileClient.SendCommand(ctx, &pb.CommandRequest{
+		NodeId:       nodeID,
+		RoutingToken: routingToken,
+		Encrypted:    pbEncrypted,
+	})
+	if err != nil {
+		return fmt.Errorf("failed to send command via Hub: %w", err)
+	}
+
+	return nil
+}
+
+// mustMarshalJSON marshals to JSON, panics on error (for static data)
+func mustMarshalJSON(v interface{}) []byte {
+	b, err := json.Marshal(v)
+	if err != nil {
+		panic(err)
+	}
+	return b
 }
 
 // handleHubCommand handles hub-specific commands
@@ -196,8 +743,8 @@ func handleHubCommand(args []string) {
 		cmdHubNode(args[1:])
 	case "alerts":
 		cmdHubAlerts(args[1:])
-	case "approvals":
-		cmdHubApprovals(args[1:])
+	case "approvals", "pending":
+		cmdHubPending(args[1:])
 	case "approve":
 		cmdHubApprove(args[1:])
 	case "deny":
@@ -452,10 +999,8 @@ func generateCSR(privateKey ed25519.PrivateKey, commonName string) ([]byte, erro
 }
 
 func cmdHubStatus() {
-	cfg := loadHubConfig()
-
-	if err := connectToHub(cfg); err != nil {
-		fmt.Printf("Error: %v\n", err)
+	cfg := ensureHubConnected()
+	if cfg == nil {
 		return
 	}
 
@@ -483,12 +1028,11 @@ func cmdHubStatus() {
 }
 
 func cmdHubNodes(args []string) {
-	cfg := loadHubConfig()
-
-	if err := connectToHub(cfg); err != nil {
-		fmt.Printf("Error: %v\n", err)
+	cfg := ensureHubConnected()
+	if cfg == nil {
 		return
 	}
+	_ = cfg // cfg used for potential future P2P operations
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -504,17 +1048,21 @@ func cmdHubNodes(args []string) {
 		return
 	}
 
-	fmt.Printf("\n%-36s  %-12s  %s\n", "NODE ID", "STATUS", "LAST SEEN")
-	fmt.Println(strings.Repeat("-", 70))
+	tbl := cli.NewTable(
+		cli.Column{Header: "NODE ID", Width: 36},
+		cli.Column{Header: "STATUS", Width: 12},
+		cli.Column{Header: "LAST SEEN", Width: 16},
+	)
+	tbl.PrintHeader()
 	for _, n := range resp.Nodes {
 		status := n.Status.String()
 		lastSeen := "never"
 		if n.LastSeen != nil {
 			lastSeen = n.LastSeen.AsTime().Format("2006-01-02 15:04")
 		}
-		fmt.Printf("%-36s  %-12s  %s\n", n.Id, status, lastSeen)
+		tbl.PrintRow(n.Id, status, lastSeen)
 	}
-	fmt.Println()
+	tbl.PrintFooter()
 }
 
 func cmdHubNode(args []string) {
@@ -523,10 +1071,8 @@ func cmdHubNode(args []string) {
 		return
 	}
 
-	cfg := loadHubConfig()
-
-	if err := connectToHub(cfg); err != nil {
-		fmt.Printf("Error: %v\n", err)
+	cfg := ensureHubConnected()
+	if cfg == nil {
 		return
 	}
 
@@ -687,18 +1233,41 @@ func cmdHubNode(args []string) {
 	}
 }
 
-func cmdHubApprovals(args []string) {
-	fmt.Println("Approvals are received via 'alerts' command in real-time.")
-	fmt.Println("Use 'approve <request_id>' or 'deny <request_id>' to respond to alerts.")
-	fmt.Println()
-	fmt.Println("Run 'alerts' to start streaming approval requests.")
+func cmdHubPending(args []string) {
+	alerts := listPendingAlerts()
+	if len(alerts) == 0 {
+		fmt.Println("No pending approval requests.")
+		if !alertStreamRunning {
+			fmt.Println("Tip: Alert streaming is not running. Run 'alerts' to start streaming.")
+		}
+		return
+	}
+
+	fmt.Printf("\nPending Approval Requests (%d):\n", len(alerts))
+	fmt.Println(strings.Repeat("-", 80))
+	for _, alert := range alerts {
+		ts := time.Unix(alert.TimestampUnix, 0).Format("2006-01-02 15:04:05")
+		fmt.Printf("ID: %s\n", alert.Id)
+		fmt.Printf("  Node:   %s\n", alert.NodeId)
+		fmt.Printf("  Time:   %s\n", ts)
+		if alert.Metadata != nil {
+			if sourceIP, ok := alert.Metadata["source_ip"]; ok {
+				fmt.Printf("  Source: %s\n", sourceIP)
+			}
+			if dest, ok := alert.Metadata["destination"]; ok {
+				fmt.Printf("  Dest:   %s\n", dest)
+			}
+			if country, ok := alert.Metadata["geo_country"]; ok {
+				fmt.Printf("  Geo:    %s\n", country)
+			}
+		}
+		fmt.Println()
+	}
+	fmt.Println("Use 'approve <id> [duration]' or 'deny <id>' to respond.")
 }
 
 func cmdHubAlerts(args []string) {
-	cfg := loadHubConfig()
-
-	if err := connectToHub(cfg); err != nil {
-		fmt.Printf("Error: %v\n", err)
+	if ensureHubConnected() == nil {
 		return
 	}
 
@@ -766,74 +1335,101 @@ func cmdHubAlerts(args []string) {
 	}
 }
 
-func cmdHubApprove(args []string) {
-	if len(args) < 1 {
-		fmt.Println("Usage: approve <request_id> [duration_seconds]")
+// executeApprovalDecision handles both approve and deny actions.
+func executeApprovalDecision(requestID string, allowed bool, duration int64, reason string) {
+	cfg := ensureHubConnected()
+	if cfg == nil {
 		return
 	}
 
-	cfg := loadHubConfig()
-
-	if err := connectToHub(cfg); err != nil {
-		fmt.Printf("Error: %v\n", err)
+	// Get node ID from pending alert
+	alert := getPendingAlert(requestID)
+	if alert == nil {
+		fmt.Printf("Error: No pending alert found for request %s\n", requestID)
 		return
 	}
+	nodeID := alert.NodeId
 
-	requestID := args[0]
-	duration := int64(300) // Default 5 minutes
-	if len(args) > 1 {
-		if d, err := fmt.Sscanf(args[1], "%d", &duration); err != nil || d != 1 {
-			duration = 300
+	// Try P2P first for faster response
+	p2pAttempted := p2pTransport != nil
+	if tryP2PApproval(requestID, allowed, duration, reason) {
+		if allowed {
+			fmt.Printf("Approved request via P2P: %s (duration: %ds)\n", requestID, duration)
+		} else {
+			fmt.Printf("Denied request via P2P: %s\n", requestID)
 		}
+		removePendingAlert(requestID)
+		return
 	}
 
+	// Fall back to Hub with E2E encrypted command
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	_, err := mobileClient.SubmitApprovalDecision(ctx, &pb.SubmitApprovalDecisionRequest{
-		RequestId:       requestID,
-		Allowed:         true,
-		DurationSeconds: duration,
-	})
+	err := sendE2EApprovalViaHub(ctx, cfg, nodeID, requestID, allowed, duration, reason)
 	if err != nil {
-		fmt.Printf("Error: %v\n", err)
+		if p2pAttempted {
+			fmt.Printf("Error: P2P failed, Hub also failed: %v\n", err)
+		} else {
+			fmt.Printf("Error: %v\n", err)
+		}
 		return
 	}
-	fmt.Printf("Approved request: %s (duration: %ds)\n", requestID, duration)
+
+	printApprovalResult(allowed, p2pAttempted, requestID, duration, reason)
+	removePendingAlert(requestID)
+}
+
+// printApprovalResult outputs the result of an approval decision.
+func printApprovalResult(allowed, p2pAttempted bool, requestID string, duration int64, reason string) {
+	action := "Approved"
+	extra := fmt.Sprintf("(duration: %ds)", duration)
+	if !allowed {
+		action = "Denied"
+		extra = fmt.Sprintf("(reason: %s)", reason)
+	}
+
+	if p2pAttempted {
+		fmt.Printf("%s request via Hub (P2P unavailable): %s %s [E2E encrypted]\n", action, requestID, extra)
+	} else {
+		fmt.Printf("%s request via Hub: %s %s [E2E encrypted]\n", action, requestID, extra)
+	}
+}
+
+func cmdHubApprove(args []string) {
+	if !cli.RequireArgs(args, 1, "Usage: approve <request_id> [duration_seconds]") {
+		return
+	}
+	duration := int64(config.DefaultApprovalDurationSeconds)
+	if len(args) > 1 {
+		d, err := cli.ParseDuration(args[1], duration)
+		if err != nil {
+			fmt.Printf("Error: %v\n", err)
+			return
+		}
+		duration = d
+	}
+	executeApprovalDecision(args[0], true, duration, "")
 }
 
 func cmdHubDeny(args []string) {
-	if len(args) < 1 {
-		fmt.Println("Usage: deny <request_id> [reason]")
+	if !cli.RequireArgs(args, 1, "Usage: deny <request_id> [reason]") {
 		return
 	}
-
-	cfg := loadHubConfig()
-
-	if err := connectToHub(cfg); err != nil {
-		fmt.Printf("Error: %v\n", err)
-		return
-	}
-
-	requestID := args[0]
 	reason := "Denied via CLI"
 	if len(args) > 1 {
 		reason = strings.Join(args[1:], " ")
 	}
+	executeApprovalDecision(args[0], false, 0, reason)
+}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-
-	_, err := mobileClient.SubmitApprovalDecision(ctx, &pb.SubmitApprovalDecisionRequest{
-		RequestId: requestID,
-		Allowed:   false,
-		Reason:    reason,
-	})
-	if err != nil {
-		fmt.Printf("Error: %v\n", err)
-		return
+// saveNodeCertWithLog saves a node certificate and logs the result.
+func saveNodeCertWithLog(nodeID string, certPEM []byte) {
+	if err := identity.SaveNodeCert(dataDir, nodeID, certPEM); err != nil {
+		fmt.Printf("Warning: Failed to save node certificate locally: %v\n", err)
+	} else {
+		fmt.Printf("Saved node certificate: %s/nodes/%s.crt\n", dataDir, nodeID)
 	}
-	fmt.Printf("Denied request: %s (reason: %s)\n", requestID, reason)
 }
 
 func cmdHubSend(args []string) {
@@ -849,10 +1445,8 @@ func cmdHubSend(args []string) {
 		return
 	}
 
-	cfg := loadHubConfig()
-
-	if err := connectToHub(cfg); err != nil {
-		fmt.Printf("Error: %v\n", err)
+	cfg := ensureHubConnected()
+	if cfg == nil {
 		return
 	}
 
@@ -952,9 +1546,7 @@ func cmdHubLogs(args []string) {
 		return
 	}
 
-	cfg := loadHubConfig()
-	if err := connectToHub(cfg); err != nil {
-		fmt.Printf("Error connecting to Hub: %v\n", err)
+	if ensureHubConnected() == nil {
 		return
 	}
 
@@ -1191,9 +1783,8 @@ func cmdHubPair(args []string) {
 		return
 	}
 
-	cfg := loadHubConfig()
-	if err := connectToHub(cfg); err != nil {
-		fmt.Printf("Error connecting to Hub: %v\n", err)
+	cfg := ensureHubConnected()
+	if cfg == nil {
 		return
 	}
 
@@ -1382,6 +1973,10 @@ func cmdHubPair(args []string) {
 		return
 	}
 
+	// Save node certificate locally for E2E encrypted communication
+	nodeID := csr.Subject.CommonName
+	saveNodeCertWithLog(nodeID, signedCertPEM)
+
 	// Encrypt and send signed certificate
 	encryptedCert, nonce, err := pakeSession.Encrypt(signedCertPEM)
 	if err != nil {
@@ -1422,7 +2017,7 @@ func cmdHubPair(args []string) {
 	}
 
 	// Zero-Trust: Generate and save routing token for this node
-	nodeID := csr.Subject.CommonName
+	// nodeID already set above when saving certificate
 	userSecret, err := getOrCreateUserSecret(cfg)
 	if err != nil {
 		fmt.Printf("Warning: Failed to get user secret for routing token: %v\n", err)
@@ -1514,12 +2109,18 @@ func cmdHubPairOffline(args []string) {
 	fmt.Println("║              CERTIFICATE SIGNING REQUEST                      ║")
 	fmt.Println("╠══════════════════════════════════════════════════════════════╣")
 	fmt.Printf("║  Node ID:          %-40s  ║\n", truncateStr(csr.Subject.CommonName, 40))
-	fmt.Printf("║  Node Fingerprint: %-40s  ║\n", payload.Fingerprint)
-	fmt.Printf("║  Calculated:       %-40s  ║\n", calculatedFP)
+	fmt.Printf("║  Fingerprint:      %-40s  ║\n", calculatedFP)
 
 	if payload.Fingerprint != calculatedFP {
 		fmt.Println("╠══════════════════════════════════════════════════════════════╣")
-		fmt.Println("║  WARNING: Fingerprints don't match! Possible tampering.      ║")
+		fmt.Println("║  ERROR: Fingerprint mismatch - possible tampering!           ║")
+		fmt.Println("║                                                              ║")
+		fmt.Printf("║  Expected: %-49s ║\n", payload.Fingerprint)
+		fmt.Printf("║  Got:      %-49s ║\n", calculatedFP)
+		fmt.Println("║                                                              ║")
+		fmt.Println("║  Refusing to sign. The QR code may have been modified.       ║")
+		fmt.Println("╚══════════════════════════════════════════════════════════════╝")
+		return
 	}
 
 	fmt.Println("╠══════════════════════════════════════════════════════════════╣")
@@ -1541,6 +2142,10 @@ func cmdHubPairOffline(args []string) {
 		fmt.Printf("Error signing CSR: %v\n", err)
 		return
 	}
+
+	// Save node certificate locally for E2E encrypted communication
+	nodeID := csr.Subject.CommonName
+	saveNodeCertWithLog(nodeID, signedCertPEM)
 
 	// Generate QR code with signed cert
 	fmt.Println()

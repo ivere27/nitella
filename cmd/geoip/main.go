@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"flag"
 	"fmt"
 	"os"
@@ -10,7 +12,7 @@ import (
 	pb "github.com/ivere27/nitella/pkg/api/geoip"
 	"github.com/ivere27/nitella/pkg/shell"
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/protobuf/types/known/emptypb"
 )
@@ -18,6 +20,7 @@ import (
 var (
 	adminAddr = flag.String("addr", "localhost:50053", "GeoIP admin server address")
 	token     = flag.String("token", os.Getenv("GEOIP_TOKEN"), "Admin authentication token (env: GEOIP_TOKEN)")
+	tlsCA     = flag.String("tls-ca", os.Getenv("GEOIP_TLS_CA"), "Path to GeoIP server CA certificate (env: GEOIP_TLS_CA)")
 )
 
 // Client holds gRPC client
@@ -36,7 +39,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	client, err := NewClient(*adminAddr, *token)
+	client, err := NewClient(*adminAddr, *token, *tlsCA)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Failed to connect: %v\n", err)
 		os.Exit(1)
@@ -66,9 +69,30 @@ func main() {
 	}, newCompletion())
 }
 
-// NewClient creates a new gRPC client.
-func NewClient(addr, token string) (*Client, error) {
-	opts := []grpc.DialOption{grpc.WithTransportCredentials(insecure.NewCredentials())}
+// NewClient creates a new gRPC client with proper TLS verification.
+func NewClient(addr, token, tlsCAPath string) (*Client, error) {
+	var tlsConfig *tls.Config
+	if tlsCAPath != "" {
+		// Load CA certificate for verification
+		caPEM, err := os.ReadFile(tlsCAPath)
+		if err != nil {
+			return nil, fmt.Errorf("failed to read CA certificate: %w", err)
+		}
+		caPool := x509.NewCertPool()
+		if !caPool.AppendCertsFromPEM(caPEM) {
+			return nil, fmt.Errorf("failed to parse CA certificate")
+		}
+		tlsConfig = &tls.Config{
+			RootCAs:    caPool,
+			MinVersion: tls.VersionTLS13,
+		}
+	} else {
+		// Use system CA pool
+		tlsConfig = &tls.Config{
+			MinVersion: tls.VersionTLS13,
+		}
+	}
+	opts := []grpc.DialOption{grpc.WithTransportCredentials(credentials.NewTLS(tlsConfig))}
 
 	conn, err := grpc.NewClient(addr, opts...)
 	if err != nil {

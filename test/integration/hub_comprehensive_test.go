@@ -23,9 +23,12 @@ import (
 	"crypto/ed25519"
 	"crypto/hmac"
 	"crypto/rand"
+	"crypto/sha1"
 	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
+	"crypto/x509/pkix"
+	"math/big"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
@@ -57,12 +60,13 @@ import (
 
 // testCluster manages all processes for a test
 type testCluster struct {
-	t       *testing.T
-	hub     *hubProcess
-	clis    []*cliProcess
-	nodes   []*nodeProcess
-	dataDir string
-	mu      sync.Mutex
+	t           *testing.T
+	hub         *hubProcess
+	clis        []*cliProcess
+	nodes       []*nodeProcess
+	dataDir     string
+	mu          sync.Mutex
+	lastNodeReg time.Time // Track last node registration for rate limiting
 }
 
 // hubProcess represents a running Hub server
@@ -88,6 +92,7 @@ type cliProcess struct {
 	conn          *grpc.ClientConn
 	authClient    hubpb.AuthServiceClient
 	mobileClient  hubpb.MobileServiceClient
+	hubCAPEM      []byte // CA for reconnecting
 }
 
 // nodeProcess represents a nitellad node
@@ -145,6 +150,11 @@ func (c *testCluster) cleanup() {
 	if c.hub != nil {
 		c.stopHub()
 	}
+
+	// Give gRPC internal goroutines time to clean up
+	// (HTTP/2 transport goroutines need a moment to exit after Close())
+	// Use 500ms to allow proper shutdown of all connection goroutines
+	time.Sleep(500 * time.Millisecond)
 
 	// Remove test data
 	os.RemoveAll(c.dataDir)
@@ -226,7 +236,14 @@ func (c *testCluster) stopHub() {
 func (c *testCluster) forceKillHub() {
 	if c.hub != nil && c.hub.cmd != nil && c.hub.cmd.Process != nil {
 		c.hub.cmd.Process.Kill()
-		c.hub.cmd.Wait()
+		done := make(chan error, 1)
+		go func() { done <- c.hub.cmd.Wait() }()
+		select {
+		case <-done:
+		case <-time.After(3 * time.Second):
+			// Kill already sent, just log and continue
+			c.t.Logf("Hub force kill timed out waiting for process exit")
+		}
 		c.t.Logf("Hub force killed: PID=%d", c.hub.pid)
 	}
 }
@@ -299,7 +316,7 @@ func (c *testCluster) registerCLI(name string) *cliProcess {
 	identity := generateCLIIdentity(c.t)
 
 	// Connect to Hub with mTLS
-	conn := connectToHubWithMTLS(c.t, c.hub.grpcAddr, identity)
+	conn := connectToHubWithMTLS(c.t, c.hub.grpcAddr, c.hub.hubCAPEM, identity)
 
 	// Register user
 	authClient := hubpb.NewAuthServiceClient(conn)
@@ -329,6 +346,7 @@ func (c *testCluster) registerCLI(name string) *cliProcess {
 		conn:          conn,
 		authClient:    authClient,
 		mobileClient:  hubpb.NewMobileServiceClient(conn),
+		hubCAPEM:      c.hub.hubCAPEM,
 	}
 
 	// Save identity to data dir
@@ -351,6 +369,30 @@ func (c *testCluster) registerCLI(name string) *cliProcess {
 
 func (c *testCluster) pairNodeWithPAKE(cli *cliProcess, nodeName string) *nodeProcess {
 	c.t.Helper()
+
+	// Respect Hub's per-IP rate limit: 1 registration per 5 seconds
+	// Use a shorter delay for tests since PAKE handshake adds latency
+	for {
+		c.mu.Lock()
+		if c.lastNodeReg.IsZero() {
+			// First registration, proceed immediately
+			c.lastNodeReg = time.Now()
+			c.mu.Unlock()
+			break
+		}
+		elapsed := time.Since(c.lastNodeReg)
+		if elapsed >= 5*time.Second {
+			// Enough time has passed, proceed
+			c.lastNodeReg = time.Now()
+			c.mu.Unlock()
+			break
+		}
+		// Need to wait - calculate sleep time while holding lock
+		sleepTime := 5*time.Second - elapsed
+		c.mu.Unlock()
+		time.Sleep(sleepTime)
+		// Loop back to re-check (another goroutine may have registered)
+	}
 
 	nodeDataDir := filepath.Join(c.dataDir, "node-"+nodeName)
 	os.MkdirAll(nodeDataDir, 0755)
@@ -406,16 +448,44 @@ func (c *testCluster) pairNodeWithPAKE(cli *cliProcess, nodeName string) *nodePr
 		pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyPEM}), 0600)
 	os.WriteFile(filepath.Join(nodeDataDir, "cli_ca.crt"), cli.identity.rootCertPEM, 0600)
 
-	// Connect to Hub with node cert
-	nodeConn := connectToHubWithNodeCert(c.t, c.hub.grpcAddr, nodePrivKey, finalCert, cli.identity.rootCertPEM)
+	// Connect to Hub with node cert (pass Hub CA for server verification)
+	nodeConn := connectToHubWithNodeCert(c.t, c.hub.grpcAddr, nodePrivKey, finalCert, cli.identity.rootCertPEM, c.hub.hubCAPEM)
 	nodeClient := hubpb.NewNodeServiceClient(nodeConn)
 
-	// Register with Hub
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	regResp, err := nodeClient.Register(ctx, &hubpb.NodeRegisterRequest{CsrPem: string(csrPEM)})
-	cancel()
-	if err != nil {
-		c.t.Fatalf("Node registration failed: %v", err)
+	// Register with Hub (with retry for rate limiting)
+	var regResp *hubpb.NodeRegisterResponse
+	var regErr error
+	for attempt := 0; attempt < 5; attempt++ {
+		// Serialize concurrent registrations to avoid rate limiting
+		c.mu.Lock()
+		if !c.lastNodeReg.IsZero() {
+			elapsed := time.Since(c.lastNodeReg)
+			if elapsed < 5*time.Second {
+				sleepTime := 5*time.Second - elapsed
+				c.mu.Unlock()
+				time.Sleep(sleepTime)
+				c.mu.Lock()
+			}
+		}
+		c.lastNodeReg = time.Now()
+		c.mu.Unlock()
+
+		regCtx, regCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		regResp, regErr = nodeClient.Register(regCtx, &hubpb.NodeRegisterRequest{CsrPem: string(csrPEM)})
+		regCancel()
+		if regErr == nil {
+			break
+		}
+		// Check if rate limited
+		if strings.Contains(regErr.Error(), "ResourceExhausted") || strings.Contains(regErr.Error(), "Too many") {
+			c.t.Logf("Node registration rate limited, waiting 5s before retry %d...", attempt+1)
+			time.Sleep(5 * time.Second)
+			continue
+		}
+		c.t.Fatalf("Node registration failed: %v", regErr)
+	}
+	if regErr != nil {
+		c.t.Fatalf("Node registration failed after retries: %v", regErr)
 	}
 
 	// Generate routing token: HMAC(node_id, user_secret)
@@ -424,14 +494,14 @@ func (c *testCluster) pairNodeWithPAKE(cli *cliProcess, nodeName string) *nodePr
 	routingToken := hex.EncodeToString(h.Sum(nil))
 
 	// CLI approves the node registration with routing token
-	ctx, cancel = context.WithTimeout(context.Background(), 10*time.Second)
-	_, err = cli.mobileClient.ApproveNode(contextWithJWT(ctx, cli.jwtToken), &hubpb.ApproveNodeRequest{
+	approveCtx, approveCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	_, err = cli.mobileClient.ApproveNode(contextWithJWT(approveCtx, cli.jwtToken), &hubpb.ApproveNodeRequest{
 		RegistrationCode: regResp.RegistrationCode,
 		CertPem:          string(certPEM),
 		CaPem:            string(cli.identity.rootCertPEM),
 		RoutingToken:     routingToken,
 	})
-	cancel()
+	approveCancel()
 	if err != nil {
 		c.t.Fatalf("Node approval failed: %v", err)
 	}
@@ -461,6 +531,20 @@ func (c *testCluster) pairNodeWithPAKE(cli *cliProcess, nodeName string) *nodePr
 
 func (c *testCluster) pairNodeWithQR(cli *cliProcess, nodeName string) *nodeProcess {
 	c.t.Helper()
+
+	// Respect Hub's per-IP rate limit: 1 registration per 5 seconds
+	c.mu.Lock()
+	if !c.lastNodeReg.IsZero() {
+		elapsed := time.Since(c.lastNodeReg)
+		if elapsed < 6*time.Second {
+			sleepTime := 6*time.Second - elapsed
+			c.mu.Unlock()
+			time.Sleep(sleepTime)
+			c.mu.Lock()
+		}
+	}
+	c.lastNodeReg = time.Now()
+	c.mu.Unlock()
 
 	nodeDataDir := filepath.Join(c.dataDir, "node-"+nodeName)
 	os.MkdirAll(nodeDataDir, 0755)
@@ -513,8 +597,8 @@ func (c *testCluster) pairNodeWithQR(cli *cliProcess, nodeName string) *nodeProc
 		pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyPEM}), 0600)
 	os.WriteFile(filepath.Join(nodeDataDir, "cli_ca.crt"), caCert, 0600)
 
-	// Connect to Hub
-	nodeConn := connectToHubWithNodeCert(c.t, c.hub.grpcAddr, nodePrivKey, finalCert, caCert)
+	// Connect to Hub (pass Hub CA for server verification)
+	nodeConn := connectToHubWithNodeCert(c.t, c.hub.grpcAddr, nodePrivKey, finalCert, caCert, c.hub.hubCAPEM)
 	nodeClient := hubpb.NewNodeServiceClient(nodeConn)
 
 	// Register with Hub
@@ -572,7 +656,14 @@ func (c *testCluster) stopNode(n *nodeProcess) {
 	}
 	if n.cmd != nil && n.cmd.Process != nil {
 		n.cmd.Process.Signal(syscall.SIGTERM)
-		n.cmd.Wait()
+		done := make(chan error, 1)
+		go func() { done <- n.cmd.Wait() }()
+		select {
+		case <-done:
+		case <-time.After(5 * time.Second):
+			n.cmd.Process.Kill()
+			<-done // Wait for Kill to complete
+		}
 		c.t.Logf("Node stopped: %s", n.nodeID)
 	}
 }
@@ -821,13 +912,13 @@ func TestComprehensive_RestartPersistence(t *testing.T) {
 	cluster.restartHub()
 
 	// Reconnect CLI
-	newConn := connectToHubWithMTLS(t, cluster.hub.grpcAddr, cli.identity)
+	newConn := connectToHubWithMTLS(t, cluster.hub.grpcAddr, cluster.hub.hubCAPEM, cli.identity)
 	cli.conn = newConn
 	cli.authClient = hubpb.NewAuthServiceClient(newConn)
 	cli.mobileClient = hubpb.NewMobileServiceClient(newConn)
 
-	// Reconnect node
-	nodeConn := connectToHubWithNodeCert(t, cluster.hub.grpcAddr, node.privateKey, node.certPEM, node.caCertPEM)
+	// Reconnect node (pass Hub CA for server verification)
+	nodeConn := connectToHubWithNodeCert(t, cluster.hub.grpcAddr, node.privateKey, node.certPEM, node.caCertPEM, cluster.hub.hubCAPEM)
 	node.conn = nodeConn
 	node.nodeClient = hubpb.NewNodeServiceClient(nodeConn)
 
@@ -881,7 +972,7 @@ func TestComprehensive_CrashRecovery(t *testing.T) {
 	cluster.restartHub()
 
 	// Reconnect and verify
-	newConn := connectToHubWithMTLS(t, cluster.hub.grpcAddr, cli.identity)
+	newConn := connectToHubWithMTLS(t, cluster.hub.grpcAddr, cluster.hub.hubCAPEM, cli.identity)
 	defer newConn.Close()
 
 	authClient := hubpb.NewAuthServiceClient(newConn)
@@ -1168,7 +1259,7 @@ func TestComprehensive_FullSystem(t *testing.T) {
 	cluster.restartHub()
 
 	// Reconnect user1
-	u1Conn := connectToHubWithMTLS(t, cluster.hub.grpcAddr, user1.identity)
+	u1Conn := connectToHubWithMTLS(t, cluster.hub.grpcAddr, cluster.hub.hubCAPEM, user1.identity)
 	defer u1Conn.Close()
 	u1Mobile := hubpb.NewMobileServiceClient(u1Conn)
 
@@ -1195,7 +1286,7 @@ func TestComprehensive_FullSystem(t *testing.T) {
 
 	t.Log("=== PHASE 5: Multi-Tenant Verification ===")
 	// User2 should not see User1's nodes
-	u2Conn := connectToHubWithMTLS(t, cluster.hub.grpcAddr, user2.identity)
+	u2Conn := connectToHubWithMTLS(t, cluster.hub.grpcAddr, cluster.hub.hubCAPEM, user2.identity)
 	defer u2Conn.Close()
 	u2Mobile := hubpb.NewMobileServiceClient(u2Conn)
 
@@ -1223,7 +1314,7 @@ func TestComprehensive_FullSystem(t *testing.T) {
 	cluster.restartHub()
 
 	// Quick verification after crash
-	u1ConnAfterCrash := connectToHubWithMTLS(t, cluster.hub.grpcAddr, user1.identity)
+	u1ConnAfterCrash := connectToHubWithMTLS(t, cluster.hub.grpcAddr, cluster.hub.hubCAPEM, user1.identity)
 	defer u1ConnAfterCrash.Close()
 
 	authAfterCrash := hubpb.NewAuthServiceClient(u1ConnAfterCrash)
@@ -1278,13 +1369,30 @@ func TestComprehensive_WebOfflinePairing(t *testing.T) {
 	// Start nitellad with pairing web UI
 	cmd := exec.Command(nitellaBin,
 		"--hub", cluster.hub.grpcAddr,
-		"--hub-insecure",
+		"--hub-ca", filepath.Join(cluster.hub.dataDir, "hub_ca.crt"),
 		"--hub-data-dir", nodeDataDir,
 		"--hub-node-name", "web-paired-node",
 		"--pair-offline",
 		"--pair-port", fmt.Sprintf(":%d", pairPort),
 		"--pair-timeout", "2m",
+		"--tls-cert", filepath.Join(nodeDataDir, "tls.crt"),
+		"--tls-key", filepath.Join(nodeDataDir, "tls.key"),
 	)
+
+	// Generate TLS certs (CA and Leaf)
+	caPEM, certPEM, keyPEM, err := generateSelfSignedCert(t)
+	if err != nil {
+		t.Fatalf("Failed to generate TLS cert: %v", err)
+	}
+	// Write server cert (Leaf + CA for full chain)
+	fullChain := append(certPEM, caPEM...)
+	if err := os.WriteFile(filepath.Join(nodeDataDir, "tls.crt"), fullChain, 0600); err != nil {
+		t.Fatalf("Failed to write TLS cert: %v", err)
+	}
+	// Write server key
+	if err := os.WriteFile(filepath.Join(nodeDataDir, "tls.key"), keyPEM, 0600); err != nil {
+		t.Fatalf("Failed to write TLS key: %v", err)
+	}
 
 	// Capture stdout for CPACE words
 	stdout, _ := cmd.StdoutPipe()
@@ -1332,7 +1440,13 @@ func TestComprehensive_WebOfflinePairing(t *testing.T) {
 	pairURL := fmt.Sprintf("https://localhost:%d", pairPort)
 	httpClient := &http.Client{
 		Transport: &http.Transport{
-			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+			TLSClientConfig: &tls.Config{
+				RootCAs: func() *x509.CertPool {
+					pool := x509.NewCertPool()
+					pool.AppendCertsFromPEM(caPEM)
+					return pool
+				}(),
+			},
 		},
 		Jar: func() http.CookieJar {
 			jar, _ := cookiejar.New(nil)
@@ -1348,6 +1462,9 @@ func TestComprehensive_WebOfflinePairing(t *testing.T) {
 			resp.Body.Close()
 			connected = true
 			break
+		}
+		if i > 25 {
+			t.Logf("Connecting to pairing server: %v", err)
 		}
 		time.Sleep(200 * time.Millisecond)
 	}
@@ -1545,4 +1662,81 @@ func TestComprehensive_WebOfflinePairing(t *testing.T) {
 	}
 
 	t.Log("=== Web-Based Offline Pairing Test PASSED ===")
+}
+
+func generateSelfSignedCert(t *testing.T) ([]byte, []byte, []byte, error) {
+	// 1. Generate CA
+	_, caPriv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+
+	caTemplate := x509.Certificate{
+		SerialNumber: big.NewInt(1),
+		Subject: pkix.Name{
+			Organization: []string{"Test CA"},
+			CommonName:   "Test CA",
+		},
+		NotBefore:             time.Now().Add(-1 * time.Hour),
+		NotAfter:              time.Now().Add(time.Hour),
+		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageDigitalSignature,
+		BasicConstraintsValid: true,
+		IsCA:                  true,
+	}
+
+	// Calculate SKI for CA
+	caPubBytes, _ := x509.MarshalPKIXPublicKey(caPriv.Public())
+	caSKI := sha1.Sum(caPubBytes)
+	caTemplate.SubjectKeyId = caSKI[:]
+
+	caBytes, err := x509.CreateCertificate(rand.Reader, &caTemplate, &caTemplate, caPriv.Public(), caPriv)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	caPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: caBytes})
+
+	// Parse CA cert to use as parent
+	caCert, err := x509.ParseCertificate(caBytes)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+
+	// 2. Generate Leaf Cert
+	_, leafPriv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+
+	leafTemplate := x509.Certificate{
+		SerialNumber: big.NewInt(2),
+		Subject: pkix.Name{
+			Organization: []string{"Test Node"},
+			CommonName:   "localhost",
+		},
+		NotBefore:    time.Now().Add(-1 * time.Hour),
+		NotAfter:     time.Now().Add(time.Hour),
+		KeyUsage:     x509.KeyUsageKeyEncipherment | x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		IPAddresses:  []net.IP{net.ParseIP("127.0.0.1"), net.ParseIP("::1")},
+		DNSNames:     []string{"localhost"},
+	}
+	
+	// Set AKI to CA's SKI from the actual cert
+	leafTemplate.AuthorityKeyId = caCert.SubjectKeyId
+
+	// Use parsed CA cert as parent
+	leafBytes, err := x509.CreateCertificate(rand.Reader, &leafTemplate, caCert, leafPriv.Public(), caPriv)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: leafBytes})
+
+	// Encode Leaf Key
+	leafPrivBytes, err := x509.MarshalPKCS8PrivateKey(leafPriv)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: leafPrivBytes})
+
+	return caPEM, certPEM, keyPEM, nil
 }

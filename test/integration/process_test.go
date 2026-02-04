@@ -6,6 +6,7 @@ import (
 	"net"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -16,16 +17,34 @@ import (
 	"github.com/ivere27/nitella/pkg/node"
 )
 
-// setupProcessTest validates that process mode tests can run.
-// Process mode tests require running the actual nitellad binary, not go test.
-func setupProcessTest(t *testing.T) {
-	exe, err := os.Executable()
+var nitelladBinary string
+
+func TestMain(m *testing.M) {
+	// Build nitellad once for all tests
+	tmpDir, err := os.MkdirTemp("", "nitella-test-build")
 	if err != nil {
-		t.Skipf("Cannot determine executable path: %v", err)
+		fmt.Printf("Failed to create temp dir: %v\n", err)
+		os.Exit(1)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	exePath := filepath.Join(tmpDir, "nitellad")
+	cmd := exec.Command("go", "build", "-o", exePath, "../../cmd/nitellad")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		fmt.Printf("Failed to build nitellad: %v\n%s\n", err, out)
+		os.Exit(1)
 	}
 
-	if !strings.HasSuffix(exe, "nitellad") && !strings.Contains(exe, "nitellad") {
-		t.Skip("Process mode tests require running as nitellad binary, skipped in 'go test'.")
+	nitelladBinary = exePath
+	os.Setenv("NITELLA_CHILD_BINARY", nitelladBinary)
+
+	os.Exit(m.Run())
+}
+
+// setupProcessTest validates that process mode tests can run.
+func setupProcessTest(t *testing.T) {
+	if nitelladBinary == "" {
+		t.Skip("nitellad binary not built")
 	}
 }
 
@@ -55,7 +74,7 @@ func TestProcessListener_SingleChild(t *testing.T) {
 	}()
 
 	// 2. Create ProxyManager with process mode (useEmbedded=false)
-	pm := node.NewProxyManager(false)
+	pm := node.NewProxyManagerWithBool(false)
 
 	// 3. Create Proxy - this will spawn a child process
 	resp, err := pm.CreateProxy(&pb.CreateProxyRequest{
@@ -124,7 +143,7 @@ func TestProcessListener_MultipleChildren(t *testing.T) {
 	}()
 
 	// Create ProxyManager with process mode
-	pm := node.NewProxyManager(false)
+	pm := node.NewProxyManagerWithBool(false)
 
 	// Create 3 proxies - each spawns a child process
 	proxyIDs := make([]string, 3)
@@ -208,7 +227,7 @@ func TestProcessListener_RuleEnforcement(t *testing.T) {
 	}()
 
 	// Create ProxyManager with process mode
-	pm := node.NewProxyManager(false)
+	pm := node.NewProxyManagerWithBool(false)
 
 	// Create proxy
 	resp, err := pm.CreateProxy(&pb.CreateProxyRequest{
@@ -305,7 +324,7 @@ func TestProcessListener_Isolation(t *testing.T) {
 		}(ln)
 	}
 
-	pm := node.NewProxyManager(false)
+	pm := node.NewProxyManagerWithBool(false)
 
 	// Create 2 child proxies
 	resp1, err := pm.CreateProxy(&pb.CreateProxyRequest{
@@ -355,7 +374,7 @@ func TestProcessListener_Isolation(t *testing.T) {
 func TestProcessListener_MockFallback(t *testing.T) {
 	setupProcessTest(t)
 
-	pm := node.NewProxyManager(false)
+	pm := node.NewProxyManagerWithBool(false)
 
 	// Create proxy with unreachable backend and mock fallback
 	resp, err := pm.CreateProxy(&pb.CreateProxyRequest{
@@ -410,7 +429,7 @@ func TestProcessListener_ForceKillAndRecover(t *testing.T) {
 	}()
 
 	// Create ProxyManager with process mode
-	pm := node.NewProxyManager(false)
+	pm := node.NewProxyManagerWithBool(false)
 
 	// Create proxy
 	resp, err := pm.CreateProxy(&pb.CreateProxyRequest{
@@ -569,7 +588,7 @@ func TestGetAllActiveConnections(t *testing.T) {
 	}
 
 	// Create ProxyManager with embedded mode (simpler for this test)
-	pm := node.NewProxyManager(true)
+	pm := node.NewProxyManagerWithBool(true)
 
 	// Create 2 proxies
 	resp1, err := pm.CreateProxy(&pb.CreateProxyRequest{
@@ -615,38 +634,49 @@ func TestGetAllActiveConnections(t *testing.T) {
 	conn1.Write([]byte("test1"))
 	conn2.Write([]byte("test2"))
 
-	time.Sleep(200 * time.Millisecond)
+	// Wait with retry for connections to be registered
+	var conns1, conns2, allConns []*node.ConnectionMetadata
+	for attempt := 0; attempt < 10; attempt++ {
+		time.Sleep(200 * time.Millisecond)
+		conns1 = pm.GetActiveConnections(resp1.ProxyId)
+		conns2 = pm.GetActiveConnections(resp2.ProxyId)
+		allConns = pm.GetActiveConnections("")
+		if len(conns1) >= 1 && len(conns2) >= 1 && len(allConns) >= 2 {
+			break
+		}
+	}
 
 	// Test 1: GetActiveConnections with specific proxyID returns only that proxy's connections
-	conns1 := pm.GetActiveConnections(resp1.ProxyId)
 	if len(conns1) != 1 {
 		t.Errorf("Expected 1 connection for proxy1, got %d", len(conns1))
 	}
 
-	conns2 := pm.GetActiveConnections(resp2.ProxyId)
 	if len(conns2) != 1 {
 		t.Errorf("Expected 1 connection for proxy2, got %d", len(conns2))
 	}
 
 	// Test 2: GetActiveConnections with empty proxyID returns ALL connections
-	allConns := pm.GetActiveConnections("")
 	if len(allConns) < 2 {
 		t.Errorf("Expected at least 2 connections total, got %d", len(allConns))
 	}
 	t.Logf("Total connections from all proxies: %d", len(allConns))
 
-	// Verify connections are from different proxies by checking source ports are different
-	sourceAddrs := make(map[string]bool)
+	// Verify connections are from different proxies by checking connection IDs are unique
+	connIDs := make(map[string]bool)
 	for _, c := range allConns {
-		key := fmt.Sprintf("%s:%d", c.SourceIP, c.SourcePort)
-		sourceAddrs[key] = true
-		t.Logf("  Connection: %s -> %s", key, c.DestAddr)
+		connIDs[c.ID] = true
+		t.Logf("  Connection: %s (ID: %s) -> %s", c.SourceIP, c.ID, c.DestAddr)
 	}
-	if len(sourceAddrs) < 2 {
-		t.Errorf("Expected connections from different sources, got %d unique sources", len(sourceAddrs))
+	if len(connIDs) < 2 {
+		t.Errorf("Expected connections with unique IDs, got %d unique IDs", len(connIDs))
 	}
 
 	t.Log("GetAllActiveConnections Test Passed")
+}
+
+// containsString checks if s contains substr
+func containsString(s, substr string) bool {
+	return strings.Contains(s, substr)
 }
 
 // testProcessConnection helper with retry

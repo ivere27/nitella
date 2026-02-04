@@ -10,6 +10,7 @@ enum ActionType {
   ACTION_TYPE_ALLOW = 1;
   ACTION_TYPE_BLOCK = 2;
   ACTION_TYPE_MOCK = 3;
+  ACTION_TYPE_REQUIRE_APPROVAL = 4;  // Real-time user approval required
 }
 
 // FallbackAction defines what to do when a primary action fails or is not applicable
@@ -81,19 +82,6 @@ enum PemLabel {
   PEM_LABEL_PUBLIC_KEY = 2;
   PEM_LABEL_PRIVATE_KEY = 3;
   PEM_LABEL_ENCRYPTED_PRIVATE_KEY = 4;
-}
-
-// ACTION_TYPE_REQUIRE_APPROVAL for approval workflow
-// Note: Extend ActionType in your proxy service if needed
-
-// ApprovalDuration defines how long an approval decision lasts
-enum ApprovalDuration {
-  APPROVAL_DURATION_UNSPECIFIED = 0;
-  APPROVAL_DURATION_ONCE = 1;           // Single connection only (no caching)
-  APPROVAL_DURATION_1_MINUTE = 2;       // 60 seconds
-  APPROVAL_DURATION_10_MINUTES = 3;     // 600 seconds
-  APPROVAL_DURATION_1_HOUR = 4;         // 3600 seconds
-  APPROVAL_DURATION_24_HOURS = 5;       // 86400 seconds
 }
 
 // ApprovalActionType defines the user's decision for an approval request

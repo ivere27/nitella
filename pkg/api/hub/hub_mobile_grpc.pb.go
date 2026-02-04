@@ -21,25 +21,24 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	MobileService_RegisterNodeViaCSR_FullMethodName     = "/nitella.hub.MobileService/RegisterNodeViaCSR"
-	MobileService_ListNodes_FullMethodName              = "/nitella.hub.MobileService/ListNodes"
-	MobileService_GetNode_FullMethodName                = "/nitella.hub.MobileService/GetNode"
-	MobileService_RegisterNode_FullMethodName           = "/nitella.hub.MobileService/RegisterNode"
-	MobileService_ApproveNode_FullMethodName            = "/nitella.hub.MobileService/ApproveNode"
-	MobileService_DeleteNode_FullMethodName             = "/nitella.hub.MobileService/DeleteNode"
-	MobileService_SendCommand_FullMethodName            = "/nitella.hub.MobileService/SendCommand"
-	MobileService_StreamMetrics_FullMethodName          = "/nitella.hub.MobileService/StreamMetrics"
-	MobileService_GetMetricsHistory_FullMethodName      = "/nitella.hub.MobileService/GetMetricsHistory"
-	MobileService_StreamAlerts_FullMethodName           = "/nitella.hub.MobileService/StreamAlerts"
-	MobileService_StreamSignaling_FullMethodName        = "/nitella.hub.MobileService/StreamSignaling"
-	MobileService_CreateProxyConfig_FullMethodName      = "/nitella.hub.MobileService/CreateProxyConfig"
-	MobileService_ListProxyConfigs_FullMethodName       = "/nitella.hub.MobileService/ListProxyConfigs"
-	MobileService_DeleteProxyConfig_FullMethodName      = "/nitella.hub.MobileService/DeleteProxyConfig"
-	MobileService_PushRevision_FullMethodName           = "/nitella.hub.MobileService/PushRevision"
-	MobileService_GetRevision_FullMethodName            = "/nitella.hub.MobileService/GetRevision"
-	MobileService_ListRevisions_FullMethodName          = "/nitella.hub.MobileService/ListRevisions"
-	MobileService_FlushRevisions_FullMethodName         = "/nitella.hub.MobileService/FlushRevisions"
-	MobileService_SubmitApprovalDecision_FullMethodName = "/nitella.hub.MobileService/SubmitApprovalDecision"
+	MobileService_RegisterNodeViaCSR_FullMethodName = "/nitella.hub.MobileService/RegisterNodeViaCSR"
+	MobileService_ListNodes_FullMethodName          = "/nitella.hub.MobileService/ListNodes"
+	MobileService_GetNode_FullMethodName            = "/nitella.hub.MobileService/GetNode"
+	MobileService_RegisterNode_FullMethodName       = "/nitella.hub.MobileService/RegisterNode"
+	MobileService_ApproveNode_FullMethodName        = "/nitella.hub.MobileService/ApproveNode"
+	MobileService_DeleteNode_FullMethodName         = "/nitella.hub.MobileService/DeleteNode"
+	MobileService_SendCommand_FullMethodName        = "/nitella.hub.MobileService/SendCommand"
+	MobileService_StreamMetrics_FullMethodName      = "/nitella.hub.MobileService/StreamMetrics"
+	MobileService_GetMetricsHistory_FullMethodName  = "/nitella.hub.MobileService/GetMetricsHistory"
+	MobileService_StreamAlerts_FullMethodName       = "/nitella.hub.MobileService/StreamAlerts"
+	MobileService_StreamSignaling_FullMethodName    = "/nitella.hub.MobileService/StreamSignaling"
+	MobileService_CreateProxyConfig_FullMethodName  = "/nitella.hub.MobileService/CreateProxyConfig"
+	MobileService_ListProxyConfigs_FullMethodName   = "/nitella.hub.MobileService/ListProxyConfigs"
+	MobileService_DeleteProxyConfig_FullMethodName  = "/nitella.hub.MobileService/DeleteProxyConfig"
+	MobileService_PushRevision_FullMethodName       = "/nitella.hub.MobileService/PushRevision"
+	MobileService_GetRevision_FullMethodName        = "/nitella.hub.MobileService/GetRevision"
+	MobileService_ListRevisions_FullMethodName      = "/nitella.hub.MobileService/ListRevisions"
+	MobileService_FlushRevisions_FullMethodName     = "/nitella.hub.MobileService/FlushRevisions"
 )
 
 // MobileServiceClient is the client API for MobileService service.
@@ -70,8 +69,6 @@ type MobileServiceClient interface {
 	GetRevision(ctx context.Context, in *GetRevisionRequest, opts ...grpc.CallOption) (*GetRevisionResponse, error)
 	ListRevisions(ctx context.Context, in *ListRevisionsRequest, opts ...grpc.CallOption) (*ListRevisionsResponse, error)
 	FlushRevisions(ctx context.Context, in *FlushRevisionsRequest, opts ...grpc.CallOption) (*FlushRevisionsResponse, error)
-	// Approval Workflow
-	SubmitApprovalDecision(ctx context.Context, in *SubmitApprovalDecisionRequest, opts ...grpc.CallOption) (*SubmitApprovalDecisionResponse, error)
 }
 
 type mobileServiceClient struct {
@@ -283,16 +280,6 @@ func (c *mobileServiceClient) FlushRevisions(ctx context.Context, in *FlushRevis
 	return out, nil
 }
 
-func (c *mobileServiceClient) SubmitApprovalDecision(ctx context.Context, in *SubmitApprovalDecisionRequest, opts ...grpc.CallOption) (*SubmitApprovalDecisionResponse, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(SubmitApprovalDecisionResponse)
-	err := c.cc.Invoke(ctx, MobileService_SubmitApprovalDecision_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
 // MobileServiceServer is the server API for MobileService service.
 // All implementations must embed UnimplementedMobileServiceServer
 // for forward compatibility.
@@ -321,8 +308,6 @@ type MobileServiceServer interface {
 	GetRevision(context.Context, *GetRevisionRequest) (*GetRevisionResponse, error)
 	ListRevisions(context.Context, *ListRevisionsRequest) (*ListRevisionsResponse, error)
 	FlushRevisions(context.Context, *FlushRevisionsRequest) (*FlushRevisionsResponse, error)
-	// Approval Workflow
-	SubmitApprovalDecision(context.Context, *SubmitApprovalDecisionRequest) (*SubmitApprovalDecisionResponse, error)
 	mustEmbedUnimplementedMobileServiceServer()
 }
 
@@ -386,9 +371,6 @@ func (UnimplementedMobileServiceServer) ListRevisions(context.Context, *ListRevi
 }
 func (UnimplementedMobileServiceServer) FlushRevisions(context.Context, *FlushRevisionsRequest) (*FlushRevisionsResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method FlushRevisions not implemented")
-}
-func (UnimplementedMobileServiceServer) SubmitApprovalDecision(context.Context, *SubmitApprovalDecisionRequest) (*SubmitApprovalDecisionResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method SubmitApprovalDecision not implemented")
 }
 func (UnimplementedMobileServiceServer) mustEmbedUnimplementedMobileServiceServer() {}
 func (UnimplementedMobileServiceServer) testEmbeddedByValue()                       {}
@@ -710,24 +692,6 @@ func _MobileService_FlushRevisions_Handler(srv interface{}, ctx context.Context,
 	return interceptor(ctx, in, info, handler)
 }
 
-func _MobileService_SubmitApprovalDecision_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(SubmitApprovalDecisionRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(MobileServiceServer).SubmitApprovalDecision(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: MobileService_SubmitApprovalDecision_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(MobileServiceServer).SubmitApprovalDecision(ctx, req.(*SubmitApprovalDecisionRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
 // MobileService_ServiceDesc is the grpc.ServiceDesc for MobileService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -794,10 +758,6 @@ var MobileService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "FlushRevisions",
 			Handler:    _MobileService_FlushRevisions_Handler,
-		},
-		{
-			MethodName: "SubmitApprovalDecision",
-			Handler:    _MobileService_SubmitApprovalDecision_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{

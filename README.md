@@ -1,6 +1,42 @@
 # Nitella
 
-A collection of modular network services and libraries for security-focused infrastructure.
+A mobile-controlled Layer 4 reverse proxy with Zero-Trust architecture. The Hub acts as a "blind relay" - all commands, metrics, and configurations are end-to-end encrypted.
+
+## Architecture
+
+```
+┌──────────────────┐                    ┌──────────────────┐
+│   nitella CLI    │                    │   Hub Server     │
+│   (or Mobile)    │◄──────────────────►│   (Blind Relay)  │
+│                  │     E2E Encrypted  │                  │
+└──────────────────┘                    └────────┬─────────┘
+        │                                        │
+        │ P2P (WebRTC)                          │ mTLS
+        │ bypasses Hub                          │
+        │ when possible                         ▼
+        │                               ┌──────────────────┐
+        └──────────────────────────────►│   nitellad       │
+                                        │   (Proxy Node)   │
+                                        └──────────────────┘
+```
+
+### Key Principles
+
+| Principle | Description |
+|-----------|-------------|
+| **Zero Trust Hub** | Hub cannot decrypt commands or metrics - only relays encrypted blobs |
+| **Mobile as Root CA** | Your mobile device holds the Root CA private key |
+| **P2P First** | Direct WebRTC connections when possible, Hub relay as fallback |
+| **Blind Routing** | Hub routes via opaque tokens - cannot correlate user to nodes |
+
+### Security
+
+- **Encryption**: X25519 ECDH + AES-256-GCM for E2E encryption
+- **Authentication**: mTLS with certificates signed by your CA
+- **Pairing**: PAKE (Password-Authenticated Key Exchange) or QR code
+- **Replay Protection**: Timestamps + request IDs + Ed25519 signatures
+
+See [THREAT_MODEL.md](THREAT_MODEL.md) for detailed security analysis.
 
 ## Modules
 
@@ -113,6 +149,13 @@ nitella> list
 - `geoip config remote <provider>` - Configure remote API provider
 - `lookup <ip>` - GeoIP lookup for an IP
 - `stream` - Stream connection events (Ctrl+C to stop)
+- `approve <id> [duration]` - Approve a pending connection request
+- `deny <id> [reason]` - Deny a pending connection request
+- `pending` - List pending approval requests
+- `block <ip> [duration_seconds]` - Quick block an IP globally
+- `allow <ip> [duration_seconds]` - Quick allow an IP globally
+- `global-rules list` - List active global rules
+- `global-rules remove <id>` - Remove a global rule
 
 **Identity & Security:**
 
@@ -166,6 +209,95 @@ The key is encrypted with Argon2id + AES-256-GCM. KDF parameters are stored in t
 - `Alt+Left/Right` - Jump to previous/next word
 - `Ctrl+L` - Clear screen
 - `Ctrl+C` - Cancel current command (double-press to exit)
+
+### Hub Mode (Remote Management)
+
+The CLI supports Hub mode for secure remote management of nitellad nodes via a central relay server. All commands and data are end-to-end encrypted - the Hub cannot read your traffic. **Hub mode is the default** - use `--local` for direct nitellad connection.
+
+```bash
+# Configure Hub connection
+nitella config set hub hub.example.com:50052
+nitella login
+
+# Node pairing (PAKE - Hub learns nothing)
+nitella pair                # Generate pairing code
+nitella pair-offline        # QR code pairing for air-gapped setups
+
+# List and manage remote nodes
+nitella nodes
+nitella node <node-id> status
+
+# Handle approval requests (when using REQUIRE_APPROVAL action)
+nitella pending             # List pending requests
+nitella approve <id> 1h     # Approve for 1 hour
+nitella deny <id>           # Deny request
+
+# Identity management
+nitella identity            # Show identity info
+nitella identity export-ca  # Export Root CA certificate
+```
+
+See [docs/HUB.md](docs/HUB.md) for detailed Hub architecture and setup.
+
+### P2P Mode
+
+When possible, the CLI connects directly to nodes via WebRTC, bypassing the Hub entirely:
+
+```bash
+# Connect to node with P2P (default behavior)
+nitella node <node-id> status
+
+# Use custom STUN server
+NITELLA_STUN="stun:stun.cloudflare.com:3478" nitella node <node-id>
+
+# Or via flag at startup
+nitella --stun stun:stun.cloudflare.com:3478
+```
+
+P2P connections are authenticated via certificate exchange and DTLS encrypted.
+
+### Proxy Templates
+
+Version-controlled proxy configurations stored encrypted on Hub:
+
+```bash
+# Import and push to Hub
+nitella proxy import config.yaml --name "Production"
+nitella proxy push <proxy-id> -m "Added GeoIP rules"
+
+# View history and diff
+nitella proxy history <proxy-id>
+nitella proxy diff <proxy-id> --rev1 2 --rev2 4
+
+# Apply to node
+nitella proxy apply <proxy-id> <node-id>
+```
+
+See [docs/PROXY_TEMPLATE.md](docs/PROXY_TEMPLATE.md) for details.
+
+### Approval System
+
+Real-time connection approval for zero-trust access control. When a proxy uses `require_approval` action, incoming connections are held until you approve or deny them.
+
+```yaml
+# proxy.yaml - require approval for all connections
+proxy:
+  default_action: require_approval
+  default_backend: "10.0.0.1:3306"
+```
+
+```bash
+# Approval requests appear in real-time
+nitella>
+⚠ APPROVAL REQUIRED (req: abc123)
+  Source: 1.2.3.4 (CN, Beijing)
+  Dest:   prod-db:5432
+
+nitella> approve abc123 1h    # Allow for 1 hour
+nitella> deny abc123          # Block the connection
+```
+
+See [docs/APPROVAL_SYSTEM.md](docs/APPROVAL_SYSTEM.md) for detailed documentation.
 
 ### GeoIP
 

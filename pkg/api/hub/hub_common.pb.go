@@ -147,6 +147,8 @@ const (
 	CommandType_COMMAND_TYPE_UNAPPLY_PROXY CommandType = 21 // Remove proxy config from node
 	CommandType_COMMAND_TYPE_GET_APPLIED   CommandType = 22 // List applied proxy configs
 	CommandType_COMMAND_TYPE_PROXY_UPDATE  CommandType = 23 // Notification: proxy config updated
+	// Approval Workflow
+	CommandType_COMMAND_TYPE_RESOLVE_APPROVAL CommandType = 30 // Resolve a pending approval request
 )
 
 // Enum value maps for CommandType.
@@ -165,6 +167,7 @@ var (
 		21: "COMMAND_TYPE_UNAPPLY_PROXY",
 		22: "COMMAND_TYPE_GET_APPLIED",
 		23: "COMMAND_TYPE_PROXY_UPDATE",
+		30: "COMMAND_TYPE_RESOLVE_APPROVAL",
 	}
 	CommandType_value = map[string]int32{
 		"COMMAND_TYPE_UNSPECIFIED":            0,
@@ -180,6 +183,7 @@ var (
 		"COMMAND_TYPE_UNAPPLY_PROXY":          21,
 		"COMMAND_TYPE_GET_APPLIED":            22,
 		"COMMAND_TYPE_PROXY_UPDATE":           23,
+		"COMMAND_TYPE_RESOLVE_APPROVAL":       30,
 	}
 )
 
@@ -1377,7 +1381,7 @@ const file_hub_hub_common_proto_rawDesc = "" +
 	"\x13NODE_STATUS_OFFLINE\x10\x01\x12\x16\n" +
 	"\x12NODE_STATUS_ONLINE\x10\x02\x12\x17\n" +
 	"\x13NODE_STATUS_BLOCKED\x10\x03\x12\x1a\n" +
-	"\x16NODE_STATUS_CONNECTING\x10\x04*\xac\x03\n" +
+	"\x16NODE_STATUS_CONNECTING\x10\x04*\xcf\x03\n" +
 	"\vCommandType\x12\x1c\n" +
 	"\x18COMMAND_TYPE_UNSPECIFIED\x10\x00\x12\x18\n" +
 	"\x14COMMAND_TYPE_EXECUTE\x10\x01\x12\x19\n" +
@@ -1391,7 +1395,8 @@ const file_hub_hub_common_proto_rawDesc = "" +
 	"\x18COMMAND_TYPE_APPLY_PROXY\x10\x14\x12\x1e\n" +
 	"\x1aCOMMAND_TYPE_UNAPPLY_PROXY\x10\x15\x12\x1c\n" +
 	"\x18COMMAND_TYPE_GET_APPLIED\x10\x16\x12\x1d\n" +
-	"\x19COMMAND_TYPE_PROXY_UPDATE\x10\x17B(Z&github.com/ivere27/nitella/pkg/api/hubb\x06proto3"
+	"\x19COMMAND_TYPE_PROXY_UPDATE\x10\x17\x12!\n" +
+	"\x1dCOMMAND_TYPE_RESOLVE_APPROVAL\x10\x1eB(Z&github.com/ivere27/nitella/pkg/api/hubb\x06proto3"
 
 var (
 	file_hub_hub_common_proto_rawDescOnce sync.Once

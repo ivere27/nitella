@@ -2,12 +2,15 @@ package geoip
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"fmt"
+	"os"
 
 	pbCommon "github.com/ivere27/nitella/pkg/api/common"
 	pb "github.com/ivere27/nitella/pkg/api/geoip"
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/protobuf/types/known/emptypb"
 )
@@ -69,8 +72,31 @@ type RemoteClient struct {
 }
 
 // NewRemoteClient creates a remote GeoIP client.
-func NewRemoteClient(addr string) (*RemoteClient, error) {
-	conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+// tlsCA is the path to the GeoIP server's CA certificate for verification.
+// If empty, system CA pool is used (for publicly trusted certs).
+func NewRemoteClient(addr string, tlsCA string) (*RemoteClient, error) {
+	var tlsConfig *tls.Config
+	if tlsCA != "" {
+		// Load CA certificate for verification
+		caPEM, err := os.ReadFile(tlsCA)
+		if err != nil {
+			return nil, fmt.Errorf("failed to read GeoIP CA certificate: %w", err)
+		}
+		caPool := x509.NewCertPool()
+		if !caPool.AppendCertsFromPEM(caPEM) {
+			return nil, fmt.Errorf("failed to parse GeoIP CA certificate")
+		}
+		tlsConfig = &tls.Config{
+			RootCAs:    caPool,
+			MinVersion: tls.VersionTLS13,
+		}
+	} else {
+		// Use system CA pool
+		tlsConfig = &tls.Config{
+			MinVersion: tls.VersionTLS13,
+		}
+	}
+	conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(credentials.NewTLS(tlsConfig)))
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect to GeoIP server: %w", err)
 	}
@@ -111,8 +137,29 @@ type RemoteAdminClient struct {
 }
 
 // NewRemoteAdminClient creates a remote GeoIP admin client.
-func NewRemoteAdminClient(addr string, token string) (*RemoteAdminClient, error) {
-	conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+// tlsCA is the path to the GeoIP server's CA certificate for verification.
+// If empty, system CA pool is used.
+func NewRemoteAdminClient(addr string, token string, tlsCA string) (*RemoteAdminClient, error) {
+	var tlsConfig *tls.Config
+	if tlsCA != "" {
+		caPEM, err := os.ReadFile(tlsCA)
+		if err != nil {
+			return nil, fmt.Errorf("failed to read GeoIP CA certificate: %w", err)
+		}
+		caPool := x509.NewCertPool()
+		if !caPool.AppendCertsFromPEM(caPEM) {
+			return nil, fmt.Errorf("failed to parse GeoIP CA certificate")
+		}
+		tlsConfig = &tls.Config{
+			RootCAs:    caPool,
+			MinVersion: tls.VersionTLS13,
+		}
+	} else {
+		tlsConfig = &tls.Config{
+			MinVersion: tls.VersionTLS13,
+		}
+	}
+	conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(credentials.NewTLS(tlsConfig)))
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect to GeoIP admin server: %w", err)
 	}
@@ -213,9 +260,10 @@ func (c *FfiClient) Close() error {
 // NewClient creates a GeoIP client based on configuration.
 // If remoteAddr is empty, creates an embedded client with the given manager.
 // If remoteAddr is provided, creates a remote gRPC client.
-func NewClient(remoteAddr string, manager *Manager) (GeoIPClient, error) {
+// tlsCA is the path to the GeoIP server's CA certificate (optional, uses system CA if empty).
+func NewClient(remoteAddr string, tlsCA string, manager *Manager) (GeoIPClient, error) {
 	if remoteAddr != "" {
-		return NewRemoteClient(remoteAddr)
+		return NewRemoteClient(remoteAddr, tlsCA)
 	}
 	if manager == nil {
 		return nil, fmt.Errorf("manager required for embedded mode")

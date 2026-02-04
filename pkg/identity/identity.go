@@ -697,3 +697,112 @@ func GetDataDir(appName string) (string, error) {
 	}
 	return filepath.Join(homeDir, "."+appName), nil
 }
+
+// ============================================================================
+// Paired Node Certificate Storage
+// ============================================================================
+
+// SaveNodeCert saves a signed node certificate to the nodes directory
+func SaveNodeCert(dataDir, nodeID string, certPEM []byte) error {
+	nodesDir := filepath.Join(dataDir, "nodes")
+	if err := os.MkdirAll(nodesDir, 0700); err != nil {
+		return fmt.Errorf("failed to create nodes directory: %w", err)
+	}
+
+	// Sanitize nodeID for filename (replace unsafe chars)
+	safeNodeID := sanitizeFilename(nodeID)
+	certPath := filepath.Join(nodesDir, safeNodeID+".crt")
+
+	if err := os.WriteFile(certPath, certPEM, 0644); err != nil {
+		return fmt.Errorf("failed to save node certificate: %w", err)
+	}
+
+	return nil
+}
+
+// LoadNodeCert loads a node certificate from the nodes directory
+func LoadNodeCert(dataDir, nodeID string) ([]byte, error) {
+	safeNodeID := sanitizeFilename(nodeID)
+	certPath := filepath.Join(dataDir, "nodes", safeNodeID+".crt")
+
+	certPEM, err := os.ReadFile(certPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read node certificate: %w", err)
+	}
+
+	return certPEM, nil
+}
+
+// LoadNodePublicKey loads a node's public key from its stored certificate
+func LoadNodePublicKey(dataDir, nodeID string) (ed25519.PublicKey, error) {
+	certPEM, err := LoadNodeCert(dataDir, nodeID)
+	if err != nil {
+		return nil, err
+	}
+
+	block, _ := pem.Decode(certPEM)
+	if block == nil {
+		return nil, errors.New("failed to decode certificate PEM")
+	}
+
+	cert, err := x509.ParseCertificate(block.Bytes)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse certificate: %w", err)
+	}
+
+	pubKey, ok := cert.PublicKey.(ed25519.PublicKey)
+	if !ok {
+		return nil, errors.New("certificate does not contain Ed25519 public key")
+	}
+
+	return pubKey, nil
+}
+
+// ListPairedNodes returns a list of all paired node IDs
+func ListPairedNodes(dataDir string) ([]string, error) {
+	nodesDir := filepath.Join(dataDir, "nodes")
+	entries, err := os.ReadDir(nodesDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return []string{}, nil
+		}
+		return nil, fmt.Errorf("failed to read nodes directory: %w", err)
+	}
+
+	var nodeIDs []string
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		name := entry.Name()
+		if strings.HasSuffix(name, ".crt") {
+			nodeIDs = append(nodeIDs, strings.TrimSuffix(name, ".crt"))
+		}
+	}
+
+	return nodeIDs, nil
+}
+
+// DeleteNodeCert deletes a node certificate from the nodes directory
+func DeleteNodeCert(dataDir, nodeID string) error {
+	safeNodeID := sanitizeFilename(nodeID)
+	certPath := filepath.Join(dataDir, "nodes", safeNodeID+".crt")
+	return os.Remove(certPath)
+}
+
+// sanitizeFilename replaces unsafe characters in filename
+func sanitizeFilename(name string) string {
+	// Replace characters that are unsafe in filenames
+	replacer := strings.NewReplacer(
+		"/", "_",
+		"\\", "_",
+		":", "_",
+		"*", "_",
+		"?", "_",
+		"\"", "_",
+		"<", "_",
+		">", "_",
+		"|", "_",
+	)
+	return replacer.Replace(name)
+}
