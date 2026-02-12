@@ -14,6 +14,12 @@ bin/
 /cmd/nitella/nitella
 /cmd/nitellad/nitellad
 
+/app/android/build
+/mobile_backend
+/libnitella.h
+/nitellad-rs/target/
+/nitellad-rs/bench/results/
+/nitellad-rs/bench/results_full/
 
 
 # Test binary
