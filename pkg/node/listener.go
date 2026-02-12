@@ -6,7 +6,6 @@ import (
 	"crypto/x509"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net"
 	"sync"
 	"sync/atomic"
@@ -18,6 +17,7 @@ import (
 	pb "github.com/ivere27/nitella/pkg/api/proxy"
 	"github.com/ivere27/nitella/pkg/log"
 	"github.com/ivere27/nitella/pkg/node/stats"
+	"github.com/ivere27/nitella/pkg/node/stream"
 )
 
 // ApprovalRequestTimeout is the maximum time to wait for an approval decision.
@@ -142,20 +142,6 @@ type ConnectionMetadata struct {
 	StartTime  time.Time
 	BytesIn    *int64 // Atomic
 	BytesOut   *int64 // Atomic
-}
-
-// CountingReader wraps an io.Reader and updates a counter atomically
-type CountingReader struct {
-	r io.Reader
-	c *int64
-}
-
-func (r *CountingReader) Read(p []byte) (n int, err error) {
-	n, err = r.r.Read(p)
-	if n > 0 {
-		atomic.AddInt64(r.c, int64(n))
-	}
-	return
 }
 
 // SetStatsService sets the statistics service for the listener.
@@ -915,9 +901,8 @@ func (p *EmbeddedListener) handleConn(conn net.Conn) {
 	go func() {
 		defer wg.Done()
 		// conn -> backend (BytesIn)
-		// Wrap conn in CountingReader
-		reader := &CountingReader{r: conn, c: &connBytesIn}
-		n, _ := io.Copy(backendConn, reader)
+		// Use SpliceProxy for zero-copy on Linux (if TCP) or pooled buffer copy otherwise
+		n, _ := stream.SpliceProxy(backendConn, conn, &connBytesIn)
 		p.addBytesIn(n)
 		closeWrite(backendConn)
 	}()
@@ -925,9 +910,8 @@ func (p *EmbeddedListener) handleConn(conn net.Conn) {
 	go func() {
 		defer wg.Done()
 		// backend -> conn (BytesOut)
-		// Wrap backendConn in CountingReader
-		reader := &CountingReader{r: backendConn, c: &connBytesOut}
-		n, _ := io.Copy(conn, reader)
+		// Use SpliceProxy for zero-copy on Linux (if TCP) or pooled buffer copy otherwise
+		n, _ := stream.SpliceProxy(conn, backendConn, &connBytesOut)
 		p.addBytesOut(n)
 		closeWrite(conn)
 	}()

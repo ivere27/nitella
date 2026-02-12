@@ -1,5 +1,6 @@
 #!/bin/bash
 set -e
+set -x
 
 # =============================================================================
 # Nitella Benchmark Suite — Go vs Rust
@@ -97,11 +98,11 @@ preflight() {
         log_ok "Go source: $ROOT_DIR/cmd/nitellad"
     fi
 
-    if [ ! -d "$ROOT_DIR/rust" ]; then
-        log_err "Rust source not found: $ROOT_DIR/rust"
+    if [ ! -d "$ROOT_DIR/nitellad-rs" ]; then
+        log_err "Rust source not found: $ROOT_DIR/nitellad-rs"
         fail=1
     else
-        log_ok "Rust source: $ROOT_DIR/rust"
+        log_ok "Rust source: $ROOT_DIR/nitellad-rs"
     fi
 
     if [ "$fail" -ne 0 ]; then
@@ -118,8 +119,8 @@ preflight() {
 cleanup_all() {
     log_info "Cleaning up..."
     kill "$BACKEND_PID" 2>/dev/null || true
-    pkill -f "nitellad" 2>/dev/null || true
-    pkill -f "nitellad-rs" 2>/dev/null || true
+    pkill -x "nitellad" 2>/dev/null || pkill -f "nitella_bench_go" 2>/dev/null || true
+    pkill -x "nitellad-rs" 2>/dev/null || pkill -f "nitella_bench_rust" 2>/dev/null || true
     pkill -f "monitor.sh" 2>/dev/null || true
     kill "$MONITOR_PID" 2>/dev/null || true
     rm -f "$BACKEND_BIN" "$GO_BIN" "$RUST_BIN"
@@ -138,8 +139,8 @@ build_all() {
     log_ok "Go binary: $GO_BIN (pprof enabled)"
 
     log_info "Building Rust nitellad-rs..."
-    cargo build --release --manifest-path "$ROOT_DIR/rust/Cargo.toml"
-    cp "$ROOT_DIR/rust/target/release/nitellad-rs" "$RUST_BIN"
+    cargo build --release --manifest-path "$ROOT_DIR/nitellad-rs/Cargo.toml"
+    cp "$ROOT_DIR/nitellad-rs/target/release/nitellad-rs" "$RUST_BIN"
     log_ok "Rust binary: $RUST_BIN"
 
     log_info "Building backend server..."
@@ -391,8 +392,8 @@ preflight
 
 # Ensure clean slate
 log_phase "Cleanup"
-pkill -f "nitellad" 2>/dev/null || true
-pkill -f "nitellad-rs" 2>/dev/null || true
+pkill -x "nitellad" 2>/dev/null || pkill -f "nitella_bench_go" 2>/dev/null || true
+pkill -x "nitellad-rs" 2>/dev/null || pkill -f "nitella_bench_rust" 2>/dev/null || true
 pkill -f "monitor.sh" 2>/dev/null || true
 sleep 2
 
