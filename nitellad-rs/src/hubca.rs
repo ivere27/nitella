@@ -1,12 +1,12 @@
-use std::sync::Arc;
-use std::net::ToSocketAddrs;
-use tokio::net::TcpStream;
-use tokio_rustls::{TlsConnector, rustls};
-use anyhow::{Result, Context, anyhow};
-use sha2::{Sha256, Digest};
-use rustls::client::danger::{ServerCertVerifier, HandshakeSignatureValid};
+use anyhow::{anyhow, Context, Result};
+use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerifier};
 use rustls::pki_types::{CertificateDer, ServerName, UnixTime};
-use rustls::{DigitallySignedStruct, SignatureScheme, ClientConfig};
+use rustls::{ClientConfig, DigitallySignedStruct, SignatureScheme};
+use sha2::{Digest, Sha256};
+use std::net::ToSocketAddrs;
+use std::sync::Arc;
+use tokio::net::TcpStream;
+use tokio_rustls::{rustls, TlsConnector};
 
 #[derive(Debug, Clone)]
 pub struct HubCAInfo {
@@ -76,48 +76,59 @@ pub async fn probe_hub_ca(hub_addr: &str) -> Result<HubCAInfo> {
     } else {
         hub_addr.to_string()
     };
-    
+
     // Remove protocol prefix if present
     let clean_addr = addr_str.replace("http://", "").replace("https://", "");
 
     // Resolve DNS
-    let socket_addr = clean_addr.to_socket_addrs()?.next().ok_or(anyhow!("Could not resolve address"))?;
-    
+    let socket_addr = clean_addr
+        .to_socket_addrs()?
+        .next()
+        .ok_or(anyhow!("Could not resolve address"))?;
+
     // Connect TCP
-    let stream = TcpStream::connect(socket_addr).await.context("Failed to connect TCP")?;
+    let stream = TcpStream::connect(socket_addr)
+        .await
+        .context("Failed to connect TCP")?;
 
     // Prepare TLS with NoVerifier
     let config = ClientConfig::builder()
         .dangerous()
         .with_custom_certificate_verifier(Arc::new(NoVerifier))
         .with_no_client_auth();
-        
+
     let connector = TlsConnector::from(Arc::new(config));
-    
+
     // Domain name extraction (simplified)
     let domain_str = clean_addr.split(':').next().unwrap_or("localhost");
-    let domain = ServerName::try_from(domain_str.to_string()).unwrap_or(ServerName::try_from("localhost".to_string()).unwrap());
+    let domain = ServerName::try_from(domain_str.to_string())
+        .unwrap_or(ServerName::try_from("localhost".to_string()).unwrap());
 
     // Connect TLS
-    let tls_stream = connector.connect(domain, stream).await.context("Failed to connect TLS")?;
-    
+    let tls_stream = connector
+        .connect(domain, stream)
+        .await
+        .context("Failed to connect TLS")?;
+
     // Get peer certificates
     let (_, session) = tls_stream.get_ref();
-    let peer_certs = session.peer_certificates().ok_or(anyhow!("No certificates presented"))?;
-    
+    let peer_certs = session
+        .peer_certificates()
+        .ok_or(anyhow!("No certificates presented"))?;
+
     if peer_certs.is_empty() {
         return Err(anyhow!("Empty certificate chain"));
     }
-    
+
     // Find CA (last cert or the only one, handling self-signed leaf)
     let ca_cert = peer_certs.last().unwrap();
-    
+
     // Convert to PEM
     let pem = pem::encode(&pem::Pem::new("CERTIFICATE", ca_cert.to_vec()));
-    
+
     // Compute fingerprint and emoji
     let (fingerprint, emoji_hash) = crate::crypto::compute_spki_fingerprint_and_emoji(&ca_cert)?;
-    
+
     Ok(HubCAInfo {
         ca_pem: pem.into_bytes(),
         fingerprint,

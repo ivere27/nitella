@@ -7,6 +7,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/sha512"
+	"crypto/subtle"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/hex"
@@ -460,6 +461,59 @@ func LoadWithPassphrase(dataDir, passphrase string) (*Identity, error) {
 	identity.Fingerprint = GenerateFingerprint(edKey.Public().(ed25519.PublicKey))
 
 	return identity, nil
+}
+
+// ImportFromPEM imports an identity from certificate and private key PEM content
+func ImportFromPEM(certPEM, keyPEM []byte, keyPassphrase string) (*Identity, error) {
+	// Parse certificate
+	block, _ := pem.Decode(certPEM)
+	if block == nil {
+		return nil, errors.New("failed to decode certificate PEM")
+	}
+	cert, err := x509.ParseCertificate(block.Bytes)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse certificate: %w", err)
+	}
+
+	// Verify it's a CA certificate
+	if !cert.IsCA {
+		return nil, errors.New("certificate is not a CA certificate")
+	}
+
+	// Parse key (handles both encrypted and unencrypted)
+	edKey, err := nitellacrypto.DecryptPrivateKeyFromPEM(keyPEM, keyPassphrase)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse private key: %w", err)
+	}
+
+	// Verify key matches certificate
+	certPubKey, ok := cert.PublicKey.(ed25519.PublicKey)
+	if !ok {
+		return nil, errors.New("certificate does not contain Ed25519 public key")
+	}
+
+	keyPubKey := edKey.Public().(ed25519.PublicKey)
+	if !pubKeysEqual(certPubKey, keyPubKey) {
+		return nil, errors.New("private key does not match certificate public key")
+	}
+
+	identity := &Identity{
+		RootKey:     edKey,
+		RootCert:    cert,
+		RootCertPEM: certPEM,
+		RootKeyPEM:  keyPEM,
+	}
+
+	// Generate emoji hash and fingerprint
+	identity.EmojiHash = GenerateEmojiHash(keyPubKey)
+	identity.Fingerprint = GenerateFingerprint(keyPubKey)
+
+	return identity, nil
+}
+
+// pubKeysEqual compares two Ed25519 public keys using constant-time comparison.
+func pubKeysEqual(a, b ed25519.PublicKey) bool {
+	return subtle.ConstantTimeCompare(a, b) == 1
 }
 
 // IsKeyEncrypted checks if the key file in the data directory is encrypted

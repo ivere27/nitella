@@ -65,7 +65,7 @@ func TestApproval_E2E_LocalAdminAPI(t *testing.T) {
 	time.Sleep(200 * time.Millisecond)
 
 	// 3. Connect to admin API
-	client, conn := connectAdminAPI(t, adminPort, token, caPath)
+	client, conn, nodePubKey := connectAdminAPI(t, adminPort, token, caPath)
 	defer conn.Close()
 
 	ctx := authContext(token)
@@ -73,15 +73,12 @@ func TestApproval_E2E_LocalAdminAPI(t *testing.T) {
 	// 4. Create proxy with REQUIRE_APPROVAL action
 	t.Log("=== Creating proxy with REQUIRE_APPROVAL ===")
 	proxyPort := getFreePort(t)
-	createResp, err := client.CreateProxy(ctx, &pb.CreateProxyRequest{
-		Name:          "approval-test-proxy",
-		ListenAddr:    fmt.Sprintf("127.0.0.1:%d", proxyPort),
+	createResp := cmdCreateProxy(t, client, ctx, nodePubKey, &pb.CreateProxyRequest{
+		Name:           "approval-test-proxy",
+		ListenAddr:     fmt.Sprintf("127.0.0.1:%d", proxyPort),
 		DefaultBackend: backend.Addr().String(),
-		DefaultAction: common.ActionType_ACTION_TYPE_REQUIRE_APPROVAL,
+		DefaultAction:  common.ActionType_ACTION_TYPE_REQUIRE_APPROVAL,
 	})
-	if err != nil {
-		t.Fatalf("CreateProxy failed: %v", err)
-	}
 	if !createResp.Success {
 		t.Fatalf("CreateProxy returned error: %s", createResp.ErrorMessage)
 	}
@@ -89,10 +86,7 @@ func TestApproval_E2E_LocalAdminAPI(t *testing.T) {
 	t.Logf("Created proxy: %s on port %d with REQUIRE_APPROVAL", proxyID, proxyPort)
 
 	// 5. Verify proxy is running
-	status, err := client.GetStatus(ctx, &pb.GetStatusRequest{ProxyId: proxyID})
-	if err != nil {
-		t.Fatalf("GetStatus failed: %v", err)
-	}
+	status := cmdGetProxyStatus(t, client, ctx, nodePubKey, proxyID)
 	if !status.Running {
 		t.Fatal("Proxy should be running")
 	}
@@ -109,7 +103,7 @@ func TestApproval_E2E_LocalAdminAPI(t *testing.T) {
 
 	// 7. Now add an ALLOW rule with higher priority to override
 	t.Log("=== Adding ALLOW rule to override ===")
-	allowResp, err := client.AddRule(ctx, &pb.AddRuleRequest{
+	allowRule := cmdAddRule(t, client, ctx, nodePubKey, &pb.AddRuleRequest{
 		ProxyId: proxyID,
 		Rule: &pb.Rule{
 			Name:     "Allow Override",
@@ -125,10 +119,7 @@ func TestApproval_E2E_LocalAdminAPI(t *testing.T) {
 			},
 		},
 	})
-	if err != nil {
-		t.Fatalf("AddRule failed: %v", err)
-	}
-	t.Logf("Added allow rule: %s", allowResp.Id)
+	t.Logf("Added allow rule: %s", allowRule.Id)
 
 	// 8. Connection should now succeed
 	t.Log("=== Testing connection with ALLOW rule ===")
@@ -138,18 +129,15 @@ func TestApproval_E2E_LocalAdminAPI(t *testing.T) {
 	t.Log("Connection succeeded with ALLOW rule override")
 
 	// 9. Remove the allow rule
-	_, err = client.RemoveRule(ctx, &pb.RemoveRuleRequest{
+	cmdRemoveRule(t, client, ctx, nodePubKey, &pb.RemoveRuleRequest{
 		ProxyId: proxyID,
-		RuleId:  allowResp.Id,
+		RuleId:  allowRule.Id,
 	})
-	if err != nil {
-		t.Fatalf("RemoveRule failed: %v", err)
-	}
 	t.Log("Removed ALLOW rule")
 
 	// 10. Test rule with REQUIRE_APPROVAL condition
 	t.Log("=== Adding rule with REQUIRE_APPROVAL for specific condition ===")
-	approvalRuleResp, err := client.AddRule(ctx, &pb.AddRuleRequest{
+	approvalRule := cmdAddRule(t, client, ctx, nodePubKey, &pb.AddRuleRequest{
 		ProxyId: proxyID,
 		Rule: &pb.Rule{
 			Name:     "Approval for Local",
@@ -165,16 +153,10 @@ func TestApproval_E2E_LocalAdminAPI(t *testing.T) {
 			},
 		},
 	})
-	if err != nil {
-		t.Fatalf("AddRule (approval) failed: %v", err)
-	}
-	t.Logf("Added approval rule: %s", approvalRuleResp.Id)
+	t.Logf("Added approval rule: %s", approvalRule.Id)
 
 	// 11. List rules to verify
-	rulesResp, err := client.ListRules(ctx, &pb.ListRulesRequest{ProxyId: proxyID})
-	if err != nil {
-		t.Fatalf("ListRules failed: %v", err)
-	}
+	rulesResp := cmdListRules(t, client, ctx, nodePubKey, &pb.ListRulesRequest{ProxyId: proxyID})
 	t.Logf("Proxy has %d rules:", len(rulesResp.Rules))
 	for _, r := range rulesResp.Rules {
 		t.Logf("  - %s: %s (action=%v, priority=%d)", r.Id, r.Name, r.Action, r.Priority)
@@ -207,27 +189,24 @@ func TestApproval_E2E_WithApprovalManager(t *testing.T) {
 	time.Sleep(200 * time.Millisecond)
 
 	// Connect to admin API
-	client, conn := connectAdminAPI(t, adminPort, token, caPath)
+	client, conn, nodePubKey := connectAdminAPI(t, adminPort, token, caPath)
 	defer conn.Close()
 
 	ctx := authContext(token)
 
 	// Create proxy with REQUIRE_APPROVAL as default action
 	proxyPort := getFreePort(t)
-	createResp, err := client.CreateProxy(ctx, &pb.CreateProxyRequest{
+	createResp := cmdCreateProxy(t, client, ctx, nodePubKey, &pb.CreateProxyRequest{
 		Name:           "approval-manager-proxy",
 		ListenAddr:     fmt.Sprintf("127.0.0.1:%d", proxyPort),
 		DefaultBackend: backend.Addr().String(),
 		DefaultAction:  common.ActionType_ACTION_TYPE_REQUIRE_APPROVAL,
 	})
-	if err != nil {
-		t.Fatalf("CreateProxy failed: %v", err)
-	}
 	proxyID := createResp.ProxyId
 	t.Logf("Created proxy %s with REQUIRE_APPROVAL", proxyID)
 
 	// Get status to get actual listen address
-	status, _ := client.GetStatus(ctx, &pb.GetStatusRequest{ProxyId: proxyID})
+	status := cmdGetProxyStatus(t, client, ctx, nodePubKey, proxyID)
 	listenAddr := status.ListenAddr
 
 	// Start connection in goroutine (will block waiting for approval)
@@ -244,16 +223,16 @@ func TestApproval_E2E_WithApprovalManager(t *testing.T) {
 
 		// This connection will be held pending if ApprovalManager is configured
 		// or blocked immediately if not
-		conn, err := net.DialTimeout("tcp", listenAddr, 5*time.Second)
+		tcpConn, err := net.DialTimeout("tcp", listenAddr, 5*time.Second)
 		if err != nil {
 			connResult.err = err
 			return
 		}
-		defer conn.Close()
+		defer tcpConn.Close()
 
-		conn.SetReadDeadline(time.Now().Add(10 * time.Second))
+		tcpConn.SetReadDeadline(time.Now().Add(10 * time.Second))
 		buf := make([]byte, 1024)
-		n, err := conn.Read(buf)
+		n, err := tcpConn.Read(buf)
 		if err != nil {
 			connResult.err = err
 			return
@@ -307,26 +286,23 @@ func TestApproval_E2E_ResolveViaAdminAPI(t *testing.T) {
 
 	time.Sleep(200 * time.Millisecond)
 
-	client, conn := connectAdminAPI(t, adminPort, token, caPath)
+	client, conn, nodePubKey := connectAdminAPI(t, adminPort, token, caPath)
 	defer conn.Close()
 
 	ctx := authContext(token)
 
 	// Create proxy
 	proxyPort := getFreePort(t)
-	createResp, err := client.CreateProxy(ctx, &pb.CreateProxyRequest{
+	createResp := cmdCreateProxy(t, client, ctx, nodePubKey, &pb.CreateProxyRequest{
 		Name:           "resolve-test-proxy",
 		ListenAddr:     fmt.Sprintf("127.0.0.1:%d", proxyPort),
 		DefaultBackend: backend.Addr().String(),
 		DefaultAction:  common.ActionType_ACTION_TYPE_ALLOW,
 	})
-	if err != nil {
-		t.Fatalf("CreateProxy failed: %v", err)
-	}
 	t.Logf("Created proxy: %s", createResp.ProxyId)
 
 	// Test ResolveApproval RPC (even without pending approval, it should handle gracefully)
-	resolveResp, err := client.ResolveApproval(ctx, &pb.ResolveApprovalRequest{
+	resolveResp, err := cmdResolveApprovalRaw(t, client, ctx, nodePubKey, &pb.ResolveApprovalRequest{
 		ReqId:           "test-req-123",
 		Action:          common.ApprovalActionType_APPROVAL_ACTION_TYPE_ALLOW,
 		DurationSeconds: 3600,
@@ -346,12 +322,8 @@ func TestApproval_E2E_ResolveViaAdminAPI(t *testing.T) {
 	}
 
 	// Test ListActiveApprovals
-	activeResp, err := client.ListActiveApprovals(ctx, &pb.ListActiveApprovalsRequest{})
-	if err != nil {
-		t.Logf("ListActiveApprovals: %v", err)
-	} else {
-		t.Logf("Active approvals: %d", len(activeResp.Approvals))
-	}
+	activeResp := cmdListActiveApprovals(t, client, ctx, nodePubKey, &pb.ListActiveApprovalsRequest{})
+	t.Logf("Active approvals: %d", len(activeResp.Approvals))
 
 	t.Log("=== Resolve Via Admin API Test Completed ===")
 }
@@ -375,26 +347,23 @@ func TestApproval_E2E_GlobalRules(t *testing.T) {
 
 	time.Sleep(200 * time.Millisecond)
 
-	client, conn := connectAdminAPI(t, adminPort, token, caPath)
+	client, conn, nodePubKey := connectAdminAPI(t, adminPort, token, caPath)
 	defer conn.Close()
 
 	ctx := authContext(token)
 
 	// Create proxy with default ALLOW
 	proxyPort := getFreePort(t)
-	createResp, err := client.CreateProxy(ctx, &pb.CreateProxyRequest{
+	createResp := cmdCreateProxy(t, client, ctx, nodePubKey, &pb.CreateProxyRequest{
 		Name:           "global-rules-proxy",
 		ListenAddr:     fmt.Sprintf("127.0.0.1:%d", proxyPort),
 		DefaultBackend: backend.Addr().String(),
 		DefaultAction:  common.ActionType_ACTION_TYPE_ALLOW,
 	})
-	if err != nil {
-		t.Fatalf("CreateProxy failed: %v", err)
-	}
 	proxyID := createResp.ProxyId
 	t.Logf("Created proxy: %s", proxyID)
 
-	status, _ := client.GetStatus(ctx, &pb.GetStatusRequest{ProxyId: proxyID})
+	status := cmdGetProxyStatus(t, client, ctx, nodePubKey, proxyID)
 	listenAddr := status.ListenAddr
 
 	// 1. Baseline - connection should succeed
@@ -406,13 +375,10 @@ func TestApproval_E2E_GlobalRules(t *testing.T) {
 
 	// 2. Block IP globally
 	t.Log("=== Testing BlockIP globally ===")
-	_, err = client.BlockIP(ctx, &pb.BlockIPRequest{
+	cmdBlockIP(t, client, ctx, nodePubKey, &pb.BlockIPRequest{
 		Ip:              "127.0.0.1",
 		DurationSeconds: 60, // 1 minute
 	})
-	if err != nil {
-		t.Fatalf("BlockIP failed: %v", err)
-	}
 	t.Log("Blocked IP globally")
 
 	// 3. Connection should now be blocked
@@ -423,7 +389,7 @@ func TestApproval_E2E_GlobalRules(t *testing.T) {
 	}
 
 	// 4. List global rules
-	listResp, err := client.ListGlobalRules(ctx, &pb.ListGlobalRulesRequest{})
+	listResp, err := cmdListGlobalRules(t, client, ctx, nodePubKey)
 	if err != nil {
 		t.Logf("ListGlobalRules: %v (may not be implemented)", err)
 		t.Log("=== Global Rules E2E Test Completed (partial - ListGlobalRules not implemented) ===")
@@ -438,12 +404,10 @@ func TestApproval_E2E_GlobalRules(t *testing.T) {
 	// 5. Remove global block by listing and removing first rule
 	if len(listResp.Rules) > 0 {
 		ruleID := listResp.Rules[0].Id
-		removeResp, err := client.RemoveGlobalRule(ctx, &pb.RemoveGlobalRuleRequest{
+		removeResp := cmdRemoveGlobalRule(t, client, ctx, nodePubKey, &pb.RemoveGlobalRuleRequest{
 			RuleId: ruleID,
 		})
-		if err != nil {
-			t.Logf("RemoveGlobalRule: %v", err)
-		} else if removeResp.Success {
+		if removeResp.Success {
 			t.Logf("Removed global block rule: %s", ruleID)
 		}
 	}

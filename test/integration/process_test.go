@@ -20,6 +20,13 @@ import (
 var nitelladBinary string
 
 func TestMain(m *testing.M) {
+	// If NITELLA_CHILD_BINARY is set, use it directly (e.g. for testing Rust binary)
+	if envBin := os.Getenv("NITELLA_CHILD_BINARY"); envBin != "" {
+		nitelladBinary = envBin
+		fmt.Printf("Using existing binary from NITELLA_CHILD_BINARY: %s\n", nitelladBinary)
+		os.Exit(m.Run())
+	}
+
 	// Build nitellad once for all tests
 	tmpDir, err := os.MkdirTemp("", "nitella-test-build")
 	if err != nil {

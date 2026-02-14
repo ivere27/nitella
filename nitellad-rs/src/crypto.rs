@@ -1,23 +1,19 @@
-use aes_gcm::{Aes256Gcm, KeyInit, aead::Aead, Nonce};
-use sha2::{Sha256, Sha512, Digest};
-use hkdf::Hkdf;
-use x25519_dalek::{PublicKey as X25519PublicKey, StaticSecret};
-use ed25519_dalek::{VerifyingKey, SigningKey, Signer};
-use anyhow::{Result, anyhow};
-use rand::{RngCore, thread_rng};
-use crate::proto::common::{EncryptedPayload, CryptoAlgorithm};
+use crate::proto::common::{CryptoAlgorithm, EncryptedPayload};
+use aes_gcm::{aead::Aead, Aes256Gcm, KeyInit, Nonce};
+use anyhow::{anyhow, Result};
+use ed25519_dalek::{Signer, SigningKey, VerifyingKey};
 use hex;
+use hkdf::Hkdf;
+use rand::{thread_rng, RngCore};
+use sha2::{Digest, Sha256, Sha512};
+use x25519_dalek::{PublicKey as X25519PublicKey, StaticSecret};
 use x509_parser::prelude::*;
 
 const EMOJIS: &[&str] = &[
-	"🐶", "🐱", "🐭", "🐹", "🐰", "🦊", "🐻", "🐼",
-	"🐨", "🐯", "🦁", "🐮", "🐷", "🐸", "🐵", "🐔",
-	"🐧", "🐦", "🐤", "🦆", "🦅", "🦉", "🦇", "🐺",
-	"🐗", "🐴", "🦄", "🐝", "🐛", "🦋", "🐌", "🐞",
-	"🐜", "🦟", "🦗", "🕷", "🦂", "🐢", "🐍", "🦎",
-	"🦖", "🦕", "🐙", "🦑", "🦐", "🦞", "🦀", "🐡",
-	"🐠", "🐟", "🐬", "🐳", "🐋", "🦈", "🐊", "🐅",
-	"🐆", "🦓", "🦍", "🦧", "🐘", "🦛", "🦏", "🐪",
+    "🐶", "🐱", "🐭", "🐹", "🐰", "🦊", "🐻", "🐼", "🐨", "🐯", "🦁", "🐮", "🐷", "🐸", "🐵", "🐔",
+    "🐧", "🐦", "🐤", "🦆", "🦅", "🦉", "🦇", "🐺", "🐗", "🐴", "🦄", "🐝", "🐛", "🦋", "🐌", "🐞",
+    "🐜", "🦟", "🦗", "🕷", "🦂", "🐢", "🐍", "🦎", "🦖", "🦕", "🐙", "🦑", "🦐", "🦞", "🦀", "🐡",
+    "🐠", "🐟", "🐬", "🐳", "🐋", "🦈", "🐊", "🐅", "🐆", "🦓", "🦍", "🦧", "🐘", "🦛", "🦏", "🐪",
 ];
 
 // Reconstruct standard ASN.1 SPKI header for Ed25519 (OID 1.3.101.112)
@@ -28,33 +24,39 @@ const ED25519_SPKI_PREFIX: &[u8] = &[
     0x06, 0x03, // OID, 3 bytes
     0x2b, 0x65, 0x70, // 1.3.101.112
     0x03, 0x21, // BIT STRING, 33 bytes
-    0x00        // Unused bits
+    0x00, // Unused bits
 ];
 
 pub fn compute_spki_fingerprint_and_emoji(cert_der: &[u8]) -> Result<(String, String)> {
-    let (_, x509) = X509Certificate::from_der(cert_der).map_err(|e| anyhow!("Failed to parse X509: {}", e))?;
-    
+    let (_, x509) =
+        X509Certificate::from_der(cert_der).map_err(|e| anyhow!("Failed to parse X509: {}", e))?;
+
     // Check if Ed25519
-    let oid = x509.tbs_certificate.subject_pki.algorithm.algorithm.to_string();
+    let oid = x509
+        .tbs_certificate
+        .subject_pki
+        .algorithm
+        .algorithm
+        .to_string();
     let is_ed25519 = oid == "1.3.101.112";
 
     let spki_bytes = if is_ed25519 {
         // Construct SPKI from raw key bytes
         let key_bits = &x509.tbs_certificate.subject_pki.subject_public_key;
         let key_bytes = key_bits.data.as_ref();
-        
+
         if key_bytes.len() == 32 {
             let mut buf = Vec::with_capacity(ED25519_SPKI_PREFIX.len() + key_bytes.len());
             buf.extend_from_slice(ED25519_SPKI_PREFIX);
             buf.extend_from_slice(key_bytes);
             buf
         } else {
-             // Fallback to cert hash if key length mismatch
-             // This shouldn't happen for valid Ed25519 certs
-             return Ok((
-                 hex::encode(Sha256::digest(cert_der)),
-                 hash_to_emojis(&Sha256::digest(cert_der))
-             ));
+            // Fallback to cert hash if key length mismatch
+            // This shouldn't happen for valid Ed25519 certs
+            return Ok((
+                hex::encode(Sha256::digest(cert_der)),
+                hash_to_emojis(&Sha256::digest(cert_der)),
+            ));
         }
     } else {
         // For non-Ed25519, we don't have easy SPKI reconstruction in this simplified logic.
@@ -62,15 +64,15 @@ pub fn compute_spki_fingerprint_and_emoji(cert_der: &[u8]) -> Result<(String, St
         // User will have to live with mismatch if using RSA, or verify against Cert Trace.
         // But Nitella implies Ed25519 mostly.
         return Ok((
-             hex::encode(Sha256::digest(cert_der)),
-             hash_to_emojis(&Sha256::digest(cert_der))
-         ));
+            hex::encode(Sha256::digest(cert_der)),
+            hash_to_emojis(&Sha256::digest(cert_der)),
+        ));
     };
 
     let hash = Sha256::digest(&spki_bytes);
     let hex_fingerprint = hex::encode(hash);
     let emoji = hash_to_emojis(&hash);
-    
+
     Ok((hex_fingerprint, emoji))
 }
 
@@ -86,10 +88,7 @@ fn hash_to_emojis(hash: &[u8]) -> String {
     parts.join(" ")
 }
 
-pub fn decrypt(
-    payload: &EncryptedPayload,
-    recipient_priv_key: &SigningKey,
-) -> Result<Vec<u8>> {
+pub fn decrypt(payload: &EncryptedPayload, recipient_priv_key: &SigningKey) -> Result<Vec<u8>> {
     // 1. Convert Ed25519 Priv Key (Seed) to X25519 StaticSecret
     let x25519_priv = ed25519_priv_to_x25519(recipient_priv_key);
 
@@ -108,8 +107,12 @@ pub fn decrypt(
     // We need our own X25519 Public Key for the info string
     let recipient_pub_ed = recipient_priv_key.verifying_key();
     let recipient_pub_x = ed25519_pub_to_x25519(&recipient_pub_ed)?;
-    
-    let aes_key = derive_key(shared_secret.as_bytes(), ephemeral_pub.as_bytes(), recipient_pub_x.as_bytes())?;
+
+    let aes_key = derive_key(
+        shared_secret.as_bytes(),
+        ephemeral_pub.as_bytes(),
+        recipient_pub_x.as_bytes(),
+    )?;
 
     // 5. Decrypt
     if payload.nonce.len() != 12 {
@@ -125,7 +128,8 @@ pub fn decrypt(
         aad,
     };
 
-    let plaintext = cipher.decrypt(nonce, payload_cipher)
+    let plaintext = cipher
+        .decrypt(nonce, payload_cipher)
         .map_err(|e| anyhow!("Decryption failed: {}", e))?;
 
     Ok(plaintext)
@@ -148,15 +152,19 @@ pub fn encrypt(
     let shared_secret = ephemeral_priv.diffie_hellman(&recipient_pub_x);
 
     // 4. Derive AES Key
-    let aes_key = derive_key(shared_secret.as_bytes(), ephemeral_pub.as_bytes(), recipient_pub_x.as_bytes())?;
+    let aes_key = derive_key(
+        shared_secret.as_bytes(),
+        ephemeral_pub.as_bytes(),
+        recipient_pub_x.as_bytes(),
+    )?;
 
     // 5. Encrypt
     let mut nonce_bytes = [0u8; 12];
     thread_rng().fill_bytes(&mut nonce_bytes);
     let nonce = Nonce::from_slice(&nonce_bytes);
-    
+
     let cipher = Aes256Gcm::new_from_slice(&aes_key).map_err(|e| anyhow!(e))?;
-    
+
     // AAD is Ephemeral Public Key
     let aad = ephemeral_pub.as_bytes();
     let payload_cipher = aes_gcm::aead::Payload {
@@ -164,7 +172,8 @@ pub fn encrypt(
         aad,
     };
 
-    let ciphertext = cipher.encrypt(nonce, payload_cipher)
+    let ciphertext = cipher
+        .encrypt(nonce, payload_cipher)
         .map_err(|e| anyhow!("Encryption failed: {}", e))?;
 
     // 6. Sign: EphemeralPubKey + Nonce + Ciphertext
@@ -187,10 +196,7 @@ pub fn encrypt(
 
 /// Verify the Ed25519 signature on an EncryptedPayload.
 /// Matches Go's nitellacrypto.VerifySignature().
-pub fn verify_signature(
-    payload: &EncryptedPayload,
-    sender_pub_key: &VerifyingKey,
-) -> Result<()> {
+pub fn verify_signature(payload: &EncryptedPayload, sender_pub_key: &VerifyingKey) -> Result<()> {
     use ed25519_dalek::Verifier;
     if payload.signature.is_empty() {
         return Err(anyhow!("payload is not signed"));
@@ -202,12 +208,15 @@ pub fn verify_signature(
     sig_input.extend_from_slice(&payload.nonce);
     sig_input.extend_from_slice(&payload.ciphertext);
 
-    let sig_bytes: [u8; 64] = payload.signature.as_slice()
+    let sig_bytes: [u8; 64] = payload
+        .signature
+        .as_slice()
         .try_into()
         .map_err(|_| anyhow!("Invalid signature length: {}", payload.signature.len()))?;
     let signature = ed25519_dalek::Signature::from_bytes(&sig_bytes);
 
-    sender_pub_key.verify(&sig_input, &signature)
+    sender_pub_key
+        .verify(&sig_input, &signature)
         .map_err(|e| anyhow!("Signature verification failed: {}", e))
 }
 
@@ -220,7 +229,8 @@ fn derive_key(shared_secret: &[u8], ephemeral_pub: &[u8], recipient_pub: &[u8]) 
 
     let hkdf = Hkdf::<Sha256>::new(None, shared_secret);
     let mut okm = [0u8; 32];
-    hkdf.expand(&info, &mut okm).map_err(|_| anyhow!("HKDF failed"))?;
+    hkdf.expand(&info, &mut okm)
+        .map_err(|_| anyhow!("HKDF failed"))?;
     Ok(okm.to_vec())
 }
 
@@ -234,7 +244,7 @@ fn ed25519_priv_to_x25519(ed_key: &SigningKey) -> StaticSecret {
 
     let mut clamped = [0u8; 32];
     clamped.copy_from_slice(&hash[0..32]);
-    
+
     clamped[0] &= 248;
     clamped[31] &= 127;
     clamped[31] |= 64;

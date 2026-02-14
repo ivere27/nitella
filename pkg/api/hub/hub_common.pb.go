@@ -134,7 +134,6 @@ type CommandType int32
 
 const (
 	CommandType_COMMAND_TYPE_UNSPECIFIED            CommandType = 0
-	CommandType_COMMAND_TYPE_EXECUTE                CommandType = 1
 	CommandType_COMMAND_TYPE_ADD_RULE               CommandType = 2
 	CommandType_COMMAND_TYPE_REMOVE_RULE            CommandType = 3
 	CommandType_COMMAND_TYPE_GET_ACTIVE_CONNECTIONS CommandType = 4
@@ -142,6 +141,9 @@ const (
 	CommandType_COMMAND_TYPE_CLOSE_ALL_CONNECTIONS  CommandType = 6
 	CommandType_COMMAND_TYPE_STATS_CONTROL          CommandType = 7
 	CommandType_COMMAND_TYPE_LIST_PROXIES           CommandType = 8
+	CommandType_COMMAND_TYPE_LIST_RULES             CommandType = 9
+	CommandType_COMMAND_TYPE_STATUS                 CommandType = 10 // Get node status
+	CommandType_COMMAND_TYPE_GET_METRICS            CommandType = 11 // Get node metrics
 	// Proxy Template Management
 	CommandType_COMMAND_TYPE_APPLY_PROXY   CommandType = 20 // Apply proxy config to node
 	CommandType_COMMAND_TYPE_UNAPPLY_PROXY CommandType = 21 // Remove proxy config from node
@@ -149,13 +151,32 @@ const (
 	CommandType_COMMAND_TYPE_PROXY_UPDATE  CommandType = 23 // Notification: proxy config updated
 	// Approval Workflow
 	CommandType_COMMAND_TYPE_RESOLVE_APPROVAL CommandType = 30 // Resolve a pending approval request
+	// Proxy Lifecycle (Direct gRPC SecureCommand)
+	CommandType_COMMAND_TYPE_CREATE_PROXY      CommandType = 40
+	CommandType_COMMAND_TYPE_DELETE_PROXY      CommandType = 41
+	CommandType_COMMAND_TYPE_ENABLE_PROXY      CommandType = 42
+	CommandType_COMMAND_TYPE_DISABLE_PROXY     CommandType = 43
+	CommandType_COMMAND_TYPE_UPDATE_PROXY      CommandType = 44
+	CommandType_COMMAND_TYPE_RESTART_LISTENERS CommandType = 45
+	CommandType_COMMAND_TYPE_RELOAD_RULES      CommandType = 46
+	// Quick Actions (Direct gRPC SecureCommand)
+	CommandType_COMMAND_TYPE_BLOCK_IP           CommandType = 50
+	CommandType_COMMAND_TYPE_ALLOW_IP           CommandType = 51
+	CommandType_COMMAND_TYPE_LIST_GLOBAL_RULES  CommandType = 52
+	CommandType_COMMAND_TYPE_REMOVE_GLOBAL_RULE CommandType = 53
+	// GeoIP (Direct gRPC SecureCommand)
+	CommandType_COMMAND_TYPE_CONFIGURE_GEOIP  CommandType = 60
+	CommandType_COMMAND_TYPE_GET_GEOIP_STATUS CommandType = 61
+	CommandType_COMMAND_TYPE_LOOKUP_IP        CommandType = 62
+	// Approval Management (Direct gRPC SecureCommand)
+	CommandType_COMMAND_TYPE_LIST_ACTIVE_APPROVALS CommandType = 70
+	CommandType_COMMAND_TYPE_CANCEL_APPROVAL       CommandType = 71
 )
 
 // Enum value maps for CommandType.
 var (
 	CommandType_name = map[int32]string{
 		0:  "COMMAND_TYPE_UNSPECIFIED",
-		1:  "COMMAND_TYPE_EXECUTE",
 		2:  "COMMAND_TYPE_ADD_RULE",
 		3:  "COMMAND_TYPE_REMOVE_RULE",
 		4:  "COMMAND_TYPE_GET_ACTIVE_CONNECTIONS",
@@ -163,15 +184,33 @@ var (
 		6:  "COMMAND_TYPE_CLOSE_ALL_CONNECTIONS",
 		7:  "COMMAND_TYPE_STATS_CONTROL",
 		8:  "COMMAND_TYPE_LIST_PROXIES",
+		9:  "COMMAND_TYPE_LIST_RULES",
+		10: "COMMAND_TYPE_STATUS",
+		11: "COMMAND_TYPE_GET_METRICS",
 		20: "COMMAND_TYPE_APPLY_PROXY",
 		21: "COMMAND_TYPE_UNAPPLY_PROXY",
 		22: "COMMAND_TYPE_GET_APPLIED",
 		23: "COMMAND_TYPE_PROXY_UPDATE",
 		30: "COMMAND_TYPE_RESOLVE_APPROVAL",
+		40: "COMMAND_TYPE_CREATE_PROXY",
+		41: "COMMAND_TYPE_DELETE_PROXY",
+		42: "COMMAND_TYPE_ENABLE_PROXY",
+		43: "COMMAND_TYPE_DISABLE_PROXY",
+		44: "COMMAND_TYPE_UPDATE_PROXY",
+		45: "COMMAND_TYPE_RESTART_LISTENERS",
+		46: "COMMAND_TYPE_RELOAD_RULES",
+		50: "COMMAND_TYPE_BLOCK_IP",
+		51: "COMMAND_TYPE_ALLOW_IP",
+		52: "COMMAND_TYPE_LIST_GLOBAL_RULES",
+		53: "COMMAND_TYPE_REMOVE_GLOBAL_RULE",
+		60: "COMMAND_TYPE_CONFIGURE_GEOIP",
+		61: "COMMAND_TYPE_GET_GEOIP_STATUS",
+		62: "COMMAND_TYPE_LOOKUP_IP",
+		70: "COMMAND_TYPE_LIST_ACTIVE_APPROVALS",
+		71: "COMMAND_TYPE_CANCEL_APPROVAL",
 	}
 	CommandType_value = map[string]int32{
 		"COMMAND_TYPE_UNSPECIFIED":            0,
-		"COMMAND_TYPE_EXECUTE":                1,
 		"COMMAND_TYPE_ADD_RULE":               2,
 		"COMMAND_TYPE_REMOVE_RULE":            3,
 		"COMMAND_TYPE_GET_ACTIVE_CONNECTIONS": 4,
@@ -179,11 +218,30 @@ var (
 		"COMMAND_TYPE_CLOSE_ALL_CONNECTIONS":  6,
 		"COMMAND_TYPE_STATS_CONTROL":          7,
 		"COMMAND_TYPE_LIST_PROXIES":           8,
+		"COMMAND_TYPE_LIST_RULES":             9,
+		"COMMAND_TYPE_STATUS":                 10,
+		"COMMAND_TYPE_GET_METRICS":            11,
 		"COMMAND_TYPE_APPLY_PROXY":            20,
 		"COMMAND_TYPE_UNAPPLY_PROXY":          21,
 		"COMMAND_TYPE_GET_APPLIED":            22,
 		"COMMAND_TYPE_PROXY_UPDATE":           23,
 		"COMMAND_TYPE_RESOLVE_APPROVAL":       30,
+		"COMMAND_TYPE_CREATE_PROXY":           40,
+		"COMMAND_TYPE_DELETE_PROXY":           41,
+		"COMMAND_TYPE_ENABLE_PROXY":           42,
+		"COMMAND_TYPE_DISABLE_PROXY":          43,
+		"COMMAND_TYPE_UPDATE_PROXY":           44,
+		"COMMAND_TYPE_RESTART_LISTENERS":      45,
+		"COMMAND_TYPE_RELOAD_RULES":           46,
+		"COMMAND_TYPE_BLOCK_IP":               50,
+		"COMMAND_TYPE_ALLOW_IP":               51,
+		"COMMAND_TYPE_LIST_GLOBAL_RULES":      52,
+		"COMMAND_TYPE_REMOVE_GLOBAL_RULE":     53,
+		"COMMAND_TYPE_CONFIGURE_GEOIP":        60,
+		"COMMAND_TYPE_GET_GEOIP_STATUS":       61,
+		"COMMAND_TYPE_LOOKUP_IP":              62,
+		"COMMAND_TYPE_LIST_ACTIVE_APPROVALS":  70,
+		"COMMAND_TYPE_CANCEL_APPROVAL":        71,
 	}
 )
 
@@ -1381,22 +1439,41 @@ const file_hub_hub_common_proto_rawDesc = "" +
 	"\x13NODE_STATUS_OFFLINE\x10\x01\x12\x16\n" +
 	"\x12NODE_STATUS_ONLINE\x10\x02\x12\x17\n" +
 	"\x13NODE_STATUS_BLOCKED\x10\x03\x12\x1a\n" +
-	"\x16NODE_STATUS_CONNECTING\x10\x04*\xcf\x03\n" +
+	"\x16NODE_STATUS_CONNECTING\x10\x04*\x98\b\n" +
 	"\vCommandType\x12\x1c\n" +
-	"\x18COMMAND_TYPE_UNSPECIFIED\x10\x00\x12\x18\n" +
-	"\x14COMMAND_TYPE_EXECUTE\x10\x01\x12\x19\n" +
+	"\x18COMMAND_TYPE_UNSPECIFIED\x10\x00\x12\x19\n" +
 	"\x15COMMAND_TYPE_ADD_RULE\x10\x02\x12\x1c\n" +
 	"\x18COMMAND_TYPE_REMOVE_RULE\x10\x03\x12'\n" +
 	"#COMMAND_TYPE_GET_ACTIVE_CONNECTIONS\x10\x04\x12!\n" +
 	"\x1dCOMMAND_TYPE_CLOSE_CONNECTION\x10\x05\x12&\n" +
 	"\"COMMAND_TYPE_CLOSE_ALL_CONNECTIONS\x10\x06\x12\x1e\n" +
 	"\x1aCOMMAND_TYPE_STATS_CONTROL\x10\a\x12\x1d\n" +
-	"\x19COMMAND_TYPE_LIST_PROXIES\x10\b\x12\x1c\n" +
+	"\x19COMMAND_TYPE_LIST_PROXIES\x10\b\x12\x1b\n" +
+	"\x17COMMAND_TYPE_LIST_RULES\x10\t\x12\x17\n" +
+	"\x13COMMAND_TYPE_STATUS\x10\n" +
+	"\x12\x1c\n" +
+	"\x18COMMAND_TYPE_GET_METRICS\x10\v\x12\x1c\n" +
 	"\x18COMMAND_TYPE_APPLY_PROXY\x10\x14\x12\x1e\n" +
 	"\x1aCOMMAND_TYPE_UNAPPLY_PROXY\x10\x15\x12\x1c\n" +
 	"\x18COMMAND_TYPE_GET_APPLIED\x10\x16\x12\x1d\n" +
 	"\x19COMMAND_TYPE_PROXY_UPDATE\x10\x17\x12!\n" +
-	"\x1dCOMMAND_TYPE_RESOLVE_APPROVAL\x10\x1eB(Z&github.com/ivere27/nitella/pkg/api/hubb\x06proto3"
+	"\x1dCOMMAND_TYPE_RESOLVE_APPROVAL\x10\x1e\x12\x1d\n" +
+	"\x19COMMAND_TYPE_CREATE_PROXY\x10(\x12\x1d\n" +
+	"\x19COMMAND_TYPE_DELETE_PROXY\x10)\x12\x1d\n" +
+	"\x19COMMAND_TYPE_ENABLE_PROXY\x10*\x12\x1e\n" +
+	"\x1aCOMMAND_TYPE_DISABLE_PROXY\x10+\x12\x1d\n" +
+	"\x19COMMAND_TYPE_UPDATE_PROXY\x10,\x12\"\n" +
+	"\x1eCOMMAND_TYPE_RESTART_LISTENERS\x10-\x12\x1d\n" +
+	"\x19COMMAND_TYPE_RELOAD_RULES\x10.\x12\x19\n" +
+	"\x15COMMAND_TYPE_BLOCK_IP\x102\x12\x19\n" +
+	"\x15COMMAND_TYPE_ALLOW_IP\x103\x12\"\n" +
+	"\x1eCOMMAND_TYPE_LIST_GLOBAL_RULES\x104\x12#\n" +
+	"\x1fCOMMAND_TYPE_REMOVE_GLOBAL_RULE\x105\x12 \n" +
+	"\x1cCOMMAND_TYPE_CONFIGURE_GEOIP\x10<\x12!\n" +
+	"\x1dCOMMAND_TYPE_GET_GEOIP_STATUS\x10=\x12\x1a\n" +
+	"\x16COMMAND_TYPE_LOOKUP_IP\x10>\x12&\n" +
+	"\"COMMAND_TYPE_LIST_ACTIVE_APPROVALS\x10F\x12 \n" +
+	"\x1cCOMMAND_TYPE_CANCEL_APPROVAL\x10G\"\x04\b\x01\x10\x01B(Z&github.com/ivere27/nitella/pkg/api/hubb\x06proto3"
 
 var (
 	file_hub_hub_common_proto_rawDescOnce sync.Once

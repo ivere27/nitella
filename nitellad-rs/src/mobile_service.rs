@@ -1,18 +1,14 @@
-use prost::Message;
-use crate::proto::local::{
-    InitializeRequest, InitializeResponse, 
-    Settings,
-    ListNodesResponse,
-    IdentityInfo,
-};
 use crate::proto::common::P2pMode;
+use crate::proto::local::{
+    IdentityInfo, InitializeRequest, InitializeResponse, ListNodesResponse, Settings,
+};
+use prost::Message;
 
-pub struct MobileLogicService {
-}
+pub struct MobileLogicService {}
 
 impl MobileLogicService {
     pub fn new(_storage_path: String) -> Self {
-        Self { }
+        Self {}
     }
 
     pub async fn initialize(&self) -> Result<(), String> {
@@ -22,21 +18,11 @@ impl MobileLogicService {
 
     pub async fn invoke(&self, method: &str, data: Vec<u8>) -> Vec<u8> {
         match method {
-            "/nitella.local.MobileLogicService/Initialize" => {
-                self.handle_initialize(&data)
-            },
-            "/nitella.local.MobileLogicService/GetSettings" => {
-                self.handle_get_settings(&data)
-            },
-             "/nitella.local.MobileLogicService/ListNodes" => {
-                self.handle_list_nodes(&data)
-            },
-            "/nitella.local.MobileLogicService/GetIdentity" => {
-                self.handle_get_identity(&data)
-            },
-            _ => {
-                format!("Method not implemented: {}", method).into_bytes()
-            }
+            "/nitella.local.MobileLogicService/Initialize" => self.handle_initialize(&data),
+            "/nitella.local.MobileLogicService/GetSettings" => self.handle_get_settings(&data),
+            "/nitella.local.MobileLogicService/ListNodes" => self.handle_list_nodes(&data),
+            "/nitella.local.MobileLogicService/GetIdentity" => self.handle_get_identity(&data),
+            _ => format!("Method not implemented: {}", method).into_bytes(),
         }
     }
 
@@ -44,7 +30,7 @@ impl MobileLogicService {
         // Decode request
         let _req = match InitializeRequest::decode(data) {
             Ok(r) => r,
-            Err(e) => return format!("Decode error: {}", e).into_bytes(), 
+            Err(e) => return format!("Decode error: {}", e).into_bytes(),
         };
 
         // Create response
@@ -71,7 +57,7 @@ impl MobileLogicService {
         resp.encode(&mut buf).unwrap();
         buf
     }
-    
+
     fn handle_list_nodes(&self, _data: &[u8]) -> Vec<u8> {
         let resp = ListNodesResponse {
             nodes: vec![],

@@ -3,8 +3,6 @@ package main
 import (
 	"bufio"
 	"context"
-	"crypto/tls"
-	"crypto/x509"
 	"flag"
 	"fmt"
 	"os"
@@ -15,35 +13,52 @@ import (
 	"syscall"
 	"time"
 
+	pbCommon "github.com/ivere27/nitella/pkg/api/common"
+	pbLocal "github.com/ivere27/nitella/pkg/api/local"
 	pb "github.com/ivere27/nitella/pkg/api/proxy"
 	"github.com/ivere27/nitella/pkg/cli"
 	nitellacrypto "github.com/ivere27/nitella/pkg/crypto"
-	"github.com/ivere27/nitella/pkg/identity"
+	nitellaPprof "github.com/ivere27/nitella/pkg/pprof"
+	"github.com/ivere27/nitella/pkg/service"
 	"github.com/ivere27/nitella/pkg/shell"
 	"golang.org/x/term"
-	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/protobuf/types/known/emptypb"
+	"google.golang.org/protobuf/types/known/fieldmaskpb"
 )
 
 var (
 	serverAddr string
 	authToken  string
-	client     pb.ProxyControlServiceClient
-	conn       *grpc.ClientConn
 
 	// Mode flags
 	localMode bool // Connect to local nitellad instead of Hub
 
-	// Identity
-	cliIdentity *identity.Identity
-	dataDir     string
-	passphrase  string // Passphrase for encrypting private key
-	kdfProfile  string // KDF profile: default, server, secure
+	// Identity (managed by backend)
+	dataDir    string
+	passphrase string // Passphrase for key encryption/decryption
+
+	// Hub mode state
+	hubCLI *HubCLI
+
+	// MobileLogicService — same Synurang dispatch path as Flutter FFI
+	svc          *service.MobileLogicService
+	client       pbLocal.MobileLogicServiceClient
+	identityInfo *pbLocal.IdentityInfo
+
+	// Local mode state: node ID assigned by backend
+	localNodeID string
+
+	// Hub mode flags (set via flag.StringVar, consumed by NewHubCLI)
+	hubAddress            string
+	hubToken              string
+	stunServer            string
+	overrideBackendConfig bool
 )
 
 func main() {
+	configureCLILogOutput()
+
 	// Default data directory
 	homeDir, _ := os.UserHomeDir()
 	defaultDataDir := filepath.Join(homeDir, ".nitella")
@@ -52,7 +67,6 @@ func main() {
 	flag.BoolVar(&localMode, "local", false, "Connect to local nitellad instead of Hub")
 	flag.StringVar(&dataDir, "data-dir", defaultDataDir, "Data directory for identity and configuration")
 	flag.StringVar(&passphrase, "passphrase", os.Getenv("NITELLA_PASSPHRASE"), "Passphrase for key encryption (env: NITELLA_PASSPHRASE)")
-	flag.StringVar(&kdfProfile, "kdf-profile", os.Getenv("NITELLA_KDF_PROFILE"), "KDF security profile: default, server, secure (env: NITELLA_KDF_PROFILE)")
 
 	// Local mode flags (only used with --local)
 	addr := flag.String("addr", "localhost:50051", "Local nitellad server address (with --local)")
@@ -60,23 +74,50 @@ func main() {
 	tlsCA := flag.String("tls-ca", os.Getenv("NITELLA_TLS_CA"), "Path to nitellad CA certificate for TLS verification (env: NITELLA_TLS_CA)")
 
 	// Hub mode flags
-	flag.StringVar(&hubAddress, "hub", os.Getenv("NITELLA_HUB"), "Hub server address (env: NITELLA_HUB)")
+	flag.StringVar(&hubAddress, "hub", "", "Hub server address")
 	flag.StringVar(&hubToken, "hub-token", os.Getenv("NITELLA_HUB_TOKEN"), "Hub authentication token (env: NITELLA_HUB_TOKEN)")
-	flag.StringVar(&stunServer, "stun", os.Getenv("NITELLA_STUN"), "STUN server URL for P2P (env: NITELLA_STUN)")
+	flag.StringVar(&stunServer, "stun", "", "STUN server URL for P2P")
+	flag.BoolVar(&overrideBackendConfig, "override-backend-config", false, "Allow --hub/--stun/NITELLA_HUB/NITELLA_STUN to override backend-stored settings for this run")
+
+	// Profiling (only effective with -tags pprof)
+	pprofPort := flag.Int("pprof-port", 0, "Port for pprof HTTP server (0 = disabled, requires -tags pprof build)")
 
 	flag.Parse()
+	nitellaPprof.Start(*pprofPort)
 
-	// Initialize identity (required for both modes, but especially for Hub)
-	if err := initIdentity(); err != nil {
+	// Initialize MobileLogicService (same Synurang dispatch path as Flutter FFI)
+	svc = service.NewMobileLogicService()
+	client = pbLocal.NewMobileLogicServiceClient(pbLocal.NewFfiClientConn(svc))
+	initCtx := context.Background()
+	initResp, err := client.Initialize(initCtx, &pbLocal.InitializeRequest{
+		DataDir:  dataDir,
+		CacheDir: filepath.Join(dataDir, "cache"),
+	})
+	if err != nil || !initResp.Success {
+		errMsg := "unknown error"
+		if err != nil {
+			errMsg = err.Error()
+		} else if initResp.Error != "" {
+			errMsg = initResp.Error
+		}
+		fmt.Printf("Failed to initialize backend: %s\n", errMsg)
+		os.Exit(1)
+	}
+
+	identityInfo, err = bootstrapIdentity(initCtx)
+	if err != nil {
 		fmt.Printf("Failed to initialize identity: %v\n", err)
 		os.Exit(1)
 	}
+
+	// Initialize Hub CLI state
+	hubCLI = NewHubCLI(hubAddress, hubToken, stunServer, overrideBackendConfig)
 
 	// Check for command-line args (single command mode)
 	args := flag.Args()
 
 	if localMode {
-		// Local mode: connect to nitellad
+		// Local mode: connect to nitellad via backend
 		serverAddr = *addr
 		authToken = *token
 
@@ -84,52 +125,37 @@ func main() {
 			fmt.Println("Warning: No token provided. Use --token or set NITELLA_TOKEN environment variable.")
 		}
 
-		var err error
-		// Load TLS credentials with proper CA verification
-		var tlsConfig *tls.Config
-		if *tlsCA != "" {
-			// Load CA certificate for verification
-			caPEM, err := os.ReadFile(*tlsCA)
-			if err != nil {
-				fmt.Printf("Failed to read CA certificate: %v\n", err)
-				os.Exit(1)
-			}
-			caPool := x509.NewCertPool()
-			if !caPool.AppendCertsFromPEM(caPEM) {
-				fmt.Println("Failed to parse CA certificate")
-				os.Exit(1)
-			}
-			tlsConfig = &tls.Config{
-				RootCAs:    caPool,
-				MinVersion: tls.VersionTLS13,
-			}
-		} else {
+		if *tlsCA == "" {
 			fmt.Println("Error: --tls-ca is required for local mode")
 			fmt.Println("nitellad generates CA at: <admin-data-dir>/admin_ca.crt")
 			fmt.Println("Example: nitella --local --tls-ca /path/to/admin_ca.crt")
 			os.Exit(1)
 		}
-		conn, err = grpc.NewClient(serverAddr, grpc.WithTransportCredentials(credentials.NewTLS(tlsConfig)))
+
+		caPEM, err := os.ReadFile(*tlsCA)
 		if err != nil {
-			fmt.Printf("Failed to connect to %s: %v\n", serverAddr, err)
+			fmt.Printf("Failed to read CA certificate: %v\n", err)
 			os.Exit(1)
 		}
-		defer conn.Close()
 
-		client = pb.NewProxyControlServiceClient(conn)
-
-		// Validate token by making a test call
-		ctx, cancel := context.WithTimeout(authCtx(), 3*time.Second)
-		_, err = client.ListProxies(ctx, &pb.ListProxiesRequest{})
-		cancel()
-		if err != nil {
-			if strings.Contains(err.Error(), "Unauthenticated") {
-				fmt.Println("Error: Authentication failed. Check your token.")
-				os.Exit(1)
+		// Register the local nitellad as a direct node via the backend
+		addResp, err := client.AddNodeDirect(context.Background(), &pbLocal.AddNodeDirectRequest{
+			Name:    "local",
+			Address: *addr,
+			Token:   *token,
+			CaPem:   string(caPEM),
+		})
+		if err != nil || !addResp.Success {
+			errMsg := "unknown error"
+			if err != nil {
+				errMsg = err.Error()
+			} else if addResp.Error != "" {
+				errMsg = addResp.Error
 			}
-			fmt.Printf("Error: Failed to connect to %s: %v\n", serverAddr, err)
+			fmt.Printf("Failed to connect to %s: %s\n", *addr, errMsg)
 			os.Exit(1)
 		}
+		localNodeID = addResp.Node.NodeId
 
 		if len(args) > 0 {
 			handleCommand(strings.Join(args, " "))
@@ -149,20 +175,20 @@ func main() {
 	} else {
 		// Hub mode (default)
 		if len(args) > 0 {
-			handleHubCommand(args)
+			hubCLI.handleHubCommand(args)
 			return
 		}
 
 		// Interactive shell for Hub mode
 		fmt.Println("Nitella CLI - Hub Mode")
-		fmt.Printf("Identity: %s\n", cliIdentity.EmojiHash)
-		fmt.Printf("Fingerprint: %s...%s\n", cliIdentity.Fingerprint[:8], cliIdentity.Fingerprint[len(cliIdentity.Fingerprint)-8:])
+		fmt.Printf("Identity: %s\n", identityInfo.EmojiHash)
+		fmt.Printf("Fingerprint: %s\n", shortFingerprint(identityInfo.Fingerprint))
 		fmt.Println()
 		fmt.Println("Type 'help' for available commands, 'exit' to quit.")
 		fmt.Println()
 
 		// Start background alert streaming (will silently fail if not connected)
-		startBackgroundAlertStream()
+		hubCLI.startBackgroundAlertStream()
 
 		shell.StartREPL("nitella> ", func(line string) error {
 			parts := strings.Fields(line)
@@ -177,135 +203,187 @@ func main() {
 			case "help":
 				printHubModeHelp()
 			case "exit", "quit":
-				CleanupHubResources()
+				hubCLI.Cleanup()
 				os.Exit(0)
 			case "identity":
 				cmdIdentity(cmdArgs)
 			default:
 				// All other commands go to Hub handler
-				handleHubCommand(parts)
+				hubCLI.handleHubCommand(parts)
 			}
 			return nil
 		}, newHubCompletion())
 	}
 }
 
-// initIdentity initializes or loads the CLI identity
-func initIdentity() error {
-	cfg := identity.DefaultConfig(dataDir, "nitella-cli")
-
-	// Parse KDF profile
-	if kdfProfile == "" {
-		kdfProfile = "default"
-	}
-	kdfParams, err := nitellacrypto.GetKDFProfile(kdfProfile)
+// bootstrapIdentity ensures an identity exists and is unlocked via MobileLogicService RPCs.
+func bootstrapIdentity(ctx context.Context) (*pbLocal.IdentityInfo, error) {
+	bootstrap, err := client.GetBootstrapState(ctx, &emptypb.Empty{})
 	if err != nil {
-		return err
+		return nil, fmt.Errorf("failed to get bootstrap state: %w", err)
 	}
-	cfg.KDFParams = kdfParams
+	if bootstrap == nil {
+		return nil, fmt.Errorf("missing bootstrap state")
+	}
 
-	// Check if stdin is a terminal (for interactive prompts)
-	isTerminal := term.IsTerminal(int(syscall.Stdin))
-
-	// Check if key already exists
-	keyExists := identity.KeyExists(dataDir)
-
-	if keyExists {
-		// Existing identity - check if encrypted and get passphrase if needed
-		encrypted, err := identity.IsKeyEncrypted(dataDir)
-		if err != nil {
-			return fmt.Errorf("failed to check key encryption: %w", err)
+	// Create identity if missing.
+	if !bootstrap.IdentityExists {
+		createPassphrase := passphrase
+		isTerminal := term.IsTerminal(int(syscall.Stdin))
+		if createPassphrase == "" && isTerminal && !passphraseExplicitlySet() {
+			newPassphrase, err := promptNewPassphrase()
+			if err != nil {
+				return nil, err
+			}
+			createPassphrase = newPassphrase
+		} else if createPassphrase != "" {
+			showPassphraseStrength(createPassphrase, false)
 		}
 
-		if encrypted && passphrase == "" {
-			if !isTerminal {
-				return fmt.Errorf("passphrase required for encrypted key (set NITELLA_PASSPHRASE or use --passphrase)")
+		createResp, err := client.CreateIdentity(ctx, &pbLocal.CreateIdentityRequest{
+			Passphrase:          createPassphrase,
+			CommonName:          "nitella-cli",
+			AllowWeakPassphrase: shouldAllowWeakPassphrase(createPassphrase),
+		})
+		if err != nil {
+			return nil, fmt.Errorf("failed to create identity: %w", err)
+		}
+		if !createResp.Success {
+			errMsg := createResp.Error
+			if errMsg == "" {
+				errMsg = "unknown error"
 			}
-			// Need to prompt for passphrase
+			return nil, fmt.Errorf("failed to create identity: %s", errMsg)
+		}
+
+		printCreatedIdentity(createResp.Mnemonic, createResp.Identity, createPassphrase != "")
+
+		if createResp.Identity != nil && !createResp.Identity.Locked {
+			return createResp.Identity, nil
+		}
+
+		bootstrap, err = client.GetBootstrapState(ctx, &emptypb.Empty{})
+		if err != nil {
+			return nil, fmt.Errorf("failed to refresh bootstrap state: %w", err)
+		}
+		if bootstrap == nil {
+			return nil, fmt.Errorf("missing bootstrap state")
+		}
+	}
+
+	// Unlock encrypted identity if needed.
+	if bootstrap.IdentityLocked {
+		unlockPassphrase := passphrase
+		if unlockPassphrase == "" {
+			if !term.IsTerminal(int(syscall.Stdin)) {
+				return nil, fmt.Errorf("passphrase required for encrypted key (set NITELLA_PASSPHRASE or use --passphrase)")
+			}
+
 			fmt.Print("Enter passphrase: ")
 			passphraseBytes, err := term.ReadPassword(int(syscall.Stdin))
 			fmt.Println()
 			if err != nil {
-				return fmt.Errorf("failed to read passphrase: %w", err)
+				return nil, fmt.Errorf("failed to read passphrase: %w", err)
 			}
-			passphrase = string(passphraseBytes)
-			nitellacrypto.Wipe(passphraseBytes) // Wipe passphrase bytes from memory
+			unlockPassphrase = string(passphraseBytes)
+			nitellacrypto.Wipe(passphraseBytes)
 		}
 
-		cfg.Passphrase = passphrase
-		cliIdentity, _, err = identity.LoadOrCreate(cfg)
+		unlockResp, err := client.UnlockIdentity(ctx, &pbLocal.UnlockIdentityRequest{
+			Passphrase: unlockPassphrase,
+		})
 		if err != nil {
-			if strings.Contains(err.Error(), "message authentication failed") {
-				return fmt.Errorf("incorrect passphrase")
+			return nil, fmt.Errorf("failed to unlock identity: %w", err)
+		}
+		if !unlockResp.Success {
+			errMsg := unlockResp.Error
+			if errMsg == "" {
+				errMsg = "unknown error"
 			}
-			return err
+			return nil, fmt.Errorf("failed to unlock identity: %s", errMsg)
 		}
-		return nil
-	}
-
-	// New identity - prompt for passphrase (unless provided via flag/env or non-interactive)
-	if passphrase == "" && isTerminal && !passphraseExplicitlySet() {
-		newPassphrase, err := promptNewPassphrase()
-		if err != nil {
-			return err
-		}
-		cfg.Passphrase = newPassphrase
-	} else {
-		cfg.Passphrase = passphrase
-		// Show passphrase strength warning for flag/env provided passphrase
-		if passphrase != "" {
-			showPassphraseStrength(passphrase, false) // false = don't ask, just warn
+		if unlockResp.Identity != nil {
+			return unlockResp.Identity, nil
 		}
 	}
 
-	var isNew bool
-	cliIdentity, isNew, err = identity.LoadOrCreate(cfg)
+	return fetchIdentityInfo(ctx)
+}
+
+func fetchIdentityInfo(ctx context.Context) (*pbLocal.IdentityInfo, error) {
+	info, err := client.GetIdentity(ctx, &emptypb.Empty{})
 	if err != nil {
-		return err
+		return nil, err
 	}
-
-	if isNew {
-		// First launch - display mnemonic and emoji hash
-		fmt.Println()
-		fmt.Println("╔══════════════════════════════════════════════════════════════════╗")
-		fmt.Println("║                    NITELLA IDENTITY CREATED                       ║")
-		fmt.Println("╚══════════════════════════════════════════════════════════════════╝")
-		fmt.Println()
-		fmt.Println("Your identity has been created with a BIP-39 mnemonic phrase.")
-		fmt.Println("IMPORTANT: Write down and securely store this mnemonic!")
-		fmt.Println()
-		fmt.Println("┌──────────────────────────────────────────────────────────────────┐")
-		fmt.Printf("│ Mnemonic: %-55s │\n", cliIdentity.Mnemonic)
-		fmt.Println("└──────────────────────────────────────────────────────────────────┘")
-		fmt.Println()
-		fmt.Printf("Emoji Hash:   %s\n", cliIdentity.EmojiHash)
-		fmt.Printf("Fingerprint:  %s\n", cliIdentity.Fingerprint)
-		fmt.Println()
-		fmt.Println("The emoji hash provides visual verification of your identity.")
-		fmt.Println("When pairing with Hub, verify the emoji hash matches on both ends.")
-		fmt.Println()
-		if cfg.Passphrase != "" {
-			fmt.Printf("Private key encrypted with %s\n", kdfParams.String())
-		} else {
-			fmt.Println("Private key is NOT encrypted (no passphrase set).")
-		}
-		fmt.Printf("Identity saved to: %s\n", dataDir)
-		fmt.Println()
+	if info == nil {
+		return nil, fmt.Errorf("identity info is empty")
 	}
+	if !info.Exists {
+		return nil, fmt.Errorf("identity does not exist")
+	}
+	if info.Locked {
+		return nil, fmt.Errorf("identity is locked")
+	}
+	return info, nil
+}
 
-	return nil
+func printCreatedIdentity(mnemonic string, info *pbLocal.IdentityInfo, encrypted bool) {
+	fmt.Println()
+	fmt.Println("╔══════════════════════════════════════════════════════════════════╗")
+	fmt.Println("║                    NITELLA IDENTITY CREATED                     ║")
+	fmt.Println("╚══════════════════════════════════════════════════════════════════╝")
+	fmt.Println()
+	fmt.Println("Your identity has been created with a BIP-39 mnemonic phrase.")
+	fmt.Println("IMPORTANT: Write down and securely store this mnemonic!")
+	fmt.Println()
+	fmt.Println("┌──────────────────────────────────────────────────────────────────┐")
+	fmt.Printf("│ Mnemonic: %-55s │\n", mnemonic)
+	fmt.Println("└──────────────────────────────────────────────────────────────────┘")
+	fmt.Println()
+	if info != nil {
+		fmt.Printf("Emoji Hash:   %s\n", info.EmojiHash)
+		fmt.Printf("Fingerprint:  %s\n", info.Fingerprint)
+	}
+	fmt.Println()
+	fmt.Println("The emoji hash provides visual verification of your identity.")
+	fmt.Println("When pairing with Hub, verify the emoji hash matches on both ends.")
+	fmt.Println()
+	if encrypted {
+		fmt.Println("Private key encrypted with passphrase.")
+	} else {
+		fmt.Println("Private key is NOT encrypted (no passphrase set).")
+	}
+	fmt.Printf("Identity saved to: %s\n", dataDir)
+	fmt.Println()
 }
 
 // showPassphraseStrength displays passphrase strength analysis
 func showPassphraseStrength(pass string, interactive bool) bool {
-	check := nitellacrypto.CheckPassphrase(pass)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	check, err := client.EvaluatePassphrase(ctx, &pbLocal.EvaluatePassphraseRequest{
+		Passphrase: pass,
+	})
+	if err != nil {
+		fmt.Printf("Warning: unable to evaluate passphrase policy: %v\n", err)
+		return true
+	}
 
 	fmt.Println()
 	fmt.Println("Passphrase Security Analysis:")
-	fmt.Println(check.FormatStrengthReport())
+	if strings.TrimSpace(check.Report) != "" {
+		fmt.Println(check.Report)
+	} else {
+		fmt.Printf("Strength: %s\n", formatPassphraseStrength(check.GetStrength()))
+		fmt.Printf("Entropy: %.1f bits\n", check.GetEntropy())
+		if check.GetMessage() != "" {
+			fmt.Printf("Assessment: %s\n", check.GetMessage())
+		}
+	}
 	fmt.Println()
 
-	if check.Strength == nitellacrypto.StrengthWeak && interactive {
+	if check.GetShouldWarn() && interactive {
 		fmt.Print("Continue with weak passphrase? (y/N): ")
 		reader := bufio.NewReader(os.Stdin)
 		response, _ := reader.ReadString('\n')
@@ -314,6 +392,38 @@ func showPassphraseStrength(pass string, interactive bool) bool {
 	}
 
 	return true // Non-interactive: just warn, don't block
+}
+
+func formatPassphraseStrength(str pbLocal.PassphraseStrength) string {
+	switch str {
+	case pbLocal.PassphraseStrength_PASSPHRASE_STRENGTH_WEAK:
+		return "weak"
+	case pbLocal.PassphraseStrength_PASSPHRASE_STRENGTH_FAIR:
+		return "fair"
+	case pbLocal.PassphraseStrength_PASSPHRASE_STRENGTH_STRONG:
+		return "strong"
+	default:
+		return "unknown"
+	}
+}
+
+func shouldAllowWeakPassphrase(passphrase string) bool {
+	if strings.TrimSpace(passphrase) == "" {
+		return false
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	check, err := client.EvaluatePassphrase(ctx, &pbLocal.EvaluatePassphraseRequest{
+		Passphrase: passphrase,
+	})
+	if err != nil {
+		// Fail-open for acknowledgment flag so backend policy does not reject
+		// when local evaluation RPC is temporarily unavailable.
+		return true
+	}
+	return check.GetShouldWarn()
 }
 
 // passphraseExplicitlySet checks if --passphrase flag or NITELLA_PASSPHRASE env was explicitly provided
@@ -400,30 +510,52 @@ func promptNewPassphrase() (string, error) {
 
 // cmdIdentity handles identity commands
 func cmdIdentity(args []string) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	info, err := client.GetIdentity(ctx, &emptypb.Empty{})
+	if err != nil {
+		fmt.Printf("Error reading identity: %v\n", err)
+		return
+	}
+	if info == nil || !info.Exists {
+		fmt.Println("No identity found.")
+		return
+	}
+
 	if len(args) == 0 {
 		fmt.Println("\nIdentity Information:")
-		fmt.Printf("  Emoji Hash:   %s\n", cliIdentity.EmojiHash)
-		fmt.Printf("  Fingerprint:  %s\n", cliIdentity.Fingerprint)
+		if info.Locked {
+			fmt.Println("  Status:       locked")
+		} else {
+			fmt.Printf("  Emoji Hash:   %s\n", info.EmojiHash)
+			fmt.Printf("  Fingerprint:  %s\n", info.Fingerprint)
+		}
 		fmt.Printf("  Data Dir:     %s\n", dataDir)
 		fmt.Println()
 		fmt.Println("Commands:")
-		fmt.Println("  identity show-mnemonic  - Display recovery mnemonic (SENSITIVE)")
 		fmt.Println("  identity export-ca      - Export Root CA certificate")
 		fmt.Println()
 		return
 	}
 
 	switch args[0] {
-	case "show-mnemonic":
-		fmt.Println()
-		fmt.Println("WARNING: Your mnemonic phrase is sensitive. Do not share it!")
-		fmt.Println()
-		fmt.Printf("Mnemonic: %s\n", cliIdentity.Mnemonic)
-		fmt.Println()
-
 	case "export-ca":
+		if info.Locked {
+			fmt.Println("Identity is locked. Restart with --passphrase (or NITELLA_PASSPHRASE) to unlock before export.")
+			return
+		}
+		if info.RootCertPem == "" {
+			fmt.Println("Root CA certificate is not available from backend.")
+			return
+		}
+
 		caPath := filepath.Join(dataDir, "root_ca.crt")
-		fmt.Printf("Root CA Certificate: %s\n", caPath)
+		if err := os.WriteFile(caPath, []byte(info.RootCertPem), 0644); err != nil {
+			fmt.Printf("Failed to export Root CA certificate: %v\n", err)
+			return
+		}
+		fmt.Printf("Root CA Certificate exported: %s\n", caPath)
 		fmt.Println()
 		fmt.Println("Use this certificate to verify your identity when:")
 		fmt.Println("  - Registering with Hub")
@@ -435,20 +567,28 @@ func cmdIdentity(args []string) {
 	}
 }
 
+func shortFingerprint(fp string) string {
+	if len(fp) <= 16 {
+		return fp
+	}
+	return fp[:8] + "..." + fp[len(fp)-8:]
+}
+
 // newHubCompletion creates tab completion for Hub mode
 func newHubCompletion() *shell.SimpleCompletion {
 	return &shell.SimpleCompletion{
 		RootCommands: []string{
 			"config", "login", "register", "status", "nodes", "node",
-			"alerts", "pending", "approve", "deny", "templates", "proxy", "send",
-			"identity", "help", "exit",
+			"alerts", "pending", "approve", "deny", "templates", "proxy",
+			"identity", "pair", "debug", "help", "exit",
 		},
 		SubCommands: map[string][]string{
 			"config":    {"set"},
 			"node":      {"status", "rules", "metrics"},
 			"templates": {"sync", "push"},
 			"proxy":     {"import", "list", "show", "edit", "export", "delete", "validate", "push", "pull", "history", "diff", "flush", "apply", "status", "unapply"},
-			"identity":  {"show-mnemonic", "export-ca"},
+			"identity":  {"export-ca"},
+			"debug":     {"runtime", "grpc", "goroutine"},
 		},
 	}
 }
@@ -459,15 +599,18 @@ Nitella CLI - Hub Mode Commands:
 
 Identity:
   identity                       - Show identity information
-  identity show-mnemonic         - Display recovery mnemonic (SENSITIVE)
   identity export-ca             - Export Root CA certificate
 
 Hub Connection:
   config                         - Show/set Hub configuration
   config set <key> <value>       - Set configuration (hub_address, token)
   login                          - Login to Hub (interactive)
-  register                       - Register this CLI with Hub
+  register [invite_code]         - Register this CLI with Hub using mTLS
   status                         - Show Hub connection status
+
+Node Pairing (PAKE - Hub learns nothing):
+  pair                           - Start pairing session, generate code
+  pair-offline                   - Offline QR code pairing mode
 
 Node Management:
   nodes                          - List registered nodes
@@ -479,16 +622,16 @@ Node Management:
 Alerts & Approvals (auto-streaming in background):
   alerts                         - Start manual alert streaming (foreground)
   pending                        - List pending approval requests
-  approve <request_id> [dur]     - Approve request (dur: 1h, 24h, 7d, forever)
-  deny <request_id>              - Deny a pending request
+  approve [once|cache] <id> [duration] - Approve request
+  deny [once|cache] <id> [duration] [reason] - Deny a pending request
 
 Templates:
   templates                      - List available templates
   templates sync <node_id>       - Sync templates to a node
   templates push <node_id> <id>  - Push template to node
 
-Commands:
-  send <node_id> <command>       - Send command to node (via Hub relay)
+Debug:
+  debug [runtime|grpc|goroutine] - Show local backend debug stats
 
 Other:
   help                           - Show this help
@@ -505,7 +648,7 @@ func newCompletion() *shell.SimpleCompletion {
 	return &shell.SimpleCompletion{
 		RootCommands: []string{
 			"status", "list", "ls", "proxy", "rule", "conn", "connections",
-			"block", "allow", "global-rules", "approvals", "stream", "metrics", "restart",
+			"block", "allow", "global-rules", "approvals", "stream", "metrics", "debug", "restart",
 			"geoip", "lookup", "help", "exit",
 		},
 		SubCommands: map[string][]string{
@@ -513,6 +656,7 @@ func newCompletion() *shell.SimpleCompletion {
 			"rule":         {"list", "add", "remove"},
 			"conn":         {"close", "closeall"},
 			"connections":  {"close", "closeall"},
+			"debug":        {"runtime", "grpc", "goroutine"},
 			"geoip":        {"status", "config"},
 			"config":       {"local", "remote", "set"},
 			"add":          {"allow", "block"},
@@ -558,6 +702,8 @@ func handleCommand(input string) {
 		cmdStream()
 	case "metrics":
 		cmdMetrics(args)
+	case "debug":
+		cmdDebug(args)
 	case "restart":
 		cmdRestart()
 	case "geoip":
@@ -607,6 +753,7 @@ Nitella CLI (Local Mode) Commands:
 
   stream                       - Stream connection events
   metrics [interval]           - Stream metrics (default: 1 second interval)
+  debug [runtime|grpc|goroutine] - Show local backend debug stats
   restart                      - Restart all proxy listeners
 
   help                         - Show this help
@@ -640,13 +787,21 @@ func cmdStatus(args []string) {
 	ctx, cancel := authAPICtx()
 	defer cancel()
 
+	snapshot, err := client.GetProxiesSnapshot(ctx, &pbLocal.GetProxiesSnapshotRequest{
+		NodeId: localNodeID,
+	})
+	if err != nil {
+		fmt.Printf("Error: %v\n", err)
+		return
+	}
+	if len(snapshot.NodeSnapshots) == 0 {
+		fmt.Println("No proxies running.")
+		return
+	}
+	resp := &pbLocal.ListProxiesResponse{Proxies: snapshot.NodeSnapshots[0].Proxies}
+
 	if proxyID == "" {
 		// List all proxies status
-		resp, err := client.ListProxies(ctx, &pb.ListProxiesRequest{})
-		if err != nil {
-			fmt.Printf("Error: %v\n", err)
-			return
-		}
 		if len(resp.Proxies) == 0 {
 			fmt.Println("No proxies running.")
 			return
@@ -668,20 +823,23 @@ func cmdStatus(args []string) {
 		}
 		tbl.PrintFooter()
 	} else {
-		resp, err := client.GetStatus(ctx, &pb.GetStatusRequest{ProxyId: proxyID})
-		if err != nil {
-			fmt.Printf("Error: %v\n", err)
+		var found *pbLocal.ProxyInfo
+		for _, p := range resp.Proxies {
+			if p.ProxyId == proxyID {
+				found = p
+				break
+			}
+		}
+		if found == nil {
+			fmt.Printf("Proxy not found: %s\n", proxyID)
 			return
 		}
 		fmt.Printf("\nProxy Status: %s\n", proxyID)
-		fmt.Printf("  Running:           %v\n", resp.Running)
-		fmt.Printf("  Listen Address:    %s\n", resp.ListenAddr)
-		fmt.Printf("  Default Backend:   %s\n", resp.DefaultBackend)
-		fmt.Printf("  Active Connections: %d\n", resp.ActiveConnections)
-		fmt.Printf("  Total Connections: %d\n", resp.TotalConnections)
-		fmt.Printf("  Bytes In:          %d\n", resp.BytesIn)
-		fmt.Printf("  Bytes Out:         %d\n", resp.BytesOut)
-		fmt.Printf("  Uptime:            %ds\n", resp.UptimeSeconds)
+		fmt.Printf("  Running:           %v\n", found.Running)
+		fmt.Printf("  Listen Address:    %s\n", found.ListenAddr)
+		fmt.Printf("  Default Backend:   %s\n", found.DefaultBackend)
+		fmt.Printf("  Active Connections: %d\n", found.ActiveConnections)
+		fmt.Printf("  Total Connections: %d\n", found.TotalConnections)
 		fmt.Println()
 	}
 }
@@ -708,7 +866,8 @@ func cmdProxy(args []string) {
 		if len(args) > 3 {
 			name = args[3]
 		}
-		resp, err := client.CreateProxy(ctx, &pb.CreateProxyRequest{
+		resp, err := client.AddProxy(ctx, &pbLocal.AddProxyRequest{
+			NodeId:         localNodeID,
 			ListenAddr:     args[1],
 			DefaultBackend: args[2],
 			Name:           name,
@@ -717,21 +876,17 @@ func cmdProxy(args []string) {
 			fmt.Printf("Error: %v\n", err)
 			return
 		}
-		if !cli.CheckResponse(resp) {
-			return
-		}
 		fmt.Printf("Proxy created: %s\n", resp.ProxyId)
 
 	case "delete":
 		if !cli.RequireArgs(args, 2, "Usage: proxy delete <proxy_id>") {
 			return
 		}
-		resp, err := client.DeleteProxy(ctx, &pb.DeleteProxyRequest{ProxyId: args[1]})
-		if err != nil {
+		if _, err := client.RemoveProxy(ctx, &pbLocal.RemoveProxyRequest{
+			NodeId:  localNodeID,
+			ProxyId: args[1],
+		}); err != nil {
 			fmt.Printf("Error: %v\n", err)
-			return
-		}
-		if !cli.CheckResponse(resp) {
 			return
 		}
 		fmt.Println("Proxy deleted.")
@@ -740,12 +895,13 @@ func cmdProxy(args []string) {
 		if !cli.RequireArgs(args, 2, "Usage: proxy enable <proxy_id>") {
 			return
 		}
-		resp, err := client.EnableProxy(ctx, &pb.EnableProxyRequest{ProxyId: args[1]})
-		if err != nil {
+		if _, err := client.UpdateProxy(ctx, &pbLocal.UpdateProxyRequest{
+			NodeId:     localNodeID,
+			ProxyId:    args[1],
+			Running:    true,
+			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"running"}},
+		}); err != nil {
 			fmt.Printf("Error: %v\n", err)
-			return
-		}
-		if !cli.CheckResponse(resp) {
 			return
 		}
 		fmt.Println("Proxy enabled.")
@@ -754,12 +910,13 @@ func cmdProxy(args []string) {
 		if !cli.RequireArgs(args, 2, "Usage: proxy disable <proxy_id>") {
 			return
 		}
-		resp, err := client.DisableProxy(ctx, &pb.DisableProxyRequest{ProxyId: args[1]})
-		if err != nil {
+		if _, err := client.UpdateProxy(ctx, &pbLocal.UpdateProxyRequest{
+			NodeId:     localNodeID,
+			ProxyId:    args[1],
+			Running:    false,
+			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"running"}},
+		}); err != nil {
 			fmt.Printf("Error: %v\n", err)
-			return
-		}
-		if !cli.CheckResponse(resp) {
 			return
 		}
 		fmt.Println("Proxy disabled.")
@@ -769,7 +926,11 @@ func cmdProxy(args []string) {
 			return
 		}
 		proxyID := args[1]
-		req := &pb.UpdateProxyRequest{ProxyId: proxyID}
+		req := &pbLocal.UpdateProxyRequest{
+			NodeId:  localNodeID,
+			ProxyId: proxyID,
+		}
+		paths := make([]string, 0, 2)
 
 		// Parse optional flags
 		for i := 2; i < len(args); i++ {
@@ -777,22 +938,23 @@ func cmdProxy(args []string) {
 			case "--backend":
 				if i+1 < len(args) {
 					req.DefaultBackend = args[i+1]
+					paths = append(paths, "default_backend")
 					i++
 				}
 			case "--name":
 				if i+1 < len(args) {
 					req.Name = args[i+1]
+					paths = append(paths, "name")
 					i++
 				}
 			}
 		}
-
-		resp, err := client.UpdateProxy(ctx, req)
-		if err != nil {
-			fmt.Printf("Error: %v\n", err)
-			return
+		if len(paths) > 0 {
+			req.UpdateMask = &fieldmaskpb.FieldMask{Paths: paths}
 		}
-		if !cli.CheckResponse(resp) {
+
+		if _, err := client.UpdateProxy(ctx, req); err != nil {
+			fmt.Printf("Error: %v\n", err)
 			return
 		}
 		fmt.Println("Proxy updated.")
@@ -816,7 +978,10 @@ func cmdRule(args []string) {
 		if !cli.RequireArgs(args, 2, "Usage: rule list <proxy_id>") {
 			return
 		}
-		resp, err := client.ListRules(ctx, &pb.ListRulesRequest{ProxyId: args[1]})
+		resp, err := client.ListRules(ctx, &pbLocal.ListRulesRequest{
+			NodeId:  localNodeID,
+			ProxyId: args[1],
+		})
 		if err != nil {
 			fmt.Printf("Error: %v\n", err)
 			return
@@ -841,50 +1006,57 @@ func cmdRule(args []string) {
 		action := strings.ToLower(args[2])
 		ip := args[3]
 
-		var actionType pb.Rule
+		var actionLabel string
+		var actionErr string
 		switch action {
 		case "allow":
-			actionType.Action = 1 // ACTION_TYPE_ALLOW
+			actionLabel = "Allow"
+			resp, err := client.AllowIP(ctx, &pbLocal.AllowIPRequest{
+				NodeId:  localNodeID,
+				ProxyId: proxyID,
+				Ip:      ip,
+			})
+			if err != nil {
+				fmt.Printf("Error: %v\n", err)
+				return
+			}
+			if !resp.Success {
+				actionErr = resp.Error
+			}
 		case "block":
-			actionType.Action = 2 // ACTION_TYPE_BLOCK
+			actionLabel = "Block"
+			resp, err := client.BlockIP(ctx, &pbLocal.BlockIPRequest{
+				NodeId:  localNodeID,
+				ProxyId: proxyID,
+				Ip:      ip,
+			})
+			if err != nil {
+				fmt.Printf("Error: %v\n", err)
+				return
+			}
+			if !resp.Success {
+				actionErr = resp.Error
+			}
 		default:
 			fmt.Println("Action must be 'allow' or 'block'")
 			return
 		}
 
-		rule := &pb.Rule{
-			Name:     fmt.Sprintf("CLI %s %s", action, ip),
-			Priority: 100,
-			Enabled:  true,
-			Action:   actionType.Action,
-			Conditions: []*pb.Condition{
-				{
-					Type:  1, // SOURCE_IP
-					Op:    1, // EQ
-					Value: ip,
-				},
-			},
-		}
-
-		resp, err := client.AddRule(ctx, &pb.AddRuleRequest{
-			ProxyId: proxyID,
-			Rule:    rule,
-		})
-		if err != nil {
-			fmt.Printf("Error: %v\n", err)
+		if actionErr != "" {
+			fmt.Printf("Error: %s\n", actionErr)
 			return
 		}
-		fmt.Printf("Rule added: %s\n", resp.Id)
+		fmt.Printf("%s rule created for %s on proxy %s.\n", actionLabel, ip, proxyID)
 
 	case "remove":
 		if !cli.RequireArgs(args, 3, "Usage: rule remove <proxy_id> <rule_id>") {
 			return
 		}
-		_, err := client.RemoveRule(ctx, &pb.RemoveRuleRequest{
+		if _, err := client.RemoveRule(ctx, &pbLocal.RemoveRuleRequest{
+			NodeId:  localNodeID,
 			ProxyId: args[1],
 			RuleId:  args[2],
-		})
-		if err != nil {
+		}); err != nil {
 			fmt.Printf("Error: %v\n", err)
 			return
 		}
@@ -905,57 +1077,47 @@ func cmdConnections(args []string) {
 			if !cli.RequireArgs(args, 3, "Usage: conn close <proxy_id> <conn_id>") {
 				return
 			}
-			resp, err := client.CloseConnection(ctx, &pb.CloseConnectionRequest{
+			resp, err := client.CloseConnection(ctx, &pbLocal.CloseConnectionRequest{
+				NodeId:  localNodeID,
 				ProxyId: args[1],
-				ConnId:  args[2],
+				Identifier: &pbLocal.CloseConnectionRequest_ConnId{
+					ConnId: args[2],
+				},
 			})
 			if err != nil {
 				fmt.Printf("Error: %v\n", err)
 				return
 			}
-			if !cli.CheckResponse(resp) {
+			if !resp.Success {
+				fmt.Printf("Error: %s\n", resp.Error)
 				return
 			}
 			fmt.Println("Connection closed.")
 			return
 
 		case "closeall":
-			// closeall [proxy_id] - if no proxy_id, close all connections on all proxies
+			// closeall [proxy_id] - if no proxy_id, backend closes all node connections
 			proxyID := ""
 			if len(args) >= 2 {
 				proxyID = args[1]
 			}
 
+			resp, err := client.CloseAllConnections(ctx, &pbLocal.CloseAllConnectionsRequest{
+				NodeId:  localNodeID,
+				ProxyId: proxyID,
+			})
+			if err != nil {
+				fmt.Printf("Error: %v\n", err)
+				return
+			}
+			if !resp.Success {
+				fmt.Printf("Error: %s\n", resp.Error)
+				return
+			}
 			if proxyID != "" {
-				// Close all connections on specific proxy
-				resp, err := client.CloseAllConnections(ctx, &pb.CloseAllConnectionsRequest{
-					ProxyId: proxyID,
-				})
-				if err != nil {
-					fmt.Printf("Error: %v\n", err)
-					return
-				}
-				if !cli.CheckResponse(resp) {
-					return
-				}
 				fmt.Println("All connections closed on proxy", proxyID)
 			} else {
-				// Close all connections on all proxies
-				proxies, err := client.ListProxies(ctx, &pb.ListProxiesRequest{})
-				if err != nil {
-					fmt.Printf("Error listing proxies: %v\n", err)
-					return
-				}
-				closed := 0
-				for _, p := range proxies.Proxies {
-					resp, err := client.CloseAllConnections(ctx, &pb.CloseAllConnectionsRequest{
-						ProxyId: p.ProxyId,
-					})
-					if err == nil && resp.Success {
-						closed++
-					}
-				}
-				fmt.Printf("Closed all connections on %d proxies.\n", closed)
+				fmt.Println("All connections closed.")
 			}
 			return
 		}
@@ -967,8 +1129,10 @@ func cmdConnections(args []string) {
 		proxyID = args[0]
 	}
 
-	resp, err := client.GetActiveConnections(ctx, &pb.GetActiveConnectionsRequest{
-		ProxyId: proxyID,
+	resp, err := client.ListConnections(ctx, &pbLocal.ListConnectionsRequest{
+		NodeId:     localNodeID,
+		ProxyId:    proxyID,
+		ActiveOnly: true,
 	})
 	if err != nil {
 		fmt.Printf("Error: %v\n", err)
@@ -984,7 +1148,7 @@ func cmdConnections(args []string) {
 	fmt.Println(strings.Repeat("-", 100))
 	for _, c := range resp.Connections {
 		fmt.Printf("%-36s  %-15s  %-20s  %-10d  %-10d\n",
-			c.Id, c.SourceIp, c.DestAddr, c.BytesIn, c.BytesOut)
+			c.ConnId, c.SourceIp, c.DestAddr, c.BytesIn, c.BytesOut)
 	}
 	fmt.Println()
 }
@@ -996,35 +1160,88 @@ func cmdIPAction(args []string, action string) {
 		return
 	}
 
+	duration := int32(0)
+	if len(args) >= 2 {
+		seconds, err := strconv.Atoi(args[1])
+		if err != nil || seconds < 0 {
+			fmt.Println("Duration must be a non-negative integer")
+			return
+		}
+		duration = int32(seconds)
+	}
+
+	var actionType pbCommon.ActionType
+	var actionPast string
+	switch action {
+	case "block":
+		actionType = pbCommon.ActionType_ACTION_TYPE_BLOCK
+		actionPast = "blocked"
+	case "allow":
+		actionType = pbCommon.ActionType_ACTION_TYPE_ALLOW
+		actionPast = "allowed"
+	default:
+		fmt.Printf("Unsupported IP action: %s\n", action)
+		return
+	}
+
 	ctx, cancel := authAPICtx()
 	defer cancel()
 
-	duration := int64(0)
-	if len(args) > 1 {
-		d, err := cli.ParseDuration(args[1], 0)
-		if err != nil {
-			fmt.Printf("Warning: %v, using 0 (permanent)\n", err)
-		}
-		duration = d
-	}
+	ip := args[0]
 
-	var err error
-	if action == "block" {
-		_, err = client.BlockIP(ctx, &pb.BlockIPRequest{
-			Ip:              args[0],
+	if duration > 0 {
+		resp, err := client.AddQuickRule(ctx, &pbLocal.AddQuickRuleRequest{
+			NodeId:          localNodeID,
+			Action:          actionType,
+			ConditionType:   pbCommon.ConditionType_CONDITION_TYPE_SOURCE_IP,
+			Value:           ip,
 			DurationSeconds: duration,
 		})
-	} else {
-		_, err = client.AllowIP(ctx, &pb.AllowIPRequest{
-			Ip:              args[0],
-			DurationSeconds: duration,
-		})
-	}
-	if err != nil {
-		fmt.Printf("Error: %v\n", err)
+		if err != nil {
+			fmt.Printf("Error: %v\n", err)
+			return
+		}
+		if !resp.Success {
+			fmt.Printf("Error: %s\n", resp.Error)
+			return
+		}
+		fmt.Printf("IP %s %s for %ds.\n", ip, actionPast, duration)
 		return
 	}
-	fmt.Printf("IP %s %sed.\n", args[0], action)
+
+	switch action {
+	case "block":
+		resp, err := client.BlockIP(ctx, &pbLocal.BlockIPRequest{
+			NodeId: localNodeID,
+			Ip:     ip,
+		})
+		if err != nil {
+			fmt.Printf("Error: %v\n", err)
+			return
+		}
+		if !resp.Success {
+			fmt.Printf("Error: %s\n", resp.Error)
+			return
+		}
+	case "allow":
+		resp, err := client.AllowIP(ctx, &pbLocal.AllowIPRequest{
+			NodeId: localNodeID,
+			Ip:     ip,
+		})
+		if err != nil {
+			fmt.Printf("Error: %v\n", err)
+			return
+		}
+		if !resp.Success {
+			fmt.Printf("Error: %s\n", resp.Error)
+			return
+		}
+	default:
+		fmt.Printf("Unsupported IP action: %s\n", action)
+		return
+	}
+
+	fmt.Printf("IP %s %s.\n", ip, actionPast)
 }
 
 func cmdBlockIP(args []string) { cmdIPAction(args, "block") }
@@ -1036,7 +1253,7 @@ func cmdGlobalRules(args []string) {
 		ctx, cancel := authAPICtx()
 		defer cancel()
 
-		resp, err := client.ListGlobalRules(ctx, &pb.ListGlobalRulesRequest{})
+		resp, err := client.ListGlobalRules(ctx, &pbLocal.ListGlobalRulesRequest{NodeId: localNodeID})
 		if err != nil {
 			fmt.Printf("Error: %v\n", err)
 			return
@@ -1105,14 +1322,16 @@ func cmdGlobalRules(args []string) {
 		ctx, cancel := authAPICtx()
 		defer cancel()
 
-		resp, err := client.RemoveGlobalRule(ctx, &pb.RemoveGlobalRuleRequest{
+		resp, err := client.RemoveGlobalRule(ctx, &pbLocal.RemoveGlobalRuleRequest{
+			NodeId: localNodeID,
 			RuleId: args[1],
 		})
 		if err != nil {
 			fmt.Printf("Error: %v\n", err)
 			return
 		}
-		if !cli.CheckResponse(resp) {
+		if !resp.Success {
+			fmt.Printf("Error: %s\n", resp.Error)
 			return
 		}
 		fmt.Printf("Global rule %s removed.\n", args[1])
@@ -1124,41 +1343,37 @@ func cmdGlobalRules(args []string) {
 
 func cmdApprovals(args []string) {
 	if len(args) == 0 {
-		// List all active approvals
+		// List all pending approvals
 		ctx, cancel := authAPICtx()
 		defer cancel()
 
-		resp, err := client.ListActiveApprovals(ctx, &pb.ListActiveApprovalsRequest{})
+		resp, err := client.GetApprovalsSnapshot(ctx, &pbLocal.GetApprovalsSnapshotRequest{
+			NodeId:         localNodeID,
+			IncludeHistory: false,
+		})
 		if err != nil {
 			fmt.Printf("Error: %v\n", err)
 			return
 		}
 
-		if len(resp.Approvals) == 0 {
-			fmt.Println("No active approvals.")
+		if len(resp.PendingRequests) == 0 {
+			fmt.Println("No pending approvals.")
 			return
 		}
 
-		fmt.Printf("\nActive Approvals (%d):\n", len(resp.Approvals))
+		fmt.Printf("\nPending Approvals (%d):\n", len(resp.PendingRequests))
 		fmt.Println(strings.Repeat("-", 100))
-		for _, a := range resp.Approvals {
-			decision := "ALLOW"
-			if !a.Allowed {
-				decision = "BLOCK"
+		for _, a := range resp.PendingRequests {
+			timestamp := "unknown"
+			if a.Timestamp != nil {
+				timestamp = a.Timestamp.AsTime().Format("2006-01-02 15:04:05")
 			}
-			expires := "permanent"
-			if a.ExpiresAt != nil && !a.ExpiresAt.AsTime().IsZero() {
-				remaining := time.Until(a.ExpiresAt.AsTime()).Round(time.Second)
-				if remaining > 0 {
-					expires = remaining.String()
-				} else {
-					expires = "expired"
-				}
+			fmt.Printf("%-50s  %s -> %s  %s\n", a.RequestId, a.SourceIp, a.DestAddr, timestamp)
+			if a.Geo != nil {
+				fmt.Printf("  Geo: %s, %s (%s)\n", a.Geo.City, a.Geo.Country, a.Geo.Isp)
 			}
-			fmt.Printf("%-50s  %s  %s  conns:%d  in:%d  out:%d\n",
-				a.Key, decision, expires, len(a.ConnIds), a.BytesIn, a.BytesOut)
-			if a.GeoCountry != "" {
-				fmt.Printf("  Geo: %s, %s (%s)\n", a.GeoCity, a.GeoCountry, a.GeoIsp)
+			if a.ProxyId != "" {
+				fmt.Printf("  Proxy: %s\n", a.ProxyId)
 			}
 		}
 		fmt.Println()
@@ -1181,18 +1396,24 @@ func cmdApprovals(args []string) {
 		ctx, cancel := authAPICtx()
 		defer cancel()
 
-		resp, err := client.CancelApproval(ctx, &pb.CancelApprovalRequest{
-			Key:              args[1],
-			CloseConnections: closeConns,
+		resp, err := client.ResolveApprovalDecision(ctx, &pbLocal.ResolveApprovalDecisionRequest{
+			RequestId:     args[1],
+			Decision:      pbLocal.ApprovalDecision_APPROVAL_DECISION_DENY,
+			RetentionMode: pbCommon.ApprovalRetentionMode_APPROVAL_RETENTION_MODE_CONNECTION_ONLY,
+			DenyBlockType: pbLocal.DenyBlockType_DENY_BLOCK_TYPE_NONE,
 		})
 		if err != nil {
 			fmt.Printf("Error: %v\n", err)
 			return
 		}
-		if !cli.CheckResponse(resp) {
+		if !resp.Success {
+			fmt.Printf("Error: %s\n", resp.Error)
 			return
 		}
-		fmt.Printf("Approval cancelled. Connections closed: %d\n", resp.ConnectionsClosed)
+		if closeConns {
+			fmt.Println("Warning: --close-connections is not supported in typed API; request was denied only.")
+		}
+		fmt.Println("Approval denied.")
 
 	default:
 		fmt.Println("Usage: approvals [list|cancel <key> [--close-connections]]")
@@ -1203,7 +1424,7 @@ func cmdStream() {
 	fmt.Println("Streaming connection events (Ctrl+C to stop)...")
 
 	// Create cancellable context for Ctrl+C
-	ctx, cancel := context.WithCancel(authCtx())
+	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
 	// Handle Ctrl+C
@@ -1215,7 +1436,9 @@ func cmdStream() {
 	}()
 	defer signal.Stop(sigCh)
 
-	stream, err := client.StreamConnections(ctx, &pb.StreamConnectionsRequest{})
+	stream, err := client.StreamConnections(ctx, &pbLocal.StreamConnectionsRequest{
+		NodeId: localNodeID,
+	})
 	if err != nil {
 		fmt.Printf("Error: %v\n", err)
 		return
@@ -1234,7 +1457,7 @@ func cmdStream() {
 		fmt.Printf("[%s] %s:%d -> %s | Action: %s\n",
 			event.EventType.String(),
 			event.SourceIp, event.SourcePort,
-			event.TargetAddr,
+			event.DestAddr,
 			event.ActionTaken.String())
 	}
 }
@@ -1252,7 +1475,7 @@ func cmdMetrics(args []string) {
 	fmt.Println(strings.Repeat("-", 80))
 
 	// Create cancellable context for Ctrl+C
-	ctx, cancel := context.WithCancel(authCtx())
+	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
 	// Handle Ctrl+C
@@ -1264,14 +1487,17 @@ func cmdMetrics(args []string) {
 	}()
 	defer signal.Stop(sigCh)
 
-	stream, err := client.StreamMetrics(ctx, &pb.StreamMetricsRequest{IntervalSeconds: interval})
+	stream, err := client.StreamMetrics(ctx, &pbLocal.StreamMetricsRequest{
+		NodeId:          localNodeID,
+		IntervalSeconds: interval,
+	})
 	if err != nil {
 		fmt.Printf("Error: %v\n", err)
 		return
 	}
 
 	for {
-		sample, err := stream.Recv()
+		metrics, err := stream.Recv()
 		if err != nil {
 			if ctx.Err() != nil {
 				fmt.Println("\nStopped.")
@@ -1280,13 +1506,145 @@ func cmdMetrics(args []string) {
 			fmt.Printf("Stream ended: %v\n", err)
 			return
 		}
-		ts := time.Unix(sample.Timestamp, 0).Format("2006-01-02 15:04:05")
+		ts := time.Now().Format("2006-01-02 15:04:05")
 		fmt.Printf("%-20s  %-12d  %-12d  %-15s  %-15s\n",
 			ts,
-			sample.ActiveConns,
-			sample.TotalConns,
-			formatBytes(sample.BytesInRate),
-			formatBytes(sample.BytesOutRate))
+			metrics.ActiveConnections,
+			metrics.TotalConnections,
+			formatBytes(metrics.BytesIn),
+			formatBytes(metrics.BytesOut))
+	}
+}
+
+func cmdDebug(args []string) {
+	subcmd := "runtime"
+	if len(args) > 0 {
+		subcmd = strings.ToLower(args[0])
+	}
+
+	switch subcmd {
+	case "runtime":
+		ctx, cancel := authAPICtx()
+		defer cancel()
+
+		stats, err := client.GetDebugRuntimeStats(ctx, &pbLocal.GetDebugRuntimeStatsRequest{})
+		if err != nil {
+			fmt.Printf("Error: %v\n", err)
+			return
+		}
+
+		uptime := time.Duration(stats.UptimeSeconds) * time.Second
+		rssText := "unavailable"
+		if stats.RssBytes > 0 {
+			rssText = fmt.Sprintf("%s (%d bytes)", formatBytes(stats.RssBytes), stats.RssBytes)
+		}
+
+		fmt.Println("\nDebug Runtime (MobileLogicService):")
+		fmt.Printf("  Uptime:                 %s\n", uptime)
+		fmt.Printf("  RSS:                    %s\n", rssText)
+		fmt.Printf("  Go Goroutines:          %d\n", stats.GoGoroutines)
+		fmt.Printf("  Go Cgo Calls:           %d\n", stats.GoCgoCalls)
+		fmt.Printf("  Go GC Count:            %d\n", stats.GoGcCount)
+		fmt.Printf("  Go Heap Alloc:          %s\n", formatBytes(stats.GoHeapAllocBytes))
+		fmt.Printf("  Go Heap Inuse:          %s\n", formatBytes(stats.GoHeapInuseBytes))
+		fmt.Printf("  Go Heap Sys:            %s\n", formatBytes(stats.GoHeapSysBytes))
+		fmt.Printf("  Go Heap Objects:        %d\n", stats.GoHeapObjects)
+		fmt.Printf("  Go Stack Inuse:         %s\n", formatBytes(stats.GoStackInuseBytes))
+		fmt.Printf("  Go Sys:                 %s\n", formatBytes(stats.GoSysBytes))
+		fmt.Printf("  Go Total Alloc:         %s\n", formatBytes(stats.GoTotalAllocBytes))
+		fmt.Printf("  Hub Connected:          %v\n", stats.HubConnected)
+		fmt.Printf("  Hub gRPC State:         %s\n", stats.HubGrpcState)
+		fmt.Printf("  Direct gRPC Conns:      %d\n", stats.DirectGrpcConnections)
+		fmt.Printf("  Nodes:                  %d total / %d online\n", stats.TotalNodes, stats.OnlineNodes)
+		fmt.Printf("  Stream Subscribers:     approvals=%d conn=%d p2p=%d\n",
+			stats.ApprovalStreamSubscribers,
+			stats.ConnectionStreamSubscribers,
+			stats.P2PStreamSubscribers)
+		fmt.Println()
+	case "grpc":
+		ctx, cancel := authAPICtx()
+		defer cancel()
+
+		stats, err := client.GetDebugRuntimeStats(ctx, &pbLocal.GetDebugRuntimeStatsRequest{})
+		if err != nil {
+			fmt.Printf("Error: %v\n", err)
+			return
+		}
+
+		fmt.Println("\nDebug gRPC Connections (MobileLogicService):")
+		fmt.Printf("  Hub Connected:          %v\n", stats.HubConnected)
+		fmt.Printf("  Direct gRPC Conns:      %d\n", stats.DirectGrpcConnections)
+		fmt.Printf("  Stream Subscribers:     approvals=%d conn=%d p2p=%d\n",
+			stats.ApprovalStreamSubscribers,
+			stats.ConnectionStreamSubscribers,
+			stats.P2PStreamSubscribers)
+		fmt.Println()
+		fmt.Printf("%-8s  %-26s  %-24s  %-20s  %-10s\n", "Scope", "Node", "Address", "State", "Connected")
+		fmt.Println(strings.Repeat("-", 96))
+		for _, c := range stats.GrpcConnections {
+			nodeID := c.NodeId
+			if nodeID == "" {
+				nodeID = "-"
+			}
+			addr := c.Address
+			if addr == "" {
+				addr = "-"
+			}
+			fmt.Printf("%-8s  %-26s  %-24s  %-20s  %-10v\n",
+				c.Scope, truncate(nodeID, 26), truncate(addr, 24), c.State, c.Connected)
+		}
+		fmt.Println()
+	case "goroutine", "gdiff", "diff":
+		ctx, cancel := authAPICtx()
+		defer cancel()
+
+		stats, err := client.GetDebugRuntimeStats(ctx, &pbLocal.GetDebugRuntimeStatsRequest{})
+		if err != nil {
+			fmt.Printf("Error: %v\n", err)
+			return
+		}
+
+		prevAt := "-"
+		if stats.GoroutineDiffPrevAt != nil {
+			prevAt = stats.GoroutineDiffPrevAt.AsTime().Format("2006-01-02 15:04:05")
+		}
+		currAt := "-"
+		if stats.GoroutineDiffCurrAt != nil {
+			currAt = stats.GoroutineDiffCurrAt.AsTime().Format("2006-01-02 15:04:05")
+		}
+
+		fmt.Println("\nDebug Goroutine Diff (MobileLogicService):")
+		fmt.Printf("  Previous Snapshot:      %s\n", prevAt)
+		fmt.Printf("  Current Snapshot:       %s\n", currAt)
+		fmt.Printf("  Previous Total:         %d\n", stats.GoroutineDiffPrevTotal)
+		fmt.Printf("  Current Total:          %d\n", stats.GoroutineDiffCurrTotal)
+		fmt.Printf("  Delta:                  %+d\n", stats.GoroutineDiffDelta)
+		if !stats.GoroutineDiffHasBaseline {
+			fmt.Println()
+			fmt.Println("Baseline initialized. Run `debug goroutine` again to see diffs.")
+			fmt.Println()
+			return
+		}
+
+		if len(stats.GoroutineDiffEntries) == 0 {
+			fmt.Println("  No goroutine group changes since previous snapshot.")
+			fmt.Println()
+			return
+		}
+
+		fmt.Println()
+		fmt.Printf("%-8s  %-8s  %-8s  %-70s\n", "Delta", "Prev", "Curr", "Signature")
+		fmt.Println(strings.Repeat("-", 104))
+		for _, e := range stats.GoroutineDiffEntries {
+			fmt.Printf("%-8d  %-8d  %-8d  %-70s\n",
+				e.Delta, e.PrevCount, e.CurrCount, truncate(e.Signature, 70))
+		}
+		if stats.GoroutineDiffTruncated > 0 {
+			fmt.Printf("\n  ... %d more entries omitted\n", stats.GoroutineDiffTruncated)
+		}
+		fmt.Println()
+	default:
+		fmt.Println("Usage: debug [runtime|grpc|goroutine]")
 	}
 }
 
@@ -1295,12 +1653,14 @@ func cmdRestart() {
 	defer cancel()
 
 	fmt.Println("Restarting all proxy listeners...")
-	resp, err := client.RestartListeners(ctx, &emptypb.Empty{})
+	resp, err := client.RestartListeners(ctx, &pbLocal.RestartListenersNodeRequest{
+		NodeId: localNodeID,
+	})
 	if err != nil {
 		fmt.Printf("Error: %v\n", err)
 		return
 	}
-	if !cli.CheckResponse(resp) {
+	if !cli.CheckResponseWithField(resp.Success, resp.ErrorMessage) {
 		return
 	}
 	fmt.Printf("Restarted %d listeners.\n", resp.RestartedCount)
@@ -1338,7 +1698,10 @@ func configureGeoIP(ctx context.Context, mode pb.ConfigureGeoIPRequest_Mode, pri
 		req.ApiKey = optional
 	}
 
-	resp, err := client.ConfigureGeoIP(ctx, req)
+	resp, err := client.ConfigureGeoIP(ctx, &pbLocal.ConfigureGeoIPNodeRequest{
+		NodeId: localNodeID,
+		Config: req,
+	})
 	if err != nil {
 		fmt.Printf("Error: %v\n", err)
 		return
@@ -1360,7 +1723,9 @@ func cmdGeoIP(args []string) {
 
 	switch args[0] {
 	case "status":
-		resp, err := client.GetGeoIPStatus(ctx, &pb.GetGeoIPStatusRequest{})
+		resp, err := client.GetGeoIPStatus(ctx, &pbLocal.GetGeoIPStatusNodeRequest{
+			NodeId: localNodeID,
+		})
 		if err != nil {
 			fmt.Printf("Error: %v\n", err)
 			return
@@ -1430,7 +1795,7 @@ func cmdLookupIP(args []string) {
 	ctx, cancel := context.WithTimeout(authCtx(), 10*time.Second)
 	defer cancel()
 
-	resp, err := client.LookupIP(ctx, &pb.LookupIPRequest{Ip: args[0]})
+	resp, err := client.LookupIP(ctx, &pbLocal.LookupIPRequest{Ip: args[0]})
 	if err != nil {
 		fmt.Printf("Error: %v\n", err)
 		return
@@ -1468,7 +1833,7 @@ func cmdLookupIP(args []string) {
 	if resp.Geo.As != "" {
 		fmt.Printf("  AS:           %s\n", resp.Geo.As)
 	}
-	fmt.Printf("  Lookup Time:  %dms\n", resp.LookupTimeMs)
+	fmt.Printf("  Lookup Time:  %dms\n", resp.Geo.GetLatencyMs())
 	fmt.Printf("  Cached:       %v\n", resp.Cached)
 	fmt.Println()
 }

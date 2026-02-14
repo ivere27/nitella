@@ -22,6 +22,7 @@ import (
 	"github.com/ivere27/nitella/pkg/p2p"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
+	"google.golang.org/grpc/metadata"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -69,7 +70,7 @@ func NewCLIClient(hubAddr, authToken, userID string) *CLIClient {
 		hubAddr:       hubAddr,
 		authToken:     authToken,
 		userID:        userID,
-		useP2P:        true,
+		useP2P:        false,
 		p2pFallback:   true,
 		routingTokens: make(map[string]string),
 		responseChs:   make(map[string]chan *pb.CommandResponse),
@@ -213,7 +214,14 @@ func (c *CLIClient) Connect(ctx context.Context) error {
 		if c.privateKey != nil {
 			c.p2pTransport.SetIdentity(c.privateKey)
 		}
-		if err := c.p2pTransport.StartSignaling(ctx); err != nil {
+
+		// Add authorization token for signaling if not already present
+		signalingCtx := ctx
+		if c.authToken != "" {
+			signalingCtx = metadata.AppendToOutgoingContext(ctx, "authorization", "Bearer "+c.authToken)
+		}
+
+		if err := c.p2pTransport.StartSignaling(signalingCtx); err != nil {
 			log.Printf("[P2P] Failed to start signaling: %v", err)
 			if !c.p2pFallback {
 				return fmt.Errorf("P2P signaling failed and fallback disabled: %w", err)
@@ -230,7 +238,9 @@ func (c *CLIClient) Close() {
 	defer c.connMu.Unlock()
 
 	if c.p2pTransport != nil {
-		c.p2pTransport.Close()
+		if err := c.p2pTransport.Close(); err != nil {
+			log.Printf("warning: p2p transport close error: %v", err)
+		}
 	}
 	if c.conn != nil {
 		c.conn.Close()
@@ -296,57 +306,15 @@ func (c *CLIClient) SendCommand(ctx context.Context, nodeID string, cmdType pb.C
 }
 
 func (c *CLIClient) sendViaP2P(ctx context.Context, nodeID string, cmdType pb.CommandType, payload []byte, nodePubKey ed25519.PublicKey) (*pb.CommandResult, error) {
-	// Build encrypted command payload
-	innerPayload := &pb.EncryptedCommandPayload{
-		Type:    cmdType,
-		Payload: payload,
-	}
-	innerBytes, err := proto.Marshal(innerPayload)
+	encryptedPayload, err := c.buildEncryptedCommandPayload(cmdType, payload, nodePubKey)
 	if err != nil {
-		return nil, fmt.Errorf("failed to marshal command: %w", err)
+		return nil, err
 	}
 
-	// Wrap in SecureCommandPayload for replay protection
-	securePayload := &common.SecureCommandPayload{
-		RequestId: fmt.Sprintf("%d", time.Now().UnixNano()),
-		Timestamp: time.Now().Unix(),
-		Data:      innerBytes,
-	}
-	secureBytes, err := proto.Marshal(securePayload)
+	data, err := proto.Marshal(&pb.Command{Encrypted: encryptedPayload})
 	if err != nil {
-		return nil, fmt.Errorf("failed to marshal secure payload: %w", err)
+		return nil, fmt.Errorf("failed to marshal P2P command envelope: %w", err)
 	}
-
-	// Encrypt with node's public key
-	if nodePubKey == nil {
-		return nil, fmt.Errorf("node public key required for P2P")
-	}
-
-	encrypted, err := nitellacrypto.EncryptWithSignature(secureBytes, nodePubKey, c.privateKey, "")
-	if err != nil {
-		return nil, fmt.Errorf("failed to encrypt: %w", err)
-	}
-
-	// Wrap for transport
-	cmdWrapper := struct {
-		Type    string `json:"type"`
-		Payload []byte `json:"payload"`
-	}{
-		Type:    "command",
-		Payload: mustMarshalProto(encrypted),
-	}
-
-	data, _ := proto.Marshal(&pb.Command{
-		Encrypted: &common.EncryptedPayload{
-			EphemeralPubkey:   encrypted.EphemeralPubKey,
-			Nonce:             encrypted.Nonce,
-			Ciphertext:        encrypted.Ciphertext,
-			SenderFingerprint: encrypted.SenderFingerprint,
-			Signature:         encrypted.Signature,
-		},
-	})
-
-	_ = cmdWrapper // unused for now, using proto instead
 
 	// Send via P2P
 	if err := c.p2pTransport.Send(nodeID, data); err != nil {
@@ -373,42 +341,14 @@ func (c *CLIClient) sendViaHub(ctx context.Context, nodeID string, cmdType pb.Co
 		return nil, fmt.Errorf("not connected")
 	}
 
-	// Build encrypted command payload
-	innerPayload := &pb.EncryptedCommandPayload{
-		Type:    cmdType,
-		Payload: payload,
-	}
-	innerBytes, err := proto.Marshal(innerPayload)
+	encryptedPayload, err := c.buildEncryptedCommandPayload(cmdType, payload, nodePubKey)
 	if err != nil {
-		return nil, fmt.Errorf("failed to marshal command: %w", err)
+		return nil, err
 	}
 
-	// Wrap in SecureCommandPayload for replay protection
-	securePayload := &common.SecureCommandPayload{
-		RequestId: fmt.Sprintf("%d", time.Now().UnixNano()),
-		Timestamp: time.Now().Unix(),
-		Data:      innerBytes,
-	}
-	secureBytes, err := proto.Marshal(securePayload)
-	if err != nil {
-		return nil, fmt.Errorf("failed to marshal secure payload: %w", err)
-	}
-
-	var encryptedPayload *common.EncryptedPayload
-	if nodePubKey != nil && c.privateKey != nil {
-		encrypted, err := nitellacrypto.EncryptWithSignature(secureBytes, nodePubKey, c.privateKey, "")
-		if err != nil {
-			return nil, fmt.Errorf("failed to encrypt: %w", err)
-		}
-		encryptedPayload = &common.EncryptedPayload{
-			EphemeralPubkey:   encrypted.EphemeralPubKey,
-			Nonce:             encrypted.Nonce,
-			Ciphertext:        encrypted.Ciphertext,
-			SenderFingerprint: encrypted.SenderFingerprint,
-			Signature:         encrypted.Signature,
-		}
-	} else {
-		log.Println("[WARN] Sending command without E2E encryption (no keys)")
+	// Add auth token
+	if c.authToken != "" {
+		ctx = metadata.AppendToOutgoingContext(ctx, "authorization", "Bearer "+c.authToken)
 	}
 
 	// Send via Hub (Type is embedded in encrypted payload)
@@ -422,29 +362,88 @@ func (c *CLIClient) sendViaHub(ctx context.Context, nodeID string, cmdType pb.Co
 		return nil, fmt.Errorf("command failed: %w", err)
 	}
 
-	// Decrypt response if encrypted
-	if resp.EncryptedData != nil && c.privateKey != nil {
-		decrypted, err := nitellacrypto.Decrypt(&nitellacrypto.EncryptedPayload{
-			EphemeralPubKey:   resp.EncryptedData.EphemeralPubkey,
-			Nonce:             resp.EncryptedData.Nonce,
-			Ciphertext:        resp.EncryptedData.Ciphertext,
-			SenderFingerprint: resp.EncryptedData.SenderFingerprint,
-		}, c.privateKey)
-		if err != nil {
-			return nil, fmt.Errorf("failed to decrypt response: %w", err)
-		}
-
-		var result pb.CommandResult
-		if err := proto.Unmarshal(decrypted, &result); err != nil {
-			return nil, fmt.Errorf("failed to unmarshal response: %w", err)
-		}
-		return &result, nil
+	if resp.EncryptedData == nil {
+		return nil, fmt.Errorf("hub returned unencrypted command response")
 	}
 
-	// Return empty result if no encrypted data
-	return &pb.CommandResult{
-		Status:       "OK",
-		ErrorMessage: "",
+	respEnvelope := &nitellacrypto.EncryptedPayload{
+		EphemeralPubKey:   resp.EncryptedData.EphemeralPubkey,
+		Nonce:             resp.EncryptedData.Nonce,
+		Ciphertext:        resp.EncryptedData.Ciphertext,
+		SenderFingerprint: resp.EncryptedData.SenderFingerprint,
+		Signature:         resp.EncryptedData.Signature,
+	}
+
+	// Verify response signature with node's public key
+	if len(respEnvelope.Signature) == 0 {
+		return nil, fmt.Errorf("hub returned unsigned command response")
+	}
+	if err := nitellacrypto.VerifySignature(respEnvelope, nodePubKey); err != nil {
+		return nil, fmt.Errorf("response signature verification failed: %w", err)
+	}
+
+	decrypted, err := nitellacrypto.Decrypt(respEnvelope, c.privateKey)
+	if err != nil {
+		return nil, fmt.Errorf("failed to decrypt response: %w", err)
+	}
+
+	var result pb.CommandResult
+	if err := proto.Unmarshal(decrypted, &result); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal response: %w", err)
+	}
+	return &result, nil
+}
+
+func (c *CLIClient) buildEncryptedCommandPayload(cmdType pb.CommandType, payload []byte, nodePubKey ed25519.PublicKey) (*common.EncryptedPayload, error) {
+	if nodePubKey == nil {
+		return nil, fmt.Errorf("node public key is required for E2E command encryption")
+	}
+	if c.privateKey == nil {
+		return nil, fmt.Errorf("identity private key is required for E2E command encryption")
+	}
+
+	senderPubKey := c.publicKey
+	if len(senderPubKey) == 0 {
+		if pk, ok := c.privateKey.Public().(ed25519.PublicKey); ok {
+			senderPubKey = pk
+		}
+	}
+	if len(senderPubKey) == 0 {
+		return nil, fmt.Errorf("identity public key is required for E2E command encryption")
+	}
+
+	innerPayload := &pb.EncryptedCommandPayload{
+		Type:    cmdType,
+		Payload: payload,
+	}
+	innerBytes, err := proto.Marshal(innerPayload)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal command: %w", err)
+	}
+
+	securePayload := &common.SecureCommandPayload{
+		RequestId: fmt.Sprintf("%d", time.Now().UnixNano()),
+		Timestamp: time.Now().Unix(),
+		Data:      innerBytes,
+	}
+	secureBytes, err := proto.Marshal(securePayload)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal secure payload: %w", err)
+	}
+
+	fpHash := sha256.Sum256(senderPubKey)
+	senderFP := hex.EncodeToString(fpHash[:])
+	encrypted, err := nitellacrypto.EncryptWithSignature(secureBytes, nodePubKey, c.privateKey, senderFP)
+	if err != nil {
+		return nil, fmt.Errorf("failed to encrypt command payload: %w", err)
+	}
+
+	return &common.EncryptedPayload{
+		EphemeralPubkey:   encrypted.EphemeralPubKey,
+		Nonce:             encrypted.Nonce,
+		Ciphertext:        encrypted.Ciphertext,
+		SenderFingerprint: encrypted.SenderFingerprint,
+		Signature:         encrypted.Signature,
 	}, nil
 }
 
@@ -474,8 +473,14 @@ func (c *CLIClient) StartMetricsStream(ctx context.Context, nodeID string) error
 		return fmt.Errorf("not connected")
 	}
 
+	// Add auth token
+	if c.authToken != "" {
+		ctx = metadata.AppendToOutgoingContext(ctx, "authorization", "Bearer "+c.authToken)
+	}
+
 	stream, err := client.StreamMetrics(ctx, &pb.StreamMetricsRequest{
-		NodeId: nodeID,
+		NodeId:       nodeID,
+		RoutingToken: c.GetRoutingToken(nodeID),
 	})
 	if err != nil {
 		return fmt.Errorf("failed to start metrics stream: %w", err)
@@ -496,6 +501,7 @@ func (c *CLIClient) StartMetricsStream(ctx context.Context, nodeID string) error
 					Nonce:             sample.Encrypted.Nonce,
 					Ciphertext:        sample.Encrypted.Ciphertext,
 					SenderFingerprint: sample.Encrypted.SenderFingerprint,
+					Signature:         sample.Encrypted.Signature,
 				}, c.privateKey)
 				if err == nil {
 					var metrics pb.Metrics
@@ -556,7 +562,7 @@ func (c *CLIClient) GetNodeRules(ctx context.Context, nodeID string, nodePubKey 
 	// Send ListRulesRequest via command
 	req := &pbProxy.ListRulesRequest{ProxyId: nodeID}
 	payload, _ := proto.Marshal(req)
-	result, err := c.SendCommand(ctx, nodeID, pb.CommandType_COMMAND_TYPE_EXECUTE, payload, nodePubKey)
+	result, err := c.SendCommand(ctx, nodeID, pb.CommandType_COMMAND_TYPE_LIST_RULES, payload, nodePubKey)
 	if err != nil {
 		return nil, err
 	}
@@ -624,7 +630,7 @@ func (c *CLIClient) ResolveApproval(ctx context.Context, nodeID, reqID string, a
 		DurationSeconds: durationSeconds,
 	}
 	payload, _ := proto.Marshal(req)
-	result, err := c.SendCommand(ctx, nodeID, pb.CommandType_COMMAND_TYPE_EXECUTE, payload, nodePubKey)
+	result, err := c.SendCommand(ctx, nodeID, pb.CommandType_COMMAND_TYPE_RESOLVE_APPROVAL, payload, nodePubKey)
 	if err != nil {
 		return err
 	}
@@ -654,16 +660,4 @@ func GetNodePublicKey(certPEM string) (ed25519.PublicKey, error) {
 	}
 
 	return pubKey, nil
-}
-
-func mustMarshalProto(enc *nitellacrypto.EncryptedPayload) []byte {
-	msg := &common.EncryptedPayload{
-		EphemeralPubkey:   enc.EphemeralPubKey,
-		Nonce:             enc.Nonce,
-		Ciphertext:        enc.Ciphertext,
-		SenderFingerprint: enc.SenderFingerprint,
-		Signature:         enc.Signature,
-	}
-	data, _ := proto.Marshal(msg)
-	return data
 }

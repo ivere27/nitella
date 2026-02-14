@@ -6,7 +6,6 @@ option go_package = "github.com/ivere27/nitella/pkg/api/proxy";
 
 import "google/protobuf/timestamp.proto";
 import "common/common.proto";
-import "google/protobuf/empty.proto";
 
 // ===========================================================================
 // PROXY CONTROL SERVICE (Local)
@@ -15,48 +14,12 @@ import "google/protobuf/empty.proto";
 // or other local agents.
 
 service ProxyControlService {
-  // Lifecycle Management
-  rpc CreateProxy(CreateProxyRequest) returns (CreateProxyResponse);
-  rpc DisableProxy(DisableProxyRequest) returns (DisableProxyResponse);
-  rpc EnableProxy(EnableProxyRequest) returns (EnableProxyResponse);
-  rpc DeleteProxy(DeleteProxyRequest) returns (DeleteProxyResponse);
-  rpc UpdateProxy(UpdateProxyRequest) returns (UpdateProxyResponse);
-  rpc RestartListeners(google.protobuf.Empty) returns (RestartListenersResponse);
-  rpc GetStatus(GetStatusRequest) returns (ProxyStatus);
-  rpc ReloadRules(ReloadRulesRequest) returns (ReloadRulesResponse);
+  // E2E Encrypted Command (same envelope as Hub relay)
+  rpc SendCommand(SendCommandRequest) returns (SendCommandResponse);
 
-  // Rule Management (Runtime)
-  rpc AddRule(AddRuleRequest) returns (Rule);
-  rpc RemoveRule(RemoveRuleRequest) returns (google.protobuf.Empty);
-  rpc ListRules(ListRulesRequest) returns (ListRulesResponse);
-  rpc ListProxies(ListProxiesRequest) returns (ListProxiesResponse);
-
-  // Quick Actions (Ephemeral, runtime only)
-  rpc BlockIP(BlockIPRequest) returns (google.protobuf.Empty);
-  rpc AllowIP(AllowIPRequest) returns (google.protobuf.Empty);
-  rpc ListGlobalRules(ListGlobalRulesRequest) returns (ListGlobalRulesResponse);
-  rpc RemoveGlobalRule(RemoveGlobalRuleRequest) returns (RemoveGlobalRuleResponse);
-
-  // Observability
-  rpc StreamConnections(StreamConnectionsRequest) returns (stream ConnectionEvent);
-  rpc StreamMetrics(StreamMetricsRequest) returns (stream MetricsSample);
-
-  // Connection Management
-  rpc GetActiveConnections(GetActiveConnectionsRequest) returns (GetActiveConnectionsResponse);
-  rpc CloseConnection(CloseConnectionRequest) returns (CloseConnectionResponse);
-  rpc CloseAllConnections(CloseAllConnectionsRequest) returns (CloseAllConnectionsResponse);
-
-  // Configuration
-  rpc ConfigureGeoIP(ConfigureGeoIPRequest) returns (ConfigureGeoIPResponse);
-
-  // GeoIP Lookup
-  rpc LookupIP(LookupIPRequest) returns (LookupIPResponse);
-  rpc GetGeoIPStatus(GetGeoIPStatusRequest) returns (GetGeoIPStatusResponse);
-
-  // Active Approval Management
-  rpc ListActiveApprovals(ListActiveApprovalsRequest) returns (ListActiveApprovalsResponse);
-  rpc CancelApproval(CancelApprovalRequest) returns (CancelApprovalResponse);
-  rpc ResolveApproval(ResolveApprovalRequest) returns (ResolveApprovalResponse);
+  // Observability (E2E encrypted streams)
+  rpc StreamConnections(StreamConnectionsRequest) returns (stream EncryptedStreamPayload);
+  rpc StreamMetrics(StreamMetricsRequest) returns (stream EncryptedStreamPayload);
 }
 
 // ---------------------------------------------------------------------------
@@ -253,6 +216,34 @@ message ReloadRulesResponse {
 }
 
 // ---------------------------------------------------------------------------
+// Proxy Template Application
+// ---------------------------------------------------------------------------
+
+message ApplyProxyRequest {
+  string proxy_id = 1;
+  int64 revision_num = 2;
+  string config_yaml = 3;
+  string config_hash = 4;
+}
+
+message ApplyProxyResponse {
+  bool success = 1;
+  string error_message = 2;
+}
+
+message AppliedProxyStatus {
+  string proxy_id = 1;
+  int64 revision_num = 2;
+  string applied_at = 3; // RFC3339
+  string status = 4;
+  string error_message = 5;
+}
+
+message GetAppliedProxiesResponse {
+  repeated AppliedProxyStatus proxies = 1;
+}
+
+// ---------------------------------------------------------------------------
 // Rules
 // ---------------------------------------------------------------------------
 
@@ -380,6 +371,7 @@ message RemoveGlobalRuleResponse {
 
 message StreamConnectionsRequest {
   bool active_only = 1; // If true, only streams currently active events
+  bytes viewer_pubkey = 2; // Viewer's Ed25519 public key for E2E encryption
 }
 
 message ConnectionEvent {
@@ -414,6 +406,7 @@ enum EventType {
 
 message StreamMetricsRequest {
   int32 interval_seconds = 1;
+  bytes viewer_pubkey = 2; // Viewer's Ed25519 public key for E2E encryption
 }
 
 message MetricsSample {
@@ -423,6 +416,14 @@ message MetricsSample {
   int64 bytes_in_rate = 4;  // bytes per second
   int64 bytes_out_rate = 5; // bytes per second
   int64 blocked_total = 6;
+}
+
+// EncryptedStreamPayload wraps E2E encrypted streaming data.
+// Used by StreamMetrics and StreamConnections to encrypt payloads
+// with the viewer's public key before sending over direct gRPC.
+message EncryptedStreamPayload {
+  nitella.EncryptedPayload encrypted = 1;
+  string payload_type = 2; // "MetricsSample" or "ConnectionEvent"
 }
 
 // ---------------------------------------------------------------------------
@@ -536,6 +537,9 @@ message StatsSummaryResponse {
   int64 unique_countries = 5;
   int64 blocked_total = 6;
   int64 allowed_total = 7;
+  int64 active_connections = 8;
+  int32 proxy_count = 9;
+  google.protobuf.Timestamp timestamp = 10;
 }
 
 // ---------------------------------------------------------------------------
@@ -545,8 +549,9 @@ message StatsSummaryResponse {
 message ResolveApprovalRequest {
   string req_id = 1;
   nitella.ApprovalActionType action = 2;
-  int64 duration_seconds = 3;
-  string reason = 4;
+  nitella.ApprovalRetentionMode retention_mode = 3;
+  int64 duration_seconds = 4;
+  string reason = 5;
 }
 
 message ResolveApprovalResponse {
@@ -594,4 +599,19 @@ message CancelApprovalResponse {
   bool success = 1;
   string error_message = 2;
   int32 connections_closed = 3;
+}
+
+// ---------------------------------------------------------------------------
+// E2E Encrypted Command (same envelope as Hub relay)
+// ---------------------------------------------------------------------------
+
+message SendCommandRequest {
+  nitella.EncryptedPayload encrypted = 1;  // Encrypted SecureCommandPayload -> EncryptedCommandPayload
+  bytes viewer_pubkey = 2;                  // Viewer's Ed25519 pubkey (for encrypting response)
+}
+
+message SendCommandResponse {
+  nitella.EncryptedPayload encrypted = 1;  // Encrypted response payload
+  string status = 2;                        // "OK" or "ERROR"
+  string error_message = 3;                 // Only when decryption/dispatch fails
 }

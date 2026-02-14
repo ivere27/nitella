@@ -2,8 +2,12 @@ package integration
 
 import (
 	"context"
+	"crypto/ed25519"
+	"crypto/rand"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/hex"
+	"encoding/pem"
 	"fmt"
 	"io"
 	"net"
@@ -16,11 +20,384 @@ import (
 	"time"
 
 	"github.com/ivere27/nitella/pkg/api/common"
+	hubpb "github.com/ivere27/nitella/pkg/api/hub"
 	pb "github.com/ivere27/nitella/pkg/api/proxy"
+	nitellacrypto "github.com/ivere27/nitella/pkg/crypto"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/metadata"
+	"google.golang.org/protobuf/proto"
 )
+
+// ============================================================================
+// E2E Encryption Helpers
+// ============================================================================
+
+// extractNodePubKey extracts the Ed25519 public key from the admin CA certificate PEM.
+func extractNodePubKey(t *testing.T, caPath string) ed25519.PublicKey {
+	t.Helper()
+	caPEM, err := os.ReadFile(caPath)
+	if err != nil {
+		t.Fatalf("Failed to read CA cert: %v", err)
+	}
+	block, _ := pem.Decode(caPEM)
+	if block == nil {
+		t.Fatal("No PEM block found in CA cert")
+	}
+	cert, err := x509.ParseCertificate(block.Bytes)
+	if err != nil {
+		t.Fatalf("Failed to parse CA cert: %v", err)
+	}
+	pubKey, ok := cert.PublicKey.(ed25519.PublicKey)
+	if !ok {
+		t.Fatal("CA cert does not contain an Ed25519 public key")
+	}
+	return pubKey
+}
+
+// testSendCommandRaw sends an encrypted command and returns the raw CommandResult without checking status.
+// Use this for tests that intentionally test error cases.
+func testSendCommandRaw(t *testing.T, client pb.ProxyControlServiceClient, ctx context.Context, nodePubKey ed25519.PublicKey, cmdType hubpb.CommandType, req proto.Message) (*hubpb.CommandResult, error) {
+	t.Helper()
+
+	// Generate viewer key pair for this call
+	viewerPub, viewerPriv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("GenerateKey failed: %v", err)
+	}
+
+	// Generate request ID
+	idBytes := make([]byte, 16)
+	rand.Read(idBytes)
+	requestID := hex.EncodeToString(idBytes)
+
+	// Marshal inner request
+	var reqBytes []byte
+	if req != nil {
+		reqBytes, err = proto.Marshal(req)
+		if err != nil {
+			t.Fatalf("Marshal request failed: %v", err)
+		}
+	}
+
+	// Build EncryptedCommandPayload
+	cmdPayload := &hubpb.EncryptedCommandPayload{
+		Type:    cmdType,
+		Payload: reqBytes,
+	}
+	cmdPayloadBytes, err := proto.Marshal(cmdPayload)
+	if err != nil {
+		t.Fatalf("Marshal command payload failed: %v", err)
+	}
+
+	// Build SecureCommandPayload
+	scp := &common.SecureCommandPayload{
+		RequestId: requestID,
+		Timestamp: time.Now().Unix(),
+		Data:      cmdPayloadBytes,
+	}
+	scpBytes, err := proto.Marshal(scp)
+	if err != nil {
+		t.Fatalf("Marshal secure payload failed: %v", err)
+	}
+
+	// Encrypt with node's public key, sign with viewer's private key
+	encrypted, err := nitellacrypto.EncryptWithSignature(scpBytes, nodePubKey, viewerPriv, "viewer")
+	if err != nil {
+		t.Fatalf("Encrypt failed: %v", err)
+	}
+
+	// Convert to proto EncryptedPayload
+	encProto := &common.EncryptedPayload{
+		EphemeralPubkey:   encrypted.EphemeralPubKey,
+		Nonce:             encrypted.Nonce,
+		Ciphertext:        encrypted.Ciphertext,
+		SenderFingerprint: encrypted.SenderFingerprint,
+		Signature:         encrypted.Signature,
+	}
+
+	// Send via SendCommand RPC
+	resp, err := client.SendCommand(ctx, &pb.SendCommandRequest{
+		Encrypted:    encProto,
+		ViewerPubkey: viewerPub,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	// Check for pre-crypto errors (no encrypted response)
+	if resp.Status == "ERROR" && resp.Encrypted == nil {
+		return &hubpb.CommandResult{
+			Status:       resp.Status,
+			ErrorMessage: resp.ErrorMessage,
+		}, nil
+	}
+
+	// Decrypt response
+	enc := resp.GetEncrypted()
+	if enc == nil {
+		t.Fatal("No encrypted response")
+	}
+	cryptoPayload := &nitellacrypto.EncryptedPayload{
+		EphemeralPubKey:   enc.EphemeralPubkey,
+		Nonce:             enc.Nonce,
+		Ciphertext:        enc.Ciphertext,
+		SenderFingerprint: enc.SenderFingerprint,
+		Signature:         enc.Signature,
+	}
+	plaintext, err := nitellacrypto.Decrypt(cryptoPayload, viewerPriv)
+	if err != nil {
+		t.Fatalf("Decrypt response failed: %v", err)
+	}
+
+	var result hubpb.CommandResult
+	if err := proto.Unmarshal(plaintext, &result); err != nil {
+		t.Fatalf("Unmarshal CommandResult failed: %v", err)
+	}
+
+	return &result, nil
+}
+
+// testSendCommand sends an encrypted command and returns the decrypted CommandResult.
+// It fatals if the gRPC call fails or the command status is not "OK".
+func testSendCommand(t *testing.T, client pb.ProxyControlServiceClient, ctx context.Context, nodePubKey ed25519.PublicKey, cmdType hubpb.CommandType, req proto.Message) *hubpb.CommandResult {
+	t.Helper()
+
+	result, err := testSendCommandRaw(t, client, ctx, nodePubKey, cmdType, req)
+	if err != nil {
+		t.Fatalf("SendCommand RPC failed: %v", err)
+	}
+
+	if result.Status != "OK" {
+		t.Fatalf("SendCommand status: %s, error: %s", result.Status, result.ErrorMessage)
+	}
+
+	return result
+}
+
+// ============================================================================
+// Convenience wrappers for common command patterns
+// ============================================================================
+
+func cmdCreateProxy(t *testing.T, client pb.ProxyControlServiceClient, ctx context.Context, nodePubKey ed25519.PublicKey, req *pb.CreateProxyRequest) *pb.CreateProxyResponse {
+	t.Helper()
+	result := testSendCommand(t, client, ctx, nodePubKey, hubpb.CommandType_COMMAND_TYPE_CREATE_PROXY, req)
+	var resp pb.CreateProxyResponse
+	if len(result.ResponsePayload) > 0 {
+		if err := proto.Unmarshal(result.ResponsePayload, &resp); err != nil {
+			t.Fatalf("Unmarshal CreateProxyResponse failed: %v", err)
+		}
+	}
+	return &resp
+}
+
+func cmdDeleteProxy(t *testing.T, client pb.ProxyControlServiceClient, ctx context.Context, nodePubKey ed25519.PublicKey, req *pb.DeleteProxyRequest) *pb.DeleteProxyResponse {
+	t.Helper()
+	result := testSendCommand(t, client, ctx, nodePubKey, hubpb.CommandType_COMMAND_TYPE_DELETE_PROXY, req)
+	var resp pb.DeleteProxyResponse
+	if len(result.ResponsePayload) > 0 {
+		if err := proto.Unmarshal(result.ResponsePayload, &resp); err != nil {
+			t.Fatalf("Unmarshal DeleteProxyResponse failed: %v", err)
+		}
+	}
+	return &resp
+}
+
+func cmdListProxies(t *testing.T, client pb.ProxyControlServiceClient, ctx context.Context, nodePubKey ed25519.PublicKey) *pb.ListProxiesResponse {
+	t.Helper()
+	result := testSendCommand(t, client, ctx, nodePubKey, hubpb.CommandType_COMMAND_TYPE_LIST_PROXIES, &pb.ListProxiesRequest{})
+	var resp pb.ListProxiesResponse
+	if len(result.ResponsePayload) > 0 {
+		if err := proto.Unmarshal(result.ResponsePayload, &resp); err != nil {
+			t.Fatalf("Unmarshal ListProxiesResponse failed: %v", err)
+		}
+	}
+	return &resp
+}
+
+func cmdGetProxyStatus(t *testing.T, client pb.ProxyControlServiceClient, ctx context.Context, nodePubKey ed25519.PublicKey, proxyID string) *pb.ProxyStatus {
+	t.Helper()
+	listResp := cmdListProxies(t, client, ctx, nodePubKey)
+	for _, p := range listResp.Proxies {
+		if p.ProxyId == proxyID {
+			return p
+		}
+	}
+	t.Fatalf("Proxy %s not found in list", proxyID)
+	return nil
+}
+
+func cmdAddRule(t *testing.T, client pb.ProxyControlServiceClient, ctx context.Context, nodePubKey ed25519.PublicKey, req *pb.AddRuleRequest) *pb.Rule {
+	t.Helper()
+	result := testSendCommand(t, client, ctx, nodePubKey, hubpb.CommandType_COMMAND_TYPE_ADD_RULE, req)
+	var resp pb.Rule
+	if len(result.ResponsePayload) > 0 {
+		if err := proto.Unmarshal(result.ResponsePayload, &resp); err != nil {
+			t.Fatalf("Unmarshal Rule failed: %v", err)
+		}
+	}
+	return &resp
+}
+
+func cmdRemoveRule(t *testing.T, client pb.ProxyControlServiceClient, ctx context.Context, nodePubKey ed25519.PublicKey, req *pb.RemoveRuleRequest) {
+	t.Helper()
+	testSendCommand(t, client, ctx, nodePubKey, hubpb.CommandType_COMMAND_TYPE_REMOVE_RULE, req)
+}
+
+func cmdListRules(t *testing.T, client pb.ProxyControlServiceClient, ctx context.Context, nodePubKey ed25519.PublicKey, req *pb.ListRulesRequest) *pb.ListRulesResponse {
+	t.Helper()
+	result := testSendCommand(t, client, ctx, nodePubKey, hubpb.CommandType_COMMAND_TYPE_LIST_RULES, req)
+	var resp pb.ListRulesResponse
+	if len(result.ResponsePayload) > 0 {
+		if err := proto.Unmarshal(result.ResponsePayload, &resp); err != nil {
+			t.Fatalf("Unmarshal ListRulesResponse failed: %v", err)
+		}
+	}
+	return &resp
+}
+
+func cmdGetActiveConnections(t *testing.T, client pb.ProxyControlServiceClient, ctx context.Context, nodePubKey ed25519.PublicKey, req *pb.GetActiveConnectionsRequest) *pb.GetActiveConnectionsResponse {
+	t.Helper()
+	result := testSendCommand(t, client, ctx, nodePubKey, hubpb.CommandType_COMMAND_TYPE_GET_ACTIVE_CONNECTIONS, req)
+	var resp pb.GetActiveConnectionsResponse
+	if len(result.ResponsePayload) > 0 {
+		if err := proto.Unmarshal(result.ResponsePayload, &resp); err != nil {
+			t.Fatalf("Unmarshal GetActiveConnectionsResponse failed: %v", err)
+		}
+	}
+	return &resp
+}
+
+func cmdCloseConnection(t *testing.T, client pb.ProxyControlServiceClient, ctx context.Context, nodePubKey ed25519.PublicKey, req *pb.CloseConnectionRequest) *pb.CloseConnectionResponse {
+	t.Helper()
+	result := testSendCommand(t, client, ctx, nodePubKey, hubpb.CommandType_COMMAND_TYPE_CLOSE_CONNECTION, req)
+	var resp pb.CloseConnectionResponse
+	if len(result.ResponsePayload) > 0 {
+		if err := proto.Unmarshal(result.ResponsePayload, &resp); err != nil {
+			t.Fatalf("Unmarshal CloseConnectionResponse failed: %v", err)
+		}
+	}
+	return &resp
+}
+
+func cmdCloseAllConnections(t *testing.T, client pb.ProxyControlServiceClient, ctx context.Context, nodePubKey ed25519.PublicKey, req *pb.CloseAllConnectionsRequest) *pb.CloseAllConnectionsResponse {
+	t.Helper()
+	result := testSendCommand(t, client, ctx, nodePubKey, hubpb.CommandType_COMMAND_TYPE_CLOSE_ALL_CONNECTIONS, req)
+	var resp pb.CloseAllConnectionsResponse
+	if len(result.ResponsePayload) > 0 {
+		if err := proto.Unmarshal(result.ResponsePayload, &resp); err != nil {
+			t.Fatalf("Unmarshal CloseAllConnectionsResponse failed: %v", err)
+		}
+	}
+	return &resp
+}
+
+func cmdBlockIP(t *testing.T, client pb.ProxyControlServiceClient, ctx context.Context, nodePubKey ed25519.PublicKey, req *pb.BlockIPRequest) {
+	t.Helper()
+	testSendCommand(t, client, ctx, nodePubKey, hubpb.CommandType_COMMAND_TYPE_BLOCK_IP, req)
+}
+
+func cmdAllowIP(t *testing.T, client pb.ProxyControlServiceClient, ctx context.Context, nodePubKey ed25519.PublicKey, req *pb.AllowIPRequest) {
+	t.Helper()
+	testSendCommand(t, client, ctx, nodePubKey, hubpb.CommandType_COMMAND_TYPE_ALLOW_IP, req)
+}
+
+func cmdGetGeoIPStatus(t *testing.T, client pb.ProxyControlServiceClient, ctx context.Context, nodePubKey ed25519.PublicKey) *pb.GetGeoIPStatusResponse {
+	t.Helper()
+	result := testSendCommand(t, client, ctx, nodePubKey, hubpb.CommandType_COMMAND_TYPE_GET_GEOIP_STATUS, &pb.GetGeoIPStatusRequest{})
+	var resp pb.GetGeoIPStatusResponse
+	if len(result.ResponsePayload) > 0 {
+		if err := proto.Unmarshal(result.ResponsePayload, &resp); err != nil {
+			t.Fatalf("Unmarshal GetGeoIPStatusResponse failed: %v", err)
+		}
+	}
+	return &resp
+}
+
+func cmdLookupIP(t *testing.T, client pb.ProxyControlServiceClient, ctx context.Context, nodePubKey ed25519.PublicKey, req *pb.LookupIPRequest) *pb.LookupIPResponse {
+	t.Helper()
+	result := testSendCommand(t, client, ctx, nodePubKey, hubpb.CommandType_COMMAND_TYPE_LOOKUP_IP, req)
+	var resp pb.LookupIPResponse
+	if len(result.ResponsePayload) > 0 {
+		if err := proto.Unmarshal(result.ResponsePayload, &resp); err != nil {
+			t.Fatalf("Unmarshal LookupIPResponse failed: %v", err)
+		}
+	}
+	return &resp
+}
+
+func cmdResolveApproval(t *testing.T, client pb.ProxyControlServiceClient, ctx context.Context, nodePubKey ed25519.PublicKey, req *pb.ResolveApprovalRequest) *pb.ResolveApprovalResponse {
+	t.Helper()
+	result := testSendCommand(t, client, ctx, nodePubKey, hubpb.CommandType_COMMAND_TYPE_RESOLVE_APPROVAL, req)
+	var resp pb.ResolveApprovalResponse
+	if len(result.ResponsePayload) > 0 {
+		if err := proto.Unmarshal(result.ResponsePayload, &resp); err != nil {
+			t.Fatalf("Unmarshal ResolveApprovalResponse failed: %v", err)
+		}
+	}
+	return &resp
+}
+
+func cmdResolveApprovalRaw(t *testing.T, client pb.ProxyControlServiceClient, ctx context.Context, nodePubKey ed25519.PublicKey, req *pb.ResolveApprovalRequest) (*pb.ResolveApprovalResponse, error) {
+	t.Helper()
+	result, err := testSendCommandRaw(t, client, ctx, nodePubKey, hubpb.CommandType_COMMAND_TYPE_RESOLVE_APPROVAL, req)
+	if err != nil {
+		return nil, err
+	}
+	var resp pb.ResolveApprovalResponse
+	if len(result.ResponsePayload) > 0 {
+		if err := proto.Unmarshal(result.ResponsePayload, &resp); err != nil {
+			t.Fatalf("Unmarshal ResolveApprovalResponse failed: %v", err)
+		}
+	}
+	return &resp, nil
+}
+
+func cmdListActiveApprovals(t *testing.T, client pb.ProxyControlServiceClient, ctx context.Context, nodePubKey ed25519.PublicKey, req *pb.ListActiveApprovalsRequest) *pb.ListActiveApprovalsResponse {
+	t.Helper()
+	result := testSendCommand(t, client, ctx, nodePubKey, hubpb.CommandType_COMMAND_TYPE_LIST_ACTIVE_APPROVALS, req)
+	var resp pb.ListActiveApprovalsResponse
+	if len(result.ResponsePayload) > 0 {
+		if err := proto.Unmarshal(result.ResponsePayload, &resp); err != nil {
+			t.Fatalf("Unmarshal ListActiveApprovalsResponse failed: %v", err)
+		}
+	}
+	return &resp
+}
+
+func cmdListGlobalRules(t *testing.T, client pb.ProxyControlServiceClient, ctx context.Context, nodePubKey ed25519.PublicKey) (*pb.ListGlobalRulesResponse, error) {
+	t.Helper()
+	result, err := testSendCommandRaw(t, client, ctx, nodePubKey, hubpb.CommandType_COMMAND_TYPE_LIST_GLOBAL_RULES, &pb.ListGlobalRulesRequest{})
+	if err != nil {
+		return nil, err
+	}
+	if result.Status != "OK" {
+		return nil, fmt.Errorf("status: %s, error: %s", result.Status, result.ErrorMessage)
+	}
+	var resp pb.ListGlobalRulesResponse
+	if len(result.ResponsePayload) > 0 {
+		if err := proto.Unmarshal(result.ResponsePayload, &resp); err != nil {
+			t.Fatalf("Unmarshal ListGlobalRulesResponse failed: %v", err)
+		}
+	}
+	return &resp, nil
+}
+
+func cmdRemoveGlobalRule(t *testing.T, client pb.ProxyControlServiceClient, ctx context.Context, nodePubKey ed25519.PublicKey, req *pb.RemoveGlobalRuleRequest) *pb.RemoveGlobalRuleResponse {
+	t.Helper()
+	result := testSendCommand(t, client, ctx, nodePubKey, hubpb.CommandType_COMMAND_TYPE_REMOVE_GLOBAL_RULE, req)
+	var resp pb.RemoveGlobalRuleResponse
+	if len(result.ResponsePayload) > 0 {
+		if err := proto.Unmarshal(result.ResponsePayload, &resp); err != nil {
+			t.Fatalf("Unmarshal RemoveGlobalRuleResponse failed: %v", err)
+		}
+	}
+	return &resp
+}
+
+// ============================================================================
+// Tests
+// ============================================================================
 
 // TestAdminAPI_FullLifecycle tests the complete proxy lifecycle via admin API
 func TestAdminAPI_FullLifecycle(t *testing.T) {
@@ -39,7 +416,7 @@ func TestAdminAPI_FullLifecycle(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 
 	// 3. Connect to admin API
-	client, conn := connectAdminAPI(t, adminPort, token, caPath)
+	client, conn, nodePubKey := connectAdminAPI(t, adminPort, token, caPath)
 	defer conn.Close()
 
 	ctx := authContext(token)
@@ -47,14 +424,11 @@ func TestAdminAPI_FullLifecycle(t *testing.T) {
 	// --- Test: Create Proxy ---
 	t.Log("=== Test: Create Proxy ===")
 	proxyPort := getFreePort(t)
-	createResp, err := client.CreateProxy(ctx, &pb.CreateProxyRequest{
+	createResp := cmdCreateProxy(t, client, ctx, nodePubKey, &pb.CreateProxyRequest{
 		Name:           "test-proxy-1",
 		ListenAddr:     fmt.Sprintf("127.0.0.1:%d", proxyPort),
 		DefaultBackend: backend.Addr().String(),
 	})
-	if err != nil {
-		t.Fatalf("CreateProxy failed: %v", err)
-	}
 	if !createResp.Success {
 		t.Fatalf("CreateProxy returned error: %s", createResp.ErrorMessage)
 	}
@@ -63,10 +437,7 @@ func TestAdminAPI_FullLifecycle(t *testing.T) {
 
 	// --- Test: Get Status ---
 	t.Log("=== Test: Get Status ===")
-	status, err := client.GetStatus(ctx, &pb.GetStatusRequest{ProxyId: proxyID})
-	if err != nil {
-		t.Fatalf("GetStatus failed: %v", err)
-	}
+	status := cmdGetProxyStatus(t, client, ctx, nodePubKey, proxyID)
 	if !status.Running {
 		t.Fatal("Proxy should be running")
 	}
@@ -75,10 +446,7 @@ func TestAdminAPI_FullLifecycle(t *testing.T) {
 
 	// --- Test: List Proxies ---
 	t.Log("=== Test: List Proxies ===")
-	listResp, err := client.ListProxies(ctx, &pb.ListProxiesRequest{})
-	if err != nil {
-		t.Fatalf("ListProxies failed: %v", err)
-	}
+	listResp := cmdListProxies(t, client, ctx, nodePubKey)
 	if len(listResp.Proxies) == 0 {
 		t.Fatal("Expected at least one proxy")
 	}
@@ -92,7 +460,7 @@ func TestAdminAPI_FullLifecycle(t *testing.T) {
 
 	// --- Test: Add Block Rule ---
 	t.Log("=== Test: Add Block Rule ===")
-	blockRule, err := client.AddRule(ctx, &pb.AddRuleRequest{
+	blockRule := cmdAddRule(t, client, ctx, nodePubKey, &pb.AddRuleRequest{
 		ProxyId: proxyID,
 		Rule: &pb.Rule{
 			Name:     "Block Local",
@@ -108,9 +476,6 @@ func TestAdminAPI_FullLifecycle(t *testing.T) {
 			},
 		},
 	})
-	if err != nil {
-		t.Fatalf("AddRule (block) failed: %v", err)
-	}
 	t.Logf("Added block rule: %s", blockRule.Id)
 
 	// --- Test: Connection Should Be Blocked ---
@@ -122,10 +487,7 @@ func TestAdminAPI_FullLifecycle(t *testing.T) {
 
 	// --- Test: List Rules ---
 	t.Log("=== Test: List Rules ===")
-	rulesResp, err := client.ListRules(ctx, &pb.ListRulesRequest{ProxyId: proxyID})
-	if err != nil {
-		t.Fatalf("ListRules failed: %v", err)
-	}
+	rulesResp := cmdListRules(t, client, ctx, nodePubKey, &pb.ListRulesRequest{ProxyId: proxyID})
 	t.Logf("Found %d rules", len(rulesResp.Rules))
 	for _, r := range rulesResp.Rules {
 		t.Logf("  - %s: %s (priority: %d)", r.Id, r.Name, r.Priority)
@@ -133,7 +495,7 @@ func TestAdminAPI_FullLifecycle(t *testing.T) {
 
 	// --- Test: Add Allow Rule (Higher Priority) ---
 	t.Log("=== Test: Add Allow Rule (Higher Priority) ===")
-	allowRule, err := client.AddRule(ctx, &pb.AddRuleRequest{
+	allowRule := cmdAddRule(t, client, ctx, nodePubKey, &pb.AddRuleRequest{
 		ProxyId: proxyID,
 		Rule: &pb.Rule{
 			Name:     "Allow Local Override",
@@ -149,9 +511,6 @@ func TestAdminAPI_FullLifecycle(t *testing.T) {
 			},
 		},
 	})
-	if err != nil {
-		t.Fatalf("AddRule (allow) failed: %v", err)
-	}
 	t.Logf("Added allow rule: %s", allowRule.Id)
 
 	// --- Test: Connection Should Succeed (Allow overrides Block) ---
@@ -163,13 +522,10 @@ func TestAdminAPI_FullLifecycle(t *testing.T) {
 
 	// --- Test: Remove Allow Rule ---
 	t.Log("=== Test: Remove Allow Rule ===")
-	_, err = client.RemoveRule(ctx, &pb.RemoveRuleRequest{
+	cmdRemoveRule(t, client, ctx, nodePubKey, &pb.RemoveRuleRequest{
 		ProxyId: proxyID,
 		RuleId:  allowRule.Id,
 	})
-	if err != nil {
-		t.Fatalf("RemoveRule failed: %v", err)
-	}
 	t.Log("Removed allow rule")
 
 	// --- Test: Connection Should Be Blocked Again ---
@@ -181,13 +537,10 @@ func TestAdminAPI_FullLifecycle(t *testing.T) {
 
 	// --- Test: Remove Block Rule ---
 	t.Log("=== Test: Remove Block Rule ===")
-	_, err = client.RemoveRule(ctx, &pb.RemoveRuleRequest{
+	cmdRemoveRule(t, client, ctx, nodePubKey, &pb.RemoveRuleRequest{
 		ProxyId: proxyID,
 		RuleId:  blockRule.Id,
 	})
-	if err != nil {
-		t.Fatalf("RemoveRule failed: %v", err)
-	}
 
 	// --- Test: Connection Should Succeed Again ---
 	t.Log("=== Test: Connection Should Succeed Again ===")
@@ -197,10 +550,7 @@ func TestAdminAPI_FullLifecycle(t *testing.T) {
 
 	// --- Test: Delete Proxy ---
 	t.Log("=== Test: Delete Proxy ===")
-	deleteResp, err := client.DeleteProxy(ctx, &pb.DeleteProxyRequest{ProxyId: proxyID})
-	if err != nil {
-		t.Fatalf("DeleteProxy failed: %v", err)
-	}
+	deleteResp := cmdDeleteProxy(t, client, ctx, nodePubKey, &pb.DeleteProxyRequest{ProxyId: proxyID})
 	if !deleteResp.Success {
 		t.Fatalf("DeleteProxy returned error: %s", deleteResp.ErrorMessage)
 	}
@@ -256,23 +606,23 @@ func TestAdminAPI_ConnectionManagement(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 
 	// 3. Connect to admin API
-	client, conn := connectAdminAPI(t, adminPort, token, caPath)
+	client, conn, nodePubKey := connectAdminAPI(t, adminPort, token, caPath)
 	defer conn.Close()
 
 	ctx := authContext(token)
 
 	// 4. Create proxy
-	createResp, err := client.CreateProxy(ctx, &pb.CreateProxyRequest{
+	createResp := cmdCreateProxy(t, client, ctx, nodePubKey, &pb.CreateProxyRequest{
 		Name:           "conn-test-proxy",
 		ListenAddr:     fmt.Sprintf("127.0.0.1:%d", getFreePort(t)),
 		DefaultBackend: backendLn.Addr().String(),
 	})
-	if err != nil || !createResp.Success {
-		t.Fatalf("CreateProxy failed: %v", err)
+	if !createResp.Success {
+		t.Fatalf("CreateProxy failed: %s", createResp.ErrorMessage)
 	}
 	proxyID := createResp.ProxyId
 
-	status, _ := client.GetStatus(ctx, &pb.GetStatusRequest{ProxyId: proxyID})
+	status := cmdGetProxyStatus(t, client, ctx, nodePubKey, proxyID)
 	listenAddr := status.ListenAddr
 
 	// 5. Create multiple connections
@@ -295,12 +645,9 @@ func TestAdminAPI_ConnectionManagement(t *testing.T) {
 
 	// 6. Get active connections
 	t.Log("=== Test: Get Active Connections ===")
-	activeResp, err := client.GetActiveConnections(ctx, &pb.GetActiveConnectionsRequest{
+	activeResp := cmdGetActiveConnections(t, client, ctx, nodePubKey, &pb.GetActiveConnectionsRequest{
 		ProxyId: proxyID,
 	})
-	if err != nil {
-		t.Fatalf("GetActiveConnections failed: %v", err)
-	}
 	if len(activeResp.Connections) != 5 {
 		t.Fatalf("Expected 5 connections, got %d", len(activeResp.Connections))
 	}
@@ -312,13 +659,10 @@ func TestAdminAPI_ConnectionManagement(t *testing.T) {
 	// 7. Close one connection
 	t.Log("=== Test: Close Single Connection ===")
 	connToClose := activeResp.Connections[0].Id
-	closeResp, err := client.CloseConnection(ctx, &pb.CloseConnectionRequest{
+	closeResp := cmdCloseConnection(t, client, ctx, nodePubKey, &pb.CloseConnectionRequest{
 		ProxyId: proxyID,
 		ConnId:  connToClose,
 	})
-	if err != nil {
-		t.Fatalf("CloseConnection failed: %v", err)
-	}
 	if !closeResp.Success {
 		t.Fatalf("CloseConnection returned error: %s", closeResp.ErrorMessage)
 	}
@@ -333,7 +677,7 @@ func TestAdminAPI_ConnectionManagement(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 
 	// 8. Verify connection count decreased
-	activeResp, _ = client.GetActiveConnections(ctx, &pb.GetActiveConnectionsRequest{ProxyId: proxyID})
+	activeResp = cmdGetActiveConnections(t, client, ctx, nodePubKey, &pb.GetActiveConnectionsRequest{ProxyId: proxyID})
 	if len(activeResp.Connections) >= 5 {
 		t.Logf("Warning: Expected fewer connections after close, got %d (timing)", len(activeResp.Connections))
 	} else {
@@ -351,12 +695,9 @@ func TestAdminAPI_ConnectionManagement(t *testing.T) {
 	}
 	time.Sleep(100 * time.Millisecond)
 
-	closeAllResp, err := client.CloseAllConnections(ctx, &pb.CloseAllConnectionsRequest{
+	closeAllResp := cmdCloseAllConnections(t, client, ctx, nodePubKey, &pb.CloseAllConnectionsRequest{
 		ProxyId: proxyID,
 	})
-	if err != nil {
-		t.Fatalf("CloseAllConnections failed: %v", err)
-	}
 	if !closeAllResp.Success {
 		t.Fatalf("CloseAllConnections returned error: %s", closeAllResp.ErrorMessage)
 	}
@@ -370,7 +711,7 @@ func TestAdminAPI_ConnectionManagement(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 
 	// 10. Verify all connections closed
-	activeResp, _ = client.GetActiveConnections(ctx, &pb.GetActiveConnectionsRequest{ProxyId: proxyID})
+	activeResp = cmdGetActiveConnections(t, client, ctx, nodePubKey, &pb.GetActiveConnectionsRequest{ProxyId: proxyID})
 	if len(activeResp.Connections) > 0 {
 		t.Logf("Note: %d connections still pending (timing-sensitive)", len(activeResp.Connections))
 	} else {
@@ -397,7 +738,7 @@ func TestAdminAPI_MultipleProxies(t *testing.T) {
 	defer daemon.Process.Kill()
 	time.Sleep(100 * time.Millisecond)
 
-	client, conn := connectAdminAPI(t, adminPort, token, caPath)
+	client, conn, nodePubKey := connectAdminAPI(t, adminPort, token, caPath)
 	defer conn.Close()
 
 	ctx := authContext(token)
@@ -410,17 +751,17 @@ func TestAdminAPI_MultipleProxies(t *testing.T) {
 	expectedResponses := []string{"BACKEND_1", "BACKEND_2", "BACKEND_3"}
 
 	for i, be := range backends {
-		resp, err := client.CreateProxy(ctx, &pb.CreateProxyRequest{
+		resp := cmdCreateProxy(t, client, ctx, nodePubKey, &pb.CreateProxyRequest{
 			Name:           fmt.Sprintf("proxy-%d", i+1),
 			ListenAddr:     fmt.Sprintf("127.0.0.1:%d", getFreePort(t)),
 			DefaultBackend: be.Addr().String(),
 		})
-		if err != nil || !resp.Success {
-			t.Fatalf("CreateProxy %d failed: %v", i+1, err)
+		if !resp.Success {
+			t.Fatalf("CreateProxy %d failed: %s", i+1, resp.ErrorMessage)
 		}
 		proxyIDs = append(proxyIDs, resp.ProxyId)
 
-		status, _ := client.GetStatus(ctx, &pb.GetStatusRequest{ProxyId: resp.ProxyId})
+		status := cmdGetProxyStatus(t, client, ctx, nodePubKey, resp.ProxyId)
 		listenAddrs = append(listenAddrs, status.ListenAddr)
 		t.Logf("Created proxy-%d: %s -> %s", i+1, status.ListenAddr, be.Addr().String())
 	}
@@ -438,7 +779,7 @@ func TestAdminAPI_MultipleProxies(t *testing.T) {
 	t.Log("=== Adding rules to each proxy ===")
 
 	// Proxy 1: Block all
-	client.AddRule(ctx, &pb.AddRuleRequest{
+	cmdAddRule(t, client, ctx, nodePubKey, &pb.AddRuleRequest{
 		ProxyId: proxyIDs[0],
 		Rule: &pb.Rule{
 			Name:     "Block All",
@@ -452,7 +793,7 @@ func TestAdminAPI_MultipleProxies(t *testing.T) {
 	})
 
 	// Proxy 2: Mock response
-	client.AddRule(ctx, &pb.AddRuleRequest{
+	cmdAddRule(t, client, ctx, nodePubKey, &pb.AddRuleRequest{
 		ProxyId: proxyIDs[1],
 		Rule: &pb.Rule{
 			Name:     "Mock Response",
@@ -494,7 +835,7 @@ func TestAdminAPI_MultipleProxies(t *testing.T) {
 
 	// List all proxies
 	t.Log("=== Listing all proxies ===")
-	listResp, _ := client.ListProxies(ctx, &pb.ListProxiesRequest{})
+	listResp := cmdListProxies(t, client, ctx, nodePubKey)
 	if len(listResp.Proxies) < 3 {
 		t.Fatalf("Expected at least 3 proxies, got %d", len(listResp.Proxies))
 	}
@@ -505,15 +846,15 @@ func TestAdminAPI_MultipleProxies(t *testing.T) {
 	// Delete proxies one by one
 	t.Log("=== Deleting proxies ===")
 	for i, id := range proxyIDs {
-		resp, err := client.DeleteProxy(ctx, &pb.DeleteProxyRequest{ProxyId: id})
-		if err != nil || !resp.Success {
-			t.Fatalf("DeleteProxy %d failed: %v", i+1, err)
+		resp := cmdDeleteProxy(t, client, ctx, nodePubKey, &pb.DeleteProxyRequest{ProxyId: id})
+		if !resp.Success {
+			t.Fatalf("DeleteProxy %d failed: %s", i+1, resp.ErrorMessage)
 		}
 		t.Logf("Deleted proxy-%d", i+1)
 	}
 
 	// Verify all deleted
-	listResp, _ = client.ListProxies(ctx, &pb.ListProxiesRequest{})
+	listResp = cmdListProxies(t, client, ctx, nodePubKey)
 	for _, p := range listResp.Proxies {
 		for _, deletedID := range proxyIDs {
 			if p.ProxyId == deletedID && p.Running {
@@ -536,7 +877,7 @@ func TestAdminAPI_QuickActions(t *testing.T) {
 	defer daemon.Process.Kill()
 	time.Sleep(100 * time.Millisecond)
 
-	client, conn := connectAdminAPI(t, adminPort, token, caPath)
+	client, conn, nodePubKey := connectAdminAPI(t, adminPort, token, caPath)
 	defer conn.Close()
 
 	ctx := authContext(token)
@@ -545,22 +886,19 @@ func TestAdminAPI_QuickActions(t *testing.T) {
 	var proxyIDs []string
 	var listenAddrs []string
 	for i := 0; i < 2; i++ {
-		resp, _ := client.CreateProxy(ctx, &pb.CreateProxyRequest{
+		resp := cmdCreateProxy(t, client, ctx, nodePubKey, &pb.CreateProxyRequest{
 			Name:           fmt.Sprintf("quick-proxy-%d", i+1),
 			ListenAddr:     fmt.Sprintf("127.0.0.1:%d", getFreePort(t)),
 			DefaultBackend: backend.Addr().String(),
 		})
 		proxyIDs = append(proxyIDs, resp.ProxyId)
-		status, _ := client.GetStatus(ctx, &pb.GetStatusRequest{ProxyId: resp.ProxyId})
+		status := cmdGetProxyStatus(t, client, ctx, nodePubKey, resp.ProxyId)
 		listenAddrs = append(listenAddrs, status.ListenAddr)
 	}
 
 	// Test: BlockIP affects all proxies
 	t.Log("=== Test: BlockIP (All Proxies) ===")
-	_, err := client.BlockIP(ctx, &pb.BlockIPRequest{Ip: "127.0.0.1"})
-	if err != nil {
-		t.Fatalf("BlockIP failed: %v", err)
-	}
+	cmdBlockIP(t, client, ctx, nodePubKey, &pb.BlockIPRequest{Ip: "127.0.0.1"})
 
 	// Both proxies should block
 	for i, addr := range listenAddrs {
@@ -572,10 +910,7 @@ func TestAdminAPI_QuickActions(t *testing.T) {
 
 	// Test: AllowIP (higher priority)
 	t.Log("=== Test: AllowIP (Higher Priority) ===")
-	_, err = client.AllowIP(ctx, &pb.AllowIPRequest{Ip: "127.0.0.1"})
-	if err != nil {
-		t.Fatalf("AllowIP failed: %v", err)
-	}
+	cmdAllowIP(t, client, ctx, nodePubKey, &pb.AllowIPRequest{Ip: "127.0.0.1"})
 
 	// Both proxies should allow (AllowIP has same priority as BlockIP, but added later)
 	// Actually both have priority 1000, so the last one wins in iteration order
@@ -591,6 +926,176 @@ func TestAdminAPI_QuickActions(t *testing.T) {
 	t.Log("=== Quick Actions Test Passed ===")
 }
 
+// TestAdminAPI_GlobalRules tests the full global rules lifecycle:
+// BlockIP, AllowIP, ListGlobalRules, RemoveGlobalRule, and cross-proxy effects.
+func TestAdminAPI_GlobalRules(t *testing.T) {
+	backend := startEchoBackend(t, "GLOBAL_RULES_BACKEND")
+	defer backend.Close()
+
+	adminPort := getFreePort(t)
+	token := "global-rules-token"
+	daemon, caPath := startNitelladWithAdmin(t, adminPort, token)
+	defer daemon.Process.Kill()
+	time.Sleep(100 * time.Millisecond)
+
+	client, conn, nodePubKey := connectAdminAPI(t, adminPort, token, caPath)
+	defer conn.Close()
+
+	ctx := authContext(token)
+
+	// Create two proxies to verify cross-proxy effects
+	var proxyIDs []string
+	var listenAddrs []string
+	for i := 0; i < 2; i++ {
+		resp := cmdCreateProxy(t, client, ctx, nodePubKey, &pb.CreateProxyRequest{
+			Name:           fmt.Sprintf("global-rules-proxy-%d", i+1),
+			ListenAddr:     fmt.Sprintf("127.0.0.1:%d", getFreePort(t)),
+			DefaultBackend: backend.Addr().String(),
+		})
+		proxyIDs = append(proxyIDs, resp.ProxyId)
+		status := cmdGetProxyStatus(t, client, ctx, nodePubKey, resp.ProxyId)
+		listenAddrs = append(listenAddrs, status.ListenAddr)
+	}
+
+	// Verify both proxies allow connections initially
+	t.Log("=== Verify initial connectivity ===")
+	for i, addr := range listenAddrs {
+		if !testConnectionData(t, addr, "GLOBAL_RULES_BACKEND") {
+			t.Fatalf("Proxy %d should allow connections initially", i+1)
+		}
+	}
+
+	// Test: ListGlobalRules (should be empty initially)
+	t.Log("=== Test: ListGlobalRules (empty) ===")
+	listResp, err := cmdListGlobalRules(t, client, ctx, nodePubKey)
+	if err != nil {
+		t.Fatalf("ListGlobalRules failed: %v", err)
+	}
+	if len(listResp.Rules) != 0 {
+		t.Fatalf("Expected 0 global rules initially, got %d", len(listResp.Rules))
+	}
+	t.Log("No global rules initially - OK")
+
+	// Test: BlockIP creates a global rule visible in ListGlobalRules
+	t.Log("=== Test: BlockIP + ListGlobalRules ===")
+	cmdBlockIP(t, client, ctx, nodePubKey, &pb.BlockIPRequest{Ip: "127.0.0.1"})
+
+	listResp, err = cmdListGlobalRules(t, client, ctx, nodePubKey)
+	if err != nil {
+		t.Fatalf("ListGlobalRules after BlockIP failed: %v", err)
+	}
+	if len(listResp.Rules) < 1 {
+		t.Fatalf("Expected at least 1 global rule after BlockIP, got %d", len(listResp.Rules))
+	}
+	blockRuleID := listResp.Rules[0].Id
+	t.Logf("BlockIP created global rule: ID=%s, Name=%s, SourceIP=%s, Action=%s",
+		blockRuleID, listResp.Rules[0].Name, listResp.Rules[0].SourceIp, listResp.Rules[0].Action)
+
+	// Verify BlockIP affects all proxies
+	for i, addr := range listenAddrs {
+		if testConnectionData(t, addr, "GLOBAL_RULES_BACKEND") {
+			t.Fatalf("Proxy %d should be blocked after BlockIP", i+1)
+		}
+	}
+	t.Log("All proxies blocked by global rule - OK")
+
+	// Test: RemoveGlobalRule
+	t.Log("=== Test: RemoveGlobalRule ===")
+	removeResp := cmdRemoveGlobalRule(t, client, ctx, nodePubKey, &pb.RemoveGlobalRuleRequest{RuleId: blockRuleID})
+	if !removeResp.Success {
+		t.Fatalf("RemoveGlobalRule failed: %s", removeResp.ErrorMessage)
+	}
+
+	// Verify rule is removed from list
+	listResp, err = cmdListGlobalRules(t, client, ctx, nodePubKey)
+	if err != nil {
+		t.Fatalf("ListGlobalRules after remove failed: %v", err)
+	}
+	for _, r := range listResp.Rules {
+		if r.Id == blockRuleID {
+			t.Fatalf("Removed rule %s should not appear in list", blockRuleID)
+		}
+	}
+	t.Log("Global rule removed - OK")
+
+	// Verify connectivity restored after rule removal
+	for i, addr := range listenAddrs {
+		if !testConnectionData(t, addr, "GLOBAL_RULES_BACKEND") {
+			t.Fatalf("Proxy %d should allow connections after rule removal", i+1)
+		}
+	}
+	t.Log("Connectivity restored after rule removal - OK")
+
+	// Test: AllowIP creates a global rule
+	t.Log("=== Test: AllowIP + ListGlobalRules ===")
+	cmdAllowIP(t, client, ctx, nodePubKey, &pb.AllowIPRequest{Ip: "10.0.0.0/8"})
+
+	listResp, err = cmdListGlobalRules(t, client, ctx, nodePubKey)
+	if err != nil {
+		t.Fatalf("ListGlobalRules after AllowIP failed: %v", err)
+	}
+	var foundAllow bool
+	var allowRuleID string
+	for _, r := range listResp.Rules {
+		if r.SourceIp == "10.0.0.0/8" {
+			foundAllow = true
+			allowRuleID = r.Id
+			t.Logf("AllowIP created global rule: ID=%s, Name=%s, Action=%s",
+				r.Id, r.Name, r.Action)
+			break
+		}
+	}
+	if !foundAllow {
+		t.Fatal("AllowIP rule not found in ListGlobalRules")
+	}
+
+	// Test: BlockIP with duration
+	t.Log("=== Test: BlockIP with duration ===")
+	cmdBlockIP(t, client, ctx, nodePubKey, &pb.BlockIPRequest{
+		Ip:              "192.168.99.0/24",
+		DurationSeconds: 3600,
+	})
+
+	listResp, err = cmdListGlobalRules(t, client, ctx, nodePubKey)
+	if err != nil {
+		t.Fatalf("ListGlobalRules after timed BlockIP failed: %v", err)
+	}
+	var foundTimed bool
+	var timedRuleID string
+	for _, r := range listResp.Rules {
+		if r.SourceIp == "192.168.99.0/24" {
+			foundTimed = true
+			timedRuleID = r.Id
+			if r.ExpiresAt == nil {
+				t.Fatal("Timed rule should have ExpiresAt set")
+			}
+			t.Logf("Timed BlockIP rule: ID=%s, ExpiresAt=%v", r.Id, r.ExpiresAt)
+			break
+		}
+	}
+	if !foundTimed {
+		t.Fatal("Timed BlockIP rule not found in ListGlobalRules")
+	}
+
+	// Cleanup: remove all created rules
+	t.Log("=== Cleanup ===")
+	if allowRuleID != "" {
+		cmdRemoveGlobalRule(t, client, ctx, nodePubKey, &pb.RemoveGlobalRuleRequest{RuleId: allowRuleID})
+	}
+	if timedRuleID != "" {
+		cmdRemoveGlobalRule(t, client, ctx, nodePubKey, &pb.RemoveGlobalRuleRequest{RuleId: timedRuleID})
+	}
+
+	// Final verification: list should be empty (or at least our rules gone)
+	listResp, err = cmdListGlobalRules(t, client, ctx, nodePubKey)
+	if err != nil {
+		t.Fatalf("Final ListGlobalRules failed: %v", err)
+	}
+	t.Logf("Final global rules count: %d", len(listResp.Rules))
+
+	t.Log("=== Global Rules Test Passed ===")
+}
+
 // TestAdminAPI_MockPresets tests various mock presets
 func TestAdminAPI_MockPresets(t *testing.T) {
 	adminPort := getFreePort(t)
@@ -599,7 +1104,7 @@ func TestAdminAPI_MockPresets(t *testing.T) {
 	defer daemon.Process.Kill()
 	time.Sleep(100 * time.Millisecond)
 
-	client, conn := connectAdminAPI(t, adminPort, token, caPath)
+	client, conn, nodePubKey := connectAdminAPI(t, adminPort, token, caPath)
 	defer conn.Close()
 
 	ctx := authContext(token)
@@ -616,19 +1121,16 @@ func TestAdminAPI_MockPresets(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			resp, err := client.CreateProxy(ctx, &pb.CreateProxyRequest{
+			resp := cmdCreateProxy(t, client, ctx, nodePubKey, &pb.CreateProxyRequest{
 				Name:           "mock-" + tc.name,
 				ListenAddr:     fmt.Sprintf("127.0.0.1:%d", getFreePort(t)),
 				DefaultBackend: "", // No backend
 				DefaultMock:    tc.preset,
 			})
-			if err != nil {
-				t.Fatalf("CreateProxy failed: %v", err)
-			}
 			proxyID := resp.ProxyId
-			defer client.DeleteProxy(ctx, &pb.DeleteProxyRequest{ProxyId: proxyID})
+			defer cmdDeleteProxy(t, client, ctx, nodePubKey, &pb.DeleteProxyRequest{ProxyId: proxyID})
 
-			status, _ := client.GetStatus(ctx, &pb.GetStatusRequest{ProxyId: proxyID})
+			status := cmdGetProxyStatus(t, client, ctx, nodePubKey, proxyID)
 			time.Sleep(100 * time.Millisecond) // Wait for proxy to be ready
 
 			// Direct connection test
@@ -660,20 +1162,20 @@ func TestAdminAPI_CIDRRules(t *testing.T) {
 	defer daemon.Process.Kill()
 	time.Sleep(100 * time.Millisecond)
 
-	client, conn := connectAdminAPI(t, adminPort, token, caPath)
+	client, conn, nodePubKey := connectAdminAPI(t, adminPort, token, caPath)
 	defer conn.Close()
 
 	ctx := authContext(token)
 
-	resp, _ := client.CreateProxy(ctx, &pb.CreateProxyRequest{
+	resp := cmdCreateProxy(t, client, ctx, nodePubKey, &pb.CreateProxyRequest{
 		Name:           "cidr-proxy",
 		ListenAddr:     fmt.Sprintf("127.0.0.1:%d", getFreePort(t)),
 		DefaultBackend: backend.Addr().String(),
 	})
 	proxyID := resp.ProxyId
-	defer client.DeleteProxy(ctx, &pb.DeleteProxyRequest{ProxyId: proxyID})
+	defer cmdDeleteProxy(t, client, ctx, nodePubKey, &pb.DeleteProxyRequest{ProxyId: proxyID})
 
-	status, _ := client.GetStatus(ctx, &pb.GetStatusRequest{ProxyId: proxyID})
+	status := cmdGetProxyStatus(t, client, ctx, nodePubKey, proxyID)
 	listenAddr := status.ListenAddr
 
 	// Baseline: should connect (retry a few times for stability)
@@ -691,7 +1193,7 @@ func TestAdminAPI_CIDRRules(t *testing.T) {
 
 	// Add CIDR block for entire loopback range
 	t.Log("=== Adding CIDR block rule (127.0.0.0/8) ===")
-	rule, _ := client.AddRule(ctx, &pb.AddRuleRequest{
+	rule := cmdAddRule(t, client, ctx, nodePubKey, &pb.AddRuleRequest{
 		ProxyId: proxyID,
 		Rule: &pb.Rule{
 			Name:     "Block Loopback CIDR",
@@ -715,7 +1217,7 @@ func TestAdminAPI_CIDRRules(t *testing.T) {
 	t.Log("CIDR block working")
 
 	// Remove rule
-	client.RemoveRule(ctx, &pb.RemoveRuleRequest{ProxyId: proxyID, RuleId: rule.Id})
+	cmdRemoveRule(t, client, ctx, nodePubKey, &pb.RemoveRuleRequest{ProxyId: proxyID, RuleId: rule.Id})
 
 	// Should connect again
 	if !testConnectionData(t, listenAddr, "CIDR_BACKEND") {
@@ -736,20 +1238,20 @@ func TestAdminAPI_StreamConnections(t *testing.T) {
 	defer daemon.Process.Kill()
 	time.Sleep(100 * time.Millisecond)
 
-	client, conn := connectAdminAPI(t, adminPort, token, caPath)
+	client, conn, nodePubKey := connectAdminAPI(t, adminPort, token, caPath)
 	defer conn.Close()
 
 	ctx := authContext(token)
 
-	resp, _ := client.CreateProxy(ctx, &pb.CreateProxyRequest{
+	createResp := cmdCreateProxy(t, client, ctx, nodePubKey, &pb.CreateProxyRequest{
 		Name:           "stream-proxy",
 		ListenAddr:     fmt.Sprintf("127.0.0.1:%d", getFreePort(t)),
 		DefaultBackend: backend.Addr().String(),
 	})
-	proxyID := resp.ProxyId
-	defer client.DeleteProxy(ctx, &pb.DeleteProxyRequest{ProxyId: proxyID})
+	proxyID := createResp.ProxyId
+	defer cmdDeleteProxy(t, client, ctx, nodePubKey, &pb.DeleteProxyRequest{ProxyId: proxyID})
 
-	status, _ := client.GetStatus(ctx, &pb.GetStatusRequest{ProxyId: proxyID})
+	status := cmdGetProxyStatus(t, client, ctx, nodePubKey, proxyID)
 	listenAddr := status.ListenAddr
 
 	// Start streaming
@@ -757,21 +1259,49 @@ func TestAdminAPI_StreamConnections(t *testing.T) {
 	streamCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 
-	stream, err := client.StreamConnections(streamCtx, &pb.StreamConnectionsRequest{})
+	// Generate test viewer keypair for E2E encryption
+	viewerPub, viewerPriv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("Failed to generate viewer key: %v", err)
+	}
+
+	stream, err := client.StreamConnections(streamCtx, &pb.StreamConnectionsRequest{
+		ViewerPubkey: viewerPub,
+	})
 	if err != nil {
 		t.Fatalf("StreamConnections failed: %v", err)
 	}
 
-	// Channel to receive events
+	// Channel to receive decrypted events
 	eventCh := make(chan *pb.ConnectionEvent, 10)
 	go func() {
 		for {
-			event, err := stream.Recv()
+			encPayload, err := stream.Recv()
 			if err != nil {
 				close(eventCh)
 				return
 			}
-			eventCh <- event
+			// Decrypt the event
+			enc := encPayload.GetEncrypted()
+			if enc == nil {
+				continue
+			}
+			cryptoPayload := &nitellacrypto.EncryptedPayload{
+				EphemeralPubKey:   enc.EphemeralPubkey,
+				Nonce:             enc.Nonce,
+				Ciphertext:        enc.Ciphertext,
+				SenderFingerprint: enc.SenderFingerprint,
+				Signature:         enc.Signature,
+			}
+			plaintext, err := nitellacrypto.Decrypt(cryptoPayload, viewerPriv)
+			if err != nil {
+				continue
+			}
+			var event pb.ConnectionEvent
+			if err := proto.Unmarshal(plaintext, &event); err != nil {
+				continue
+			}
+			eventCh <- &event
 		}
 	}()
 
@@ -820,6 +1350,10 @@ func TestAdminAPI_AuthenticationRequired(t *testing.T) {
 	defer daemon.Process.Kill()
 	time.Sleep(100 * time.Millisecond)
 
+	// Wait for the server to be ready by connecting with correct token first
+	_, validConn, _ := connectAdminAPI(t, adminPort, token, caPath)
+	validConn.Close()
+
 	// Connect without token (but with TLS)
 	t.Log("=== Test: No Token ===")
 	// Load CA
@@ -829,7 +1363,7 @@ func TestAdminAPI_AuthenticationRequired(t *testing.T) {
 	}
 	caPool := x509.NewCertPool()
 	caPool.AppendCertsFromPEM(caPEM)
-	
+
 	conn, err := grpc.Dial(
 		fmt.Sprintf("localhost:%d", adminPort),
 		grpc.WithTransportCredentials(credentials.NewTLS(&tls.Config{RootCAs: caPool, MinVersion: tls.VersionTLS13})),
@@ -842,7 +1376,8 @@ func TestAdminAPI_AuthenticationRequired(t *testing.T) {
 	client := pb.NewProxyControlServiceClient(conn)
 	ctx := context.Background() // No auth
 
-	_, err = client.ListProxies(ctx, &pb.ListProxiesRequest{})
+	// Use SendCommand with dummy data - the auth interceptor rejects before decryption
+	_, err = client.SendCommand(ctx, &pb.SendCommandRequest{})
 	if err == nil {
 		t.Fatal("Expected authentication error with no token")
 	}
@@ -854,19 +1389,18 @@ func TestAdminAPI_AuthenticationRequired(t *testing.T) {
 	// Connect with wrong token
 	t.Log("=== Test: Wrong Token ===")
 	ctx = authContext("wrong-token")
-	_, err = client.ListProxies(ctx, &pb.ListProxiesRequest{})
+	_, err = client.SendCommand(ctx, &pb.SendCommandRequest{})
 	if err == nil {
 		t.Fatal("Expected authentication error with wrong token")
 	}
 	t.Log("Wrong token: Correctly rejected")
 
-	// Connect with correct token
+	// Connect with correct token - should pass auth (may fail on crypto validation, but not auth)
 	t.Log("=== Test: Correct Token ===")
+	nodePubKey := extractNodePubKey(t, caPath)
 	ctx = authContext(token)
-	_, err = client.ListProxies(ctx, &pb.ListProxiesRequest{})
-	if err != nil {
-		t.Fatalf("Should succeed with correct token: %v", err)
-	}
+	// Send a real encrypted ListProxies command to verify auth passes
+	testSendCommand(t, client, ctx, nodePubKey, hubpb.CommandType_COMMAND_TYPE_LIST_PROXIES, &pb.ListProxiesRequest{})
 	t.Log("Correct token: Accepted")
 
 	t.Log("=== Authentication Test Passed ===")
@@ -886,14 +1420,15 @@ func testSingleConnection(t *testing.T, addr string, expected string) bool {
 	}
 	defer conn.Close()
 
-	conn.SetReadDeadline(time.Now().Add(3 * time.Second))
-	data, err := io.ReadAll(conn)
+	conn.SetReadDeadline(time.Now().Add(10 * time.Second))
+	buf := make([]byte, 4096)
+	n, err := conn.Read(buf)
 	if err != nil && err != io.EOF {
 		t.Logf("Read failed: %v", err)
 		return false
 	}
 
-	result := string(data)
+	result := string(buf[:n])
 	if expected == "" || strings.Contains(result, expected) {
 		return true
 	}
@@ -924,10 +1459,7 @@ func startEchoBackend(t *testing.T, response string) net.Listener {
 }
 
 func startNitelladWithAdmin(t *testing.T, adminPort int, token string) (*exec.Cmd, string) {
-	binPath := "../../bin/nitellad"
-	if _, err := os.Stat(binPath); os.IsNotExist(err) {
-		t.Skip("nitellad binary not found, run 'make nitellad_build' first")
-	}
+	binPath := findMobileBinary(t, "nitellad")
 
 	// Use a specific port for the daemon's default proxy to avoid conflicts
 	defaultProxyPort := getFreePort(t)
@@ -953,11 +1485,20 @@ func startNitelladWithAdmin(t *testing.T, adminPort int, token string) (*exec.Cm
 		t.Fatalf("Failed to start nitellad: %v", err)
 	}
 
-	// Return cmd and CA path
-	return cmd, filepath.Join(tempDir, "admin_ca.crt")
+	caPath := filepath.Join(tempDir, "admin_ca.crt")
+	for i := 0; i < 50; i++ {
+		if _, err := os.Stat(caPath); err == nil {
+			return cmd, caPath
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+
+	cmd.Process.Kill()
+	t.Fatalf("Timed out waiting for admin CA certificate at %s", caPath)
+	return nil, ""
 }
 
-func connectAdminAPI(t *testing.T, port int, token, caPath string) (pb.ProxyControlServiceClient, *grpc.ClientConn) {
+func connectAdminAPI(t *testing.T, port int, token, caPath string) (pb.ProxyControlServiceClient, *grpc.ClientConn, ed25519.PublicKey) {
 	var conn *grpc.ClientConn
 	var err error
 
@@ -980,6 +1521,9 @@ func connectAdminAPI(t *testing.T, port int, token, caPath string) (pb.ProxyCont
 	}
 	tlsConfig := &tls.Config{RootCAs: caPool, MinVersion: tls.VersionTLS13}
 
+	// Extract node public key from CA cert
+	nodePubKey := extractNodePubKey(t, caPath)
+
 	// Retry connection with exponential backoff
 	for i := 0; i < 15; i++ {
 		conn, err = grpc.Dial(
@@ -987,14 +1531,14 @@ func connectAdminAPI(t *testing.T, port int, token, caPath string) (pb.ProxyCont
 			grpc.WithTransportCredentials(credentials.NewTLS(tlsConfig)),
 		)
 		if err == nil {
-			// Verify connection is actually working by making a test call
+			// Verify connection is actually working by making an encrypted test call
 			client := pb.NewProxyControlServiceClient(conn)
 			ctx := metadata.AppendToOutgoingContext(context.Background(), "authorization", "Bearer "+token)
 			ctx, cancel := context.WithTimeout(ctx, 200*time.Millisecond)
-			_, rpcErr := client.ListProxies(ctx, &pb.ListProxiesRequest{})
+			_, rpcErr := testSendCommandRaw(t, client, ctx, nodePubKey, hubpb.CommandType_COMMAND_TYPE_LIST_PROXIES, &pb.ListProxiesRequest{})
 			cancel()
 			if rpcErr == nil {
-				return client, conn
+				return client, conn, nodePubKey
 			}
 			conn.Close()
 		}
@@ -1004,7 +1548,7 @@ func connectAdminAPI(t *testing.T, port int, token, caPath string) (pb.ProxyCont
 		t.Fatalf("Failed to connect to admin API: %v", err)
 	}
 	t.Fatal("Admin API not responding after retries")
-	return nil, nil
+	return nil, nil, nil
 }
 
 func authContext(token string) context.Context {
@@ -1027,26 +1571,26 @@ func TestAdminAPI_RateLimiting(t *testing.T) {
 	defer daemon.Process.Kill()
 	time.Sleep(100 * time.Millisecond)
 
-	client, conn := connectAdminAPI(t, adminPort, token, caPath)
+	client, conn, nodePubKey := connectAdminAPI(t, adminPort, token, caPath)
 	defer conn.Close()
 
 	ctx := authContext(token)
 
 	// Create proxy
-	resp, _ := client.CreateProxy(ctx, &pb.CreateProxyRequest{
+	createResp := cmdCreateProxy(t, client, ctx, nodePubKey, &pb.CreateProxyRequest{
 		Name:           "rate-limit-proxy",
 		ListenAddr:     fmt.Sprintf("127.0.0.1:%d", getFreePort(t)),
 		DefaultBackend: backend.Addr().String(),
 	})
-	proxyID := resp.ProxyId
-	defer client.DeleteProxy(ctx, &pb.DeleteProxyRequest{ProxyId: proxyID})
+	proxyID := createResp.ProxyId
+	defer cmdDeleteProxy(t, client, ctx, nodePubKey, &pb.DeleteProxyRequest{ProxyId: proxyID})
 
-	status, _ := client.GetStatus(ctx, &pb.GetStatusRequest{ProxyId: proxyID})
+	status := cmdGetProxyStatus(t, client, ctx, nodePubKey, proxyID)
 	listenAddr := status.ListenAddr
 
 	// Add rate limiting rule: max 3 connections per 10 seconds from 127.0.0.1
 	t.Log("=== Adding Rate Limit Rule (max 3 conns/10s) ===")
-	rule, err := client.AddRule(ctx, &pb.AddRuleRequest{
+	rule := cmdAddRule(t, client, ctx, nodePubKey, &pb.AddRuleRequest{
 		ProxyId: proxyID,
 		Rule: &pb.Rule{
 			Name:     "Rate Limit Local",
@@ -1067,10 +1611,8 @@ func TestAdminAPI_RateLimiting(t *testing.T) {
 			},
 		},
 	})
-	if err != nil {
-		t.Fatalf("AddRule with rate limit failed: %v", err)
-	}
 	t.Logf("Added rate limit rule: %s", rule.Id)
+	time.Sleep(200 * time.Millisecond) // Allow proxy to fully apply the rule
 
 	// First 3 connections should succeed
 	// Use testSingleConnection (no retries) to ensure each connection counts exactly once
@@ -1123,26 +1665,26 @@ func TestAdminAPI_AutoBlockFail2Ban(t *testing.T) {
 	defer daemon.Process.Kill()
 	time.Sleep(100 * time.Millisecond)
 
-	client, conn := connectAdminAPI(t, adminPort, token, caPath)
+	client, conn, nodePubKey := connectAdminAPI(t, adminPort, token, caPath)
 	defer conn.Close()
 
 	ctx := authContext(token)
 
 	// Create proxy
-	resp, _ := client.CreateProxy(ctx, &pb.CreateProxyRequest{
+	createResp := cmdCreateProxy(t, client, ctx, nodePubKey, &pb.CreateProxyRequest{
 		Name:           "fail2ban-proxy",
 		ListenAddr:     fmt.Sprintf("127.0.0.1:%d", getFreePort(t)),
 		DefaultBackend: backendLn.Addr().String(),
 	})
-	proxyID := resp.ProxyId
-	defer client.DeleteProxy(ctx, &pb.DeleteProxyRequest{ProxyId: proxyID})
+	proxyID := createResp.ProxyId
+	defer cmdDeleteProxy(t, client, ctx, nodePubKey, &pb.DeleteProxyRequest{ProxyId: proxyID})
 
-	status, _ := client.GetStatus(ctx, &pb.GetStatusRequest{ProxyId: proxyID})
+	status := cmdGetProxyStatus(t, client, ctx, nodePubKey, proxyID)
 	listenAddr := status.ListenAddr
 
 	// Add fail2ban-style rule
 	t.Log("=== Adding Fail2Ban Rule ===")
-	rule, _ := client.AddRule(ctx, &pb.AddRuleRequest{
+	rule := cmdAddRule(t, client, ctx, nodePubKey, &pb.AddRuleRequest{
 		ProxyId: proxyID,
 		Rule: &pb.Rule{
 			Name:     "Fail2Ban Local",
@@ -1153,12 +1695,12 @@ func TestAdminAPI_AutoBlockFail2Ban(t *testing.T) {
 				{Type: common.ConditionType_CONDITION_TYPE_SOURCE_IP, Op: common.Operator_OPERATOR_CIDR, Value: "0.0.0.0/0"},
 			},
 			RateLimit: &pb.RateLimitConfig{
-				MaxConnections:           3,                 // 3 failures triggers block
-				IntervalSeconds:          60,                // Within 60 seconds
-				AutoBlock:                true,              // Enable auto-blocking
-				BlockDurationSeconds:     5,                 // Block for 5 seconds (for testing)
-				CountOnlyFailures:        true,              // Only count failures
-				FailureDurationThreshold: 2,                 // Connection < 2 seconds = failure
+				MaxConnections:           3,                  // 3 failures triggers block
+				IntervalSeconds:          60,                 // Within 60 seconds
+				AutoBlock:                true,               // Enable auto-blocking
+				BlockDurationSeconds:     5,                  // Block for 5 seconds (for testing)
+				CountOnlyFailures:        true,               // Only count failures
+				FailureDurationThreshold: 2,                  // Connection < 2 seconds = failure
 				BlockStepsSeconds:        []int32{5, 10, 30}, // Escalation
 			},
 		},
@@ -1204,29 +1746,26 @@ func TestAdminAPI_DefaultFallbackMock(t *testing.T) {
 	defer daemon.Process.Kill()
 	time.Sleep(100 * time.Millisecond)
 
-	client, conn := connectAdminAPI(t, adminPort, token, caPath)
+	client, conn, nodePubKey := connectAdminAPI(t, adminPort, token, caPath)
 	defer conn.Close()
 
 	ctx := authContext(token)
 
 	// Create proxy with unreachable backend and default mock
 	t.Log("=== Creating proxy with unreachable backend and fallback mock ===")
-	resp, err := client.CreateProxy(ctx, &pb.CreateProxyRequest{
+	createResp := cmdCreateProxy(t, client, ctx, nodePubKey, &pb.CreateProxyRequest{
 		Name:           "fallback-proxy",
 		ListenAddr:     fmt.Sprintf("127.0.0.1:%d", proxyPort),
 		DefaultBackend: "127.0.0.1:1", // Unreachable port
 		DefaultMock:    common.MockPreset_MOCK_PRESET_HTTP_403,
 	})
-	if err != nil || !resp.Success {
-		t.Fatalf("CreateProxy failed: %v", err)
+	if !createResp.Success {
+		t.Fatalf("CreateProxy failed: %s", createResp.ErrorMessage)
 	}
-	proxyID := resp.ProxyId
-	defer client.DeleteProxy(ctx, &pb.DeleteProxyRequest{ProxyId: proxyID})
+	proxyID := createResp.ProxyId
+	defer cmdDeleteProxy(t, client, ctx, nodePubKey, &pb.DeleteProxyRequest{ProxyId: proxyID})
 
-	status, err := client.GetStatus(ctx, &pb.GetStatusRequest{ProxyId: proxyID})
-	if err != nil {
-		t.Fatalf("GetStatus failed: %v", err)
-	}
+	status := cmdGetProxyStatus(t, client, ctx, nodePubKey, proxyID)
 	listenAddr := status.ListenAddr
 	t.Logf("Proxy listening on: %s, DefaultMock: %v, Running: %v", listenAddr, status.DefaultMock, status.Running)
 
@@ -1269,26 +1808,23 @@ func TestAdminAPI_EmptyBackendMock(t *testing.T) {
 	defer daemon.Process.Kill()
 	time.Sleep(100 * time.Millisecond)
 
-	client, conn := connectAdminAPI(t, adminPort, token, caPath)
+	client, conn, nodePubKey := connectAdminAPI(t, adminPort, token, caPath)
 	defer conn.Close()
 
 	ctx := authContext(token)
 
 	// Create proxy with no backend (pure mock server)
 	t.Log("=== Creating proxy with no backend (pure mock) ===")
-	resp, _ := client.CreateProxy(ctx, &pb.CreateProxyRequest{
+	createResp := cmdCreateProxy(t, client, ctx, nodePubKey, &pb.CreateProxyRequest{
 		Name:           "mock-only-proxy",
 		ListenAddr:     fmt.Sprintf("127.0.0.1:%d", proxyPort),
 		DefaultBackend: "", // No backend
 		DefaultMock:    common.MockPreset_MOCK_PRESET_HTTP_401,
 	})
-	proxyID := resp.ProxyId
-	defer client.DeleteProxy(ctx, &pb.DeleteProxyRequest{ProxyId: proxyID})
+	proxyID := createResp.ProxyId
+	defer cmdDeleteProxy(t, client, ctx, nodePubKey, &pb.DeleteProxyRequest{ProxyId: proxyID})
 
-	status, err := client.GetStatus(ctx, &pb.GetStatusRequest{ProxyId: proxyID})
-	if err != nil {
-		t.Fatalf("GetStatus failed: %v", err)
-	}
+	status := cmdGetProxyStatus(t, client, ctx, nodePubKey, proxyID)
 	listenAddr := status.ListenAddr
 	t.Logf("Proxy listening on: %s, DefaultMock: %v, Running: %v", listenAddr, status.DefaultMock, status.Running)
 
@@ -1333,21 +1869,21 @@ func TestAdminAPI_DDoSProtection(t *testing.T) {
 	defer daemon.Process.Kill()
 	time.Sleep(100 * time.Millisecond)
 
-	client, conn := connectAdminAPI(t, adminPort, token, caPath)
+	client, conn, nodePubKey := connectAdminAPI(t, adminPort, token, caPath)
 	defer conn.Close()
 
 	ctx := authContext(token)
 
 	// Create proxy
-	resp, _ := client.CreateProxy(ctx, &pb.CreateProxyRequest{
+	createResp := cmdCreateProxy(t, client, ctx, nodePubKey, &pb.CreateProxyRequest{
 		Name:           "ddos-proxy",
 		ListenAddr:     fmt.Sprintf("127.0.0.1:%d", getFreePort(t)),
 		DefaultBackend: backend.Addr().String(),
 	})
-	proxyID := resp.ProxyId
-	defer client.DeleteProxy(ctx, &pb.DeleteProxyRequest{ProxyId: proxyID})
+	proxyID := createResp.ProxyId
+	defer cmdDeleteProxy(t, client, ctx, nodePubKey, &pb.DeleteProxyRequest{ProxyId: proxyID})
 
-	status, _ := client.GetStatus(ctx, &pb.GetStatusRequest{ProxyId: proxyID})
+	status := cmdGetProxyStatus(t, client, ctx, nodePubKey, proxyID)
 	listenAddr := status.ListenAddr
 
 	// Simulate DDoS: many concurrent connection attempts
@@ -1385,7 +1921,7 @@ func TestAdminAPI_DDoSProtection(t *testing.T) {
 	t.Logf("DDoS test: %d successful, %d failed", successCount, failCount)
 
 	// Check proxy stats after DDoS
-	status, _ = client.GetStatus(ctx, &pb.GetStatusRequest{ProxyId: proxyID})
+	status = cmdGetProxyStatus(t, client, ctx, nodePubKey, proxyID)
 	t.Logf("Proxy stats: total_connections=%d", status.TotalConnections)
 
 	t.Log("=== DDoS Protection Test Passed ===")
@@ -1402,27 +1938,27 @@ func TestAdminAPI_RulePriorityMixed(t *testing.T) {
 	defer daemon.Process.Kill()
 	time.Sleep(100 * time.Millisecond)
 
-	client, conn := connectAdminAPI(t, adminPort, token, caPath)
+	client, conn, nodePubKey := connectAdminAPI(t, adminPort, token, caPath)
 	defer conn.Close()
 
 	ctx := authContext(token)
 
-	resp, _ := client.CreateProxy(ctx, &pb.CreateProxyRequest{
+	createResp := cmdCreateProxy(t, client, ctx, nodePubKey, &pb.CreateProxyRequest{
 		Name:           "priority-proxy",
 		ListenAddr:     fmt.Sprintf("127.0.0.1:%d", getFreePort(t)),
 		DefaultBackend: backend.Addr().String(),
 	})
-	proxyID := resp.ProxyId
-	defer client.DeleteProxy(ctx, &pb.DeleteProxyRequest{ProxyId: proxyID})
+	proxyID := createResp.ProxyId
+	defer cmdDeleteProxy(t, client, ctx, nodePubKey, &pb.DeleteProxyRequest{ProxyId: proxyID})
 
-	status, _ := client.GetStatus(ctx, &pb.GetStatusRequest{ProxyId: proxyID})
+	status := cmdGetProxyStatus(t, client, ctx, nodePubKey, proxyID)
 	listenAddr := status.ListenAddr
 
 	// Add rules with different priorities
 	t.Log("=== Adding mixed priority rules ===")
 
 	// Priority 10: Block all loopback (lowest)
-	rule1, _ := client.AddRule(ctx, &pb.AddRuleRequest{
+	rule1 := cmdAddRule(t, client, ctx, nodePubKey, &pb.AddRuleRequest{
 		ProxyId: proxyID,
 		Rule: &pb.Rule{
 			Name:     "Block Loopback",
@@ -1437,7 +1973,7 @@ func TestAdminAPI_RulePriorityMixed(t *testing.T) {
 	t.Logf("Added rule (priority 10): %s", rule1.Id)
 
 	// Priority 50: Mock for 127.0.0.1 (medium)
-	rule2, _ := client.AddRule(ctx, &pb.AddRuleRequest{
+	rule2 := cmdAddRule(t, client, ctx, nodePubKey, &pb.AddRuleRequest{
 		ProxyId: proxyID,
 		Rule: &pb.Rule{
 			Name:     "Mock 127.0.0.1",
@@ -1459,7 +1995,7 @@ func TestAdminAPI_RulePriorityMixed(t *testing.T) {
 	}
 
 	// Priority 100: Allow 127.0.0.1 (highest)
-	rule3, _ := client.AddRule(ctx, &pb.AddRuleRequest{
+	rule3 := cmdAddRule(t, client, ctx, nodePubKey, &pb.AddRuleRequest{
 		ProxyId: proxyID,
 		Rule: &pb.Rule{
 			Name:     "Allow 127.0.0.1",
@@ -1480,7 +2016,7 @@ func TestAdminAPI_RulePriorityMixed(t *testing.T) {
 	}
 
 	// Remove highest priority rule
-	client.RemoveRule(ctx, &pb.RemoveRuleRequest{ProxyId: proxyID, RuleId: rule3.Id})
+	cmdRemoveRule(t, client, ctx, nodePubKey, &pb.RemoveRuleRequest{ProxyId: proxyID, RuleId: rule3.Id})
 	t.Log("Removed priority 100 rule")
 
 	// Now priority 50 mock should win again
@@ -1490,7 +2026,7 @@ func TestAdminAPI_RulePriorityMixed(t *testing.T) {
 	}
 
 	// Remove priority 50, priority 10 block should win
-	client.RemoveRule(ctx, &pb.RemoveRuleRequest{ProxyId: proxyID, RuleId: rule2.Id})
+	cmdRemoveRule(t, client, ctx, nodePubKey, &pb.RemoveRuleRequest{ProxyId: proxyID, RuleId: rule2.Id})
 	t.Log("Removed priority 50 rule")
 
 	t.Log("=== Testing priority 10 block wins ===")
@@ -1513,25 +2049,25 @@ func TestAdminAPI_RuleEnableDisable(t *testing.T) {
 	defer daemon.Process.Kill()
 	time.Sleep(100 * time.Millisecond)
 
-	client, conn := connectAdminAPI(t, adminPort, token, caPath)
+	client, conn, nodePubKey := connectAdminAPI(t, adminPort, token, caPath)
 	defer conn.Close()
 
 	ctx := authContext(token)
 
-	resp, _ := client.CreateProxy(ctx, &pb.CreateProxyRequest{
+	createResp := cmdCreateProxy(t, client, ctx, nodePubKey, &pb.CreateProxyRequest{
 		Name:           "enable-disable-proxy",
 		ListenAddr:     fmt.Sprintf("127.0.0.1:%d", getFreePort(t)),
 		DefaultBackend: backend.Addr().String(),
 	})
-	proxyID := resp.ProxyId
-	defer client.DeleteProxy(ctx, &pb.DeleteProxyRequest{ProxyId: proxyID})
+	proxyID := createResp.ProxyId
+	defer cmdDeleteProxy(t, client, ctx, nodePubKey, &pb.DeleteProxyRequest{ProxyId: proxyID})
 
-	status, _ := client.GetStatus(ctx, &pb.GetStatusRequest{ProxyId: proxyID})
+	status := cmdGetProxyStatus(t, client, ctx, nodePubKey, proxyID)
 	listenAddr := status.ListenAddr
 
 	// Add DISABLED block rule
 	t.Log("=== Adding disabled block rule ===")
-	rule, _ := client.AddRule(ctx, &pb.AddRuleRequest{
+	rule := cmdAddRule(t, client, ctx, nodePubKey, &pb.AddRuleRequest{
 		ProxyId: proxyID,
 		Rule: &pb.Rule{
 			Name:     "Block (Disabled)",
@@ -1570,20 +2106,20 @@ func TestAdminAPI_StatsAccumulation(t *testing.T) {
 	defer daemon.Process.Kill()
 	time.Sleep(100 * time.Millisecond)
 
-	client, conn := connectAdminAPI(t, adminPort, token, caPath)
+	client, conn, nodePubKey := connectAdminAPI(t, adminPort, token, caPath)
 	defer conn.Close()
 
 	ctx := authContext(token)
 
-	resp, _ := client.CreateProxy(ctx, &pb.CreateProxyRequest{
+	createResp := cmdCreateProxy(t, client, ctx, nodePubKey, &pb.CreateProxyRequest{
 		Name:           "stats-proxy",
 		ListenAddr:     fmt.Sprintf("127.0.0.1:%d", getFreePort(t)),
 		DefaultBackend: backend.Addr().String(),
 	})
-	proxyID := resp.ProxyId
-	defer client.DeleteProxy(ctx, &pb.DeleteProxyRequest{ProxyId: proxyID})
+	proxyID := createResp.ProxyId
+	defer cmdDeleteProxy(t, client, ctx, nodePubKey, &pb.DeleteProxyRequest{ProxyId: proxyID})
 
-	status, _ := client.GetStatus(ctx, &pb.GetStatusRequest{ProxyId: proxyID})
+	status := cmdGetProxyStatus(t, client, ctx, nodePubKey, proxyID)
 	listenAddr := status.ListenAddr
 	initialTotal := status.TotalConnections
 
@@ -1594,7 +2130,7 @@ func TestAdminAPI_StatsAccumulation(t *testing.T) {
 	}
 
 	// Check stats
-	status, _ = client.GetStatus(ctx, &pb.GetStatusRequest{ProxyId: proxyID})
+	status = cmdGetProxyStatus(t, client, ctx, nodePubKey, proxyID)
 	newTotal := status.TotalConnections
 	t.Logf("Total connections: %d (was %d)", newTotal, initialTotal)
 
@@ -1619,25 +2155,19 @@ func TestAdminAPI_GeoIPLookup(t *testing.T) {
 	defer daemon.Process.Kill()
 	time.Sleep(100 * time.Millisecond)
 
-	client, conn := connectAdminAPI(t, adminPort, token, caPath)
+	client, conn, nodePubKey := connectAdminAPI(t, adminPort, token, caPath)
 	defer conn.Close()
 
 	ctx := authContext(token)
 
 	// Test GeoIP Status
 	t.Log("=== Test: GeoIP Status ===")
-	statusResp, err := client.GetGeoIPStatus(ctx, &pb.GetGeoIPStatusRequest{})
-	if err != nil {
-		t.Fatalf("GetGeoIPStatus failed: %v", err)
-	}
+	statusResp := cmdGetGeoIPStatus(t, client, ctx, nodePubKey)
 	t.Logf("GeoIP enabled: %v, mode: %s", statusResp.Enabled, statusResp.Mode)
 
 	// Test IP Lookup (using a well-known IP)
 	t.Log("=== Test: Lookup Public IP (8.8.8.8) ===")
-	lookupResp, err := client.LookupIP(ctx, &pb.LookupIPRequest{Ip: "8.8.8.8"})
-	if err != nil {
-		t.Fatalf("LookupIP failed: %v", err)
-	}
+	lookupResp := cmdLookupIP(t, client, ctx, nodePubKey, &pb.LookupIPRequest{Ip: "8.8.8.8"})
 	t.Logf("Lookup result: Country=%s, City=%s, ISP=%s, Time=%dms, Cached=%v",
 		lookupResp.Geo.GetCountry(),
 		lookupResp.Geo.GetCity(),
@@ -1650,12 +2180,12 @@ func TestAdminAPI_GeoIPLookup(t *testing.T) {
 
 	// Test second lookup (should be faster/cached)
 	t.Log("=== Test: Second Lookup (should be faster) ===")
-	lookupResp2, _ := client.LookupIP(ctx, &pb.LookupIPRequest{Ip: "8.8.8.8"})
+	lookupResp2 := cmdLookupIP(t, client, ctx, nodePubKey, &pb.LookupIPRequest{Ip: "8.8.8.8"})
 	t.Logf("Second lookup: Time=%dms, Cached=%v", lookupResp2.LookupTimeMs, lookupResp2.Cached)
 
 	// Test localhost lookup
 	t.Log("=== Test: Lookup Localhost ===")
-	localResp, _ := client.LookupIP(ctx, &pb.LookupIPRequest{Ip: "127.0.0.1"})
+	localResp := cmdLookupIP(t, client, ctx, nodePubKey, &pb.LookupIPRequest{Ip: "127.0.0.1"})
 	t.Logf("Localhost lookup: Country=%s (expected empty for localhost)", localResp.Geo.GetCountry())
 
 	t.Log("=== GeoIP Lookup Test Passed ===")

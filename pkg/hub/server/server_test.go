@@ -1,6 +1,7 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
@@ -15,13 +16,16 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ivere27/nitella/pkg/api/common"
 	pb "github.com/ivere27/nitella/pkg/api/hub"
 	"github.com/ivere27/nitella/pkg/hub/auth"
 	"github.com/ivere27/nitella/pkg/hub/model"
 	"github.com/ivere27/nitella/pkg/hub/store"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/status"
 )
 
 // generateTestKeyPEM generates an Ed25519 key pair and returns PEM-encoded private key
@@ -156,7 +160,7 @@ func generateSelfSignedCert(t *testing.T) ([]byte, []byte, error) {
 	}
 
 	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: derBytes})
-	
+
 	privBytes, err := x509.MarshalPKCS8PrivateKey(priv)
 	if err != nil {
 		return nil, nil, err
@@ -169,7 +173,7 @@ func generateSelfSignedCert(t *testing.T) ([]byte, []byte, error) {
 func (ts *testServer) dial(t *testing.T) *grpc.ClientConn {
 	pool := x509.NewCertPool()
 	pool.AppendCertsFromPEM(ts.caPEM)
-	
+
 	tlsConfig := &tls.Config{
 		RootCAs:    pool,
 		MinVersion: tls.VersionTLS13,
@@ -243,6 +247,75 @@ func TestMobileService(t *testing.T) {
 		}
 		t.Logf("GetNode response: %+v", resp)
 	})
+}
+
+func TestMobileService_NodeStatusMapping(t *testing.T) {
+	ts := setupTestServer(t)
+	defer ts.cleanup()
+
+	conn := ts.dial(t)
+	defer conn.Close()
+
+	const (
+		userID       = "user-status"
+		nodeID       = "node-status"
+		routingToken = "routing-token-status"
+	)
+
+	if err := ts.store.SaveUser(&model.User{
+		ID:               userID,
+		BlindIndex:       "blind-index-status",
+		EncryptedProfile: []byte("encrypted-profile"),
+		Role:             "user",
+		Tier:             "free",
+	}); err != nil {
+		t.Fatalf("save user: %v", err)
+	}
+
+	if err := ts.store.SaveNode(&model.Node{
+		ID:                nodeID,
+		RoutingToken:      routingToken,
+		EncryptedMetadata: []byte("encrypted-metadata"),
+		Status:            "online",
+		CertPEM:           "-----BEGIN CERTIFICATE-----\ntest\n-----END CERTIFICATE-----",
+		LastSeen:          time.Now(),
+	}); err != nil {
+		t.Fatalf("save node: %v", err)
+	}
+
+	if err := ts.store.SaveRoutingTokenInfo(&model.RoutingTokenInfo{
+		RoutingToken: routingToken,
+		Tier:         "free",
+	}); err != nil {
+		t.Fatalf("save routing token info: %v", err)
+	}
+
+	client := pb.NewMobileServiceClient(conn)
+	ctx := ts.mobileContext(userID, "device-001")
+
+	listResp, err := client.ListNodes(ctx, &pb.ListNodesRequest{
+		RoutingTokens: []string{routingToken},
+	})
+	if err != nil {
+		t.Fatalf("ListNodes failed: %v", err)
+	}
+	if len(listResp.GetNodes()) != 1 {
+		t.Fatalf("unexpected nodes length: got=%d want=1", len(listResp.GetNodes()))
+	}
+	if got := listResp.GetNodes()[0].GetStatus(); got != pb.NodeStatus_NODE_STATUS_ONLINE {
+		t.Fatalf("unexpected list status: got=%v want=%v", got, pb.NodeStatus_NODE_STATUS_ONLINE)
+	}
+
+	getResp, err := client.GetNode(ctx, &pb.GetNodeRequest{
+		NodeId:       nodeID,
+		RoutingToken: routingToken,
+	})
+	if err != nil {
+		t.Fatalf("GetNode failed: %v", err)
+	}
+	if got := getResp.GetStatus(); got != pb.NodeStatus_NODE_STATUS_ONLINE {
+		t.Fatalf("unexpected get status: got=%v want=%v", got, pb.NodeStatus_NODE_STATUS_ONLINE)
+	}
 }
 
 func TestAdminService(t *testing.T) {
@@ -469,8 +542,8 @@ func TestSendCommandRoutingTokenValidation(t *testing.T) {
 
 		ctx := ts.mobileContext("user-cmd", "device-001")
 		_, err := client.SendCommand(ctx, &pb.CommandRequest{
-			NodeId:       "node-cmd-test",           // This node's ID
-			RoutingToken: "other-routing-token",     // But other node's token
+			NodeId:       "node-cmd-test",       // This node's ID
+			RoutingToken: "other-routing-token", // But other node's token
 		})
 		if err == nil {
 			t.Error("SendCommand should fail when routing_token doesn't match node_id")
@@ -485,6 +558,7 @@ func TestSendCommandRoutingTokenValidation(t *testing.T) {
 		_, err := client.SendCommand(ctx, &pb.CommandRequest{
 			NodeId:       "node-cmd-test",
 			RoutingToken: validRoutingToken,
+			Encrypted:    &common.EncryptedPayload{},
 		})
 		// This will timeout because the node isn't actually connected,
 		// but the routing token validation should pass
@@ -500,6 +574,315 @@ func TestSendCommandRoutingTokenValidation(t *testing.T) {
 			}
 		}
 	})
+
+	t.Run("SendCommand_MissingEncryptedPayload", func(t *testing.T) {
+		ctx := ts.mobileContext("user-cmd", "device-001")
+		_, err := client.SendCommand(ctx, &pb.CommandRequest{
+			NodeId:       "node-cmd-test",
+			RoutingToken: validRoutingToken,
+		})
+		if err == nil {
+			t.Fatal("SendCommand should fail when encrypted payload is missing")
+		}
+		if !containsAny(err.Error(), "encrypted payload", "required") {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+}
+
+func TestEnsureNodeRegistered_UpdatesPinnedCertOnTrustedRotation(t *testing.T) {
+	ts := setupTestServer(t)
+	defer ts.cleanup()
+
+	caPEM, caCert, caKey := generateTestCA(t, "rotation-ca")
+	oldCertPEM, _ := generateNodeCertSignedByCA(t, caCert, caKey, "thinkpad", 1001)
+	newCertPEM, newCert := generateNodeCertSignedByCA(t, caCert, caKey, "thinkpad", 1002)
+
+	const routingToken = "routing-token-rotation"
+	if err := ts.store.SaveRegistrationRequest(&model.RegistrationRequest{
+		Code:         "rot-approved",
+		Status:       "APPROVED",
+		CaPEM:        string(caPEM),
+		RoutingToken: routingToken,
+		ExpiresAt:    time.Now().Add(time.Hour),
+	}); err != nil {
+		t.Fatalf("save registration request: %v", err)
+	}
+
+	if err := ts.store.SaveNode(&model.Node{
+		ID:           "thinkpad",
+		RoutingToken: routingToken,
+		CertPEM:      string(oldCertPEM),
+		Status:       "offline",
+	}); err != nil {
+		t.Fatalf("save node: %v", err)
+	}
+
+	tlsState := tls.ConnectionState{
+		PeerCertificates: []*x509.Certificate{newCert},
+		VerifiedChains:   [][]*x509.Certificate{{newCert, caCert}},
+	}
+
+	node, err := ts.hubServer.ensureNodeRegistered("thinkpad", tlsState)
+	if err != nil {
+		t.Fatalf("ensureNodeRegistered failed: %v", err)
+	}
+	if node.RoutingToken != routingToken {
+		t.Fatalf("routing token mismatch: got %q want %q", node.RoutingToken, routingToken)
+	}
+	if !pemMatchesRaw(node.CertPEM, newCert.Raw) {
+		t.Fatalf("in-memory node cert was not updated to rotated cert")
+	}
+
+	persisted, err := ts.store.GetNode("thinkpad")
+	if err != nil {
+		t.Fatalf("load persisted node: %v", err)
+	}
+	if !pemMatchesRaw(persisted.CertPEM, newCert.Raw) {
+		t.Fatalf("persisted node cert was not updated to rotated cert")
+	}
+	if !bytes.Equal([]byte(strings.TrimSpace(persisted.CertPEM)), []byte(strings.TrimSpace(string(newCertPEM)))) {
+		t.Fatalf("persisted cert pem does not match rotated cert pem")
+	}
+}
+
+func TestEnsureNodeRegistered_RejectsRotationWhenRoutingTokenDiffers(t *testing.T) {
+	ts := setupTestServer(t)
+	defer ts.cleanup()
+
+	caPEM, caCert, caKey := generateTestCA(t, "rotation-ca-mismatch")
+	oldCertPEM, oldCert := generateNodeCertSignedByCA(t, caCert, caKey, "thinkpad", 2001)
+	_, newCert := generateNodeCertSignedByCA(t, caCert, caKey, "thinkpad", 2002)
+
+	if err := ts.store.SaveRegistrationRequest(&model.RegistrationRequest{
+		Code:         "rot-approved-mismatch",
+		Status:       "APPROVED",
+		CaPEM:        string(caPEM),
+		RoutingToken: "routing-token-new",
+		ExpiresAt:    time.Now().Add(time.Hour),
+	}); err != nil {
+		t.Fatalf("save registration request: %v", err)
+	}
+
+	if err := ts.store.SaveNode(&model.Node{
+		ID:           "thinkpad",
+		RoutingToken: "routing-token-old",
+		CertPEM:      string(oldCertPEM),
+		Status:       "offline",
+	}); err != nil {
+		t.Fatalf("save node: %v", err)
+	}
+
+	tlsState := tls.ConnectionState{
+		PeerCertificates: []*x509.Certificate{newCert},
+		VerifiedChains:   [][]*x509.Certificate{{newCert, caCert}},
+	}
+
+	_, err := ts.hubServer.ensureNodeRegistered("thinkpad", tlsState)
+	if status.Code(err) != codes.Unauthenticated {
+		t.Fatalf("expected unauthenticated for token mismatch, got: %v", err)
+	}
+
+	persisted, err := ts.store.GetNode("thinkpad")
+	if err != nil {
+		t.Fatalf("load persisted node: %v", err)
+	}
+	if !pemMatchesRaw(persisted.CertPEM, oldCert.Raw) {
+		t.Fatalf("stored cert changed unexpectedly despite routing token mismatch")
+	}
+}
+
+func TestEnsureNodeRegistered_UpdatesPinnedCertWhenSameCAViaPinnedCertFallback(t *testing.T) {
+	ts := setupTestServer(t)
+	defer ts.cleanup()
+
+	caPEM, caCert, caKey := generateTestCA(t, "rotation-ca-no-map")
+	_ = caPEM
+	oldCertPEM, _ := generateNodeCertSignedByCA(t, caCert, caKey, "thinkpad", 3001)
+	newCertPEM, newCert := generateNodeCertSignedByCA(t, caCert, caKey, "thinkpad", 3002)
+
+	if err := ts.store.SaveNode(&model.Node{
+		ID:           "thinkpad",
+		RoutingToken: "routing-token-existing",
+		CertPEM:      string(oldCertPEM),
+		Status:       "offline",
+	}); err != nil {
+		t.Fatalf("save node: %v", err)
+	}
+
+	tlsState := tls.ConnectionState{
+		PeerCertificates: []*x509.Certificate{newCert},
+		VerifiedChains:   [][]*x509.Certificate{{newCert, caCert}},
+	}
+
+	node, err := ts.hubServer.ensureNodeRegistered("thinkpad", tlsState)
+	if err != nil {
+		t.Fatalf("ensureNodeRegistered failed: %v", err)
+	}
+	if node.RoutingToken != "routing-token-existing" {
+		t.Fatalf("routing token should stay unchanged when mapping is missing, got %q", node.RoutingToken)
+	}
+	if !pemMatchesRaw(node.CertPEM, newCert.Raw) {
+		t.Fatalf("in-memory node cert was not updated via pinned-cert fallback")
+	}
+
+	persisted, err := ts.store.GetNode("thinkpad")
+	if err != nil {
+		t.Fatalf("load persisted node: %v", err)
+	}
+	if !pemMatchesRaw(persisted.CertPEM, newCert.Raw) {
+		t.Fatalf("persisted node cert was not updated via pinned-cert fallback")
+	}
+	if !bytes.Equal([]byte(strings.TrimSpace(persisted.CertPEM)), []byte(strings.TrimSpace(string(newCertPEM)))) {
+		t.Fatalf("persisted cert pem does not match rotated cert pem")
+	}
+}
+
+func TestRegisterNodeWithCert_PersistsCAAndAllowsRotation(t *testing.T) {
+	ts := setupTestServer(t)
+	defer ts.cleanup()
+
+	conn := ts.dial(t)
+	defer conn.Close()
+	client := pb.NewMobileServiceClient(conn)
+
+	if err := ts.store.SaveUser(&model.User{
+		ID:               "user-pake",
+		BlindIndex:       "blind-index-pake",
+		EncryptedProfile: []byte("encrypted-profile"),
+		Role:             "user",
+		Tier:             "pro",
+		InviteCode:       "NITELLA",
+	}); err != nil {
+		t.Fatalf("save user: %v", err)
+	}
+
+	caPEM, caCert, caKey := generateTestCA(t, "register-with-cert-ca")
+	initialCertPEM, _ := generateNodeCertSignedByCA(t, caCert, caKey, "thinkpad", 4001)
+
+	const routingToken = "routing-token-pake-register"
+	_, err := client.RegisterNodeWithCert(ts.mobileContext("user-pake", "device-001"), &pb.RegisterNodeWithCertRequest{
+		NodeId:            "thinkpad",
+		CertPem:           string(initialCertPEM),
+		CaPem:             string(caPEM),
+		RoutingToken:      routingToken,
+		EncryptedMetadata: []byte("encrypted-metadata"),
+	})
+	if err != nil {
+		t.Fatalf("RegisterNodeWithCert failed: %v", err)
+	}
+
+	mappedToken, err := ts.store.GetRoutingTokenByCA(string(caPEM))
+	if err != nil {
+		t.Fatalf("GetRoutingTokenByCA failed: %v", err)
+	}
+	if mappedToken != routingToken {
+		t.Fatalf("routing token mismatch for CA: got %q want %q", mappedToken, routingToken)
+	}
+
+	info, err := ts.store.GetRoutingTokenInfo(routingToken)
+	if err != nil {
+		t.Fatalf("GetRoutingTokenInfo failed: %v", err)
+	}
+	caPub, ok := caCert.PublicKey.(ed25519.PublicKey)
+	if !ok {
+		t.Fatalf("test CA public key is not ed25519")
+	}
+	if !bytes.Equal(info.AuditPubKey, caPub) {
+		t.Fatalf("routing token audit key mismatch")
+	}
+
+	rotatedCertPEM, rotatedCert := generateNodeCertSignedByCA(t, caCert, caKey, "thinkpad", 4002)
+	tlsState := tls.ConnectionState{
+		PeerCertificates: []*x509.Certificate{rotatedCert},
+		VerifiedChains:   [][]*x509.Certificate{{rotatedCert, caCert}},
+	}
+
+	node, err := ts.hubServer.ensureNodeRegistered("thinkpad", tlsState)
+	if err != nil {
+		t.Fatalf("ensureNodeRegistered failed after RegisterNodeWithCert: %v", err)
+	}
+	if node.RoutingToken != routingToken {
+		t.Fatalf("routing token mismatch after rotation: got %q want %q", node.RoutingToken, routingToken)
+	}
+	if !pemMatchesRaw(node.CertPEM, rotatedCert.Raw) {
+		t.Fatalf("node cert pin not updated after trusted rotation")
+	}
+
+	persisted, err := ts.store.GetNode("thinkpad")
+	if err != nil {
+		t.Fatalf("load persisted node: %v", err)
+	}
+	if !bytes.Equal([]byte(strings.TrimSpace(persisted.CertPEM)), []byte(strings.TrimSpace(string(rotatedCertPEM)))) {
+		t.Fatalf("persisted cert pem does not match rotated cert pem")
+	}
+}
+
+func generateTestCA(t *testing.T, commonName string) ([]byte, *x509.Certificate, ed25519.PrivateKey) {
+	t.Helper()
+
+	_, caKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("generate CA key: %v", err)
+	}
+
+	tmpl := &x509.Certificate{
+		SerialNumber:          big.NewInt(time.Now().UnixNano()),
+		Subject:               pkix.Name{CommonName: commonName},
+		NotBefore:             time.Now().Add(-time.Minute),
+		NotAfter:              time.Now().Add(24 * time.Hour),
+		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageDigitalSignature,
+		BasicConstraintsValid: true,
+		IsCA:                  true,
+	}
+
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, caKey.Public(), caKey)
+	if err != nil {
+		t.Fatalf("create CA cert: %v", err)
+	}
+
+	cert, err := x509.ParseCertificate(der)
+	if err != nil {
+		t.Fatalf("parse CA cert: %v", err)
+	}
+
+	return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}), cert, caKey
+}
+
+func generateNodeCertSignedByCA(t *testing.T, caCert *x509.Certificate, caKey ed25519.PrivateKey, nodeID string, serial int64) ([]byte, *x509.Certificate) {
+	t.Helper()
+
+	_, nodeKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("generate node key: %v", err)
+	}
+
+	tmpl := &x509.Certificate{
+		SerialNumber: big.NewInt(serial),
+		Subject:      pkix.Name{CommonName: nodeID},
+		NotBefore:    time.Now().Add(-time.Minute),
+		NotAfter:     time.Now().Add(24 * time.Hour),
+		KeyUsage:     x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
+		DNSNames:     []string{nodeID},
+	}
+
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, caCert, nodeKey.Public(), caKey)
+	if err != nil {
+		t.Fatalf("create node cert: %v", err)
+	}
+
+	cert, err := x509.ParseCertificate(der)
+	if err != nil {
+		t.Fatalf("parse node cert: %v", err)
+	}
+
+	return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}), cert
+}
+
+func pemMatchesRaw(certPEM string, raw []byte) bool {
+	block, _ := pem.Decode([]byte(certPEM))
+	return block != nil && bytes.Equal(block.Bytes, raw)
 }
 
 // containsAny checks if s contains any of the substrings (case-insensitive)

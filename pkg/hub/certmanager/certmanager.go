@@ -285,6 +285,30 @@ func (m *CertManager) verifyClientCertInternal(rawCerts [][]byte) error {
 	return nil
 }
 
+// VerifyClientCertChains verifies a client certificate against CLI CAs
+// and returns the verified chains. Used by ensureNodeRegistered() for JIT registration.
+// Returns nil chains if verification fails (does NOT return an error — lenient).
+func (m *CertManager) VerifyClientCertChains(rawCert []byte) [][]*x509.Certificate {
+	cert, err := x509.ParseCertificate(rawCert)
+	if err != nil {
+		return nil
+	}
+
+	m.clientCAsMu.RLock()
+	clientCAs := m.clientCAs
+	m.clientCAsMu.RUnlock()
+
+	opts := x509.VerifyOptions{
+		Roots:     clientCAs,
+		KeyUsages: []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
+	}
+	chains, err := cert.Verify(opts)
+	if err != nil {
+		return nil
+	}
+	return chains
+}
+
 // ensureCA creates or loads the Hub CA.
 func (m *CertManager) ensureCA() error {
 	// Check if CA exists

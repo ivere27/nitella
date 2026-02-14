@@ -92,6 +92,14 @@ enum ApprovalActionType {
   APPROVAL_ACTION_TYPE_BLOCK_ADD_RULE = 3; // Block and create permanent rule
 }
 
+// ApprovalRetentionMode controls whether an approval decision is cached or
+// applied only to the current pending connection.
+enum ApprovalRetentionMode {
+  APPROVAL_RETENTION_MODE_UNSPECIFIED = 0;      // Fallback to CACHE mode
+  APPROVAL_RETENTION_MODE_CACHE = 1;            // Cache decision for duration_seconds
+  APPROVAL_RETENTION_MODE_CONNECTION_ONLY = 2;  // No cache; duration_seconds is max connection lifetime
+}
+
 // P2PMode defines the peer-to-peer connection strategy
 enum P2PMode {
   P2P_MODE_UNSPECIFIED = 0;
@@ -137,6 +145,19 @@ message Alert {
   // Encrypted content (title, description) - only Mobile can decrypt
   EncryptedPayload encrypted = 6;
   map<string, string> metadata = 7; // Routing info (e.g. type=approval, tag=production)
+}
+
+// AlertDetails contains encrypted alert information for approval requests.
+// This replaces JSON-encoded alert info for type safety.
+message AlertDetails {
+    string source_ip = 1;
+    string destination = 2;
+    string proxy_id = 3;
+    string proxy_name = 4;
+    string rule_id = 5;
+    string geo_country = 6;
+    string geo_city = 7;
+    string geo_isp = 8;
 }
 
 // GeoInfo contains geographical information for an IP address.

@@ -15,6 +15,19 @@ set -e
 # Export E2E_TEST=1 to enable the Go tests
 export E2E_TEST=1
 
+# Dedicated local defaults for E2E to avoid collisions with common dev ports.
+HUB_ADDR="${HUB_ADDR:-localhost:55052}"
+HUB_HTTP_ADDR="${HUB_HTTP_ADDR:-localhost:58080}"
+NODE1_ADDR="${NODE1_ADDR:-localhost:28081}"
+NODE1_ADMIN="${NODE1_ADMIN:-localhost:55061}"
+NODE2_ADDR="${NODE2_ADDR:-localhost:28082}"
+NODE2_ADMIN="${NODE2_ADMIN:-localhost:55062}"
+NODE3_ADDR="${NODE3_ADDR:-localhost:28083}"
+NODE3_ADMIN="${NODE3_ADMIN:-localhost:55063}"
+MOCK_HTTP="${MOCK_HTTP:-localhost:18090}"
+MOCK_SSH="${MOCK_SSH:-localhost:12222}"
+MOCK_MYSQL="${MOCK_MYSQL:-localhost:13306}"
+
 # Colors for output
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -111,7 +124,7 @@ test_phase1_core_system() {
 
     # Test 1.1: Hub health check
     log_test "1.1 Hub health check"
-    if curl -sf "http://${HUB_ADDR%:*}:8080/health" > /dev/null 2>&1 || nc -z "${HUB_ADDR%:*}" "${HUB_ADDR#*:}"; then
+    if curl -sf "http://${HUB_HTTP_ADDR}/health" > /dev/null 2>&1 || nc -z "${HUB_ADDR%:*}" "${HUB_ADDR#*:}"; then
         log_pass "Hub is healthy"
     else
         log_fail "Hub health check failed"
@@ -169,6 +182,7 @@ main() {
 
     log "Configuration:"
     log "  HUB_ADDR: $HUB_ADDR"
+    log "  HUB_HTTP_ADDR: $HUB_HTTP_ADDR"
     log "  NODE1_ADDR: $NODE1_ADDR"
     log "  NODE2_ADDR: $NODE2_ADDR"
     log "  NODE3_ADDR: $NODE3_ADDR"

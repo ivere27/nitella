@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/ivere27/nitella/pkg/hub/model"
+	"xorm.io/xorm"
 )
 
 func TestStore(t *testing.T) {
@@ -51,6 +52,10 @@ func TestStore(t *testing.T) {
 
 	t.Run("RoutingToken", func(t *testing.T) {
 		testRoutingToken(t, store)
+	})
+
+	t.Run("ProxyRevisionScopedUnique", func(t *testing.T) {
+		testProxyRevisionScopedUnique(t, store)
 	})
 }
 
@@ -322,6 +327,124 @@ func testRegistration(t *testing.T, store Store) {
 	}
 
 	store.DeleteRegistrationRequest(rejectedReg.Code)
+}
+
+func testProxyRevisionScopedUnique(t *testing.T, store Store) {
+	cfgA := &model.ProxyConfig{ProxyID: "proxy-a", RoutingToken: "rt-1"}
+	cfgB := &model.ProxyConfig{ProxyID: "proxy-b", RoutingToken: "rt-1"}
+	if err := store.CreateProxyConfig(cfgA); err != nil {
+		t.Fatalf("CreateProxyConfig(proxy-a) failed: %v", err)
+	}
+	if err := store.CreateProxyConfig(cfgB); err != nil {
+		t.Fatalf("CreateProxyConfig(proxy-b) failed: %v", err)
+	}
+
+	revA := &model.ProxyRevision{
+		ProxyID:       "proxy-a",
+		RevisionNum:   1,
+		EncryptedBlob: []byte("a1"),
+		SizeBytes:     2,
+	}
+	revB := &model.ProxyRevision{
+		ProxyID:       "proxy-b",
+		RevisionNum:   1,
+		EncryptedBlob: []byte("b1"),
+		SizeBytes:     2,
+	}
+
+	if err := store.CreateProxyRevision(revA); err != nil {
+		t.Fatalf("CreateProxyRevision(proxy-a, rev=1) failed: %v", err)
+	}
+	if err := store.CreateProxyRevision(revB); err != nil {
+		t.Fatalf("CreateProxyRevision(proxy-b, rev=1) failed: %v", err)
+	}
+
+	gotA, err := store.GetLatestProxyRevision("proxy-a")
+	if err != nil {
+		t.Fatalf("GetLatestProxyRevision(proxy-a) failed: %v", err)
+	}
+	gotB, err := store.GetLatestProxyRevision("proxy-b")
+	if err != nil {
+		t.Fatalf("GetLatestProxyRevision(proxy-b) failed: %v", err)
+	}
+	if gotA.RevisionNum != 1 || gotB.RevisionNum != 1 {
+		t.Fatalf("unexpected revision numbers: proxy-a=%d proxy-b=%d", gotA.RevisionNum, gotB.RevisionNum)
+	}
+}
+
+func TestStoreMigratesLegacyProxyRevisionUniqueIndex(t *testing.T) {
+	tmpFile, err := os.CreateTemp("", "hub_migrate_proxy_rev_*.db")
+	if err != nil {
+		t.Fatalf("Failed to create temp file: %v", err)
+	}
+	defer os.Remove(tmpFile.Name())
+	tmpFile.Close()
+
+	legacyEngine, err := xorm.NewEngine("sqlite3", tmpFile.Name())
+	if err != nil {
+		t.Fatalf("Failed to create legacy engine: %v", err)
+	}
+
+	_, err = legacyEngine.Exec(`CREATE TABLE proxy_config (
+		proxy_id TEXT PRIMARY KEY,
+		routing_token TEXT,
+		created_at DATETIME,
+		updated_at DATETIME,
+		deleted INTEGER
+	)`)
+	if err != nil {
+		t.Fatalf("Failed to create legacy proxy_config table: %v", err)
+	}
+	_, err = legacyEngine.Exec(`CREATE TABLE proxy_revision (
+		i_d INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+		proxy_id TEXT NULL,
+		revision_num INTEGER NULL,
+		encrypted_blob BLOB NULL,
+		size_bytes INTEGER NULL,
+		created_at DATETIME NULL
+	)`)
+	if err != nil {
+		t.Fatalf("Failed to create legacy proxy_revision table: %v", err)
+	}
+	_, err = legacyEngine.Exec(`CREATE UNIQUE INDEX UQE_proxy_revision_proxy_rev ON proxy_revision (revision_num)`)
+	if err != nil {
+		t.Fatalf("Failed to create legacy unique index: %v", err)
+	}
+	if err := legacyEngine.Close(); err != nil {
+		t.Fatalf("Failed to close legacy engine: %v", err)
+	}
+
+	s, err := NewStore("sqlite3", tmpFile.Name())
+	if err != nil {
+		t.Fatalf("NewStore migration failed: %v", err)
+	}
+	defer s.Close()
+
+	cfgA := &model.ProxyConfig{ProxyID: "proxy-a", RoutingToken: "rt-1"}
+	cfgB := &model.ProxyConfig{ProxyID: "proxy-b", RoutingToken: "rt-1"}
+	if err := s.CreateProxyConfig(cfgA); err != nil {
+		t.Fatalf("CreateProxyConfig(proxy-a) failed: %v", err)
+	}
+	if err := s.CreateProxyConfig(cfgB); err != nil {
+		t.Fatalf("CreateProxyConfig(proxy-b) failed: %v", err)
+	}
+
+	if err := s.CreateProxyRevision(&model.ProxyRevision{
+		ProxyID:       "proxy-a",
+		RevisionNum:   1,
+		EncryptedBlob: []byte("a1"),
+		SizeBytes:     2,
+	}); err != nil {
+		t.Fatalf("CreateProxyRevision(proxy-a, rev=1) failed after migration: %v", err)
+	}
+	if err := s.CreateProxyRevision(&model.ProxyRevision{
+		ProxyID:       "proxy-b",
+		RevisionNum:   1,
+		EncryptedBlob: []byte("b1"),
+		SizeBytes:     2,
+	}); err != nil {
+		t.Fatalf("CreateProxyRevision(proxy-b, rev=1) failed after migration: %v", err)
+	}
 }
 
 func testMetrics(t *testing.T, store Store) {

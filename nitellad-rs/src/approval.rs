@@ -1,10 +1,12 @@
+use chrono::Utc;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::Duration;
-use tokio::sync::{Mutex, RwLock, oneshot};
 use std::sync::Arc;
-use chrono::Utc;
+use std::time::Duration;
+use tokio::sync::{oneshot, Mutex, RwLock};
 use tracing::info;
+
+use crate::proto::common::ApprovalRetentionMode;
 
 // DoS protection defaults (matching Go's pkg/config/defaults.go)
 const DEFAULT_MAX_PENDING: usize = 1000;
@@ -26,6 +28,7 @@ pub struct ApprovalReqData {
 #[derive(Clone, Debug)]
 pub struct ApprovalResult {
     pub allowed: bool,
+    pub retention_mode: i32,
     pub duration_seconds: i64,
 }
 
@@ -122,6 +125,7 @@ impl ApprovalManager {
             if now < entry.data.expires_at {
                 return Some(ApprovalResult {
                     allowed: entry.data.allowed,
+                    retention_mode: ApprovalRetentionMode::Cache as i32,
                     duration_seconds: entry.data.expires_at - now,
                 });
             }
@@ -138,7 +142,10 @@ impl ApprovalManager {
 
             // DoS protection: global limit
             if state.requests.len() >= DEFAULT_MAX_PENDING {
-                return Err(format!("too many pending approval requests (max: {})", DEFAULT_MAX_PENDING));
+                return Err(format!(
+                    "too many pending approval requests (max: {})",
+                    DEFAULT_MAX_PENDING
+                ));
             }
             // DoS protection: per-IP limit
             let ip_count = state.by_ip.get(&data.source_ip).copied().unwrap_or(0);
@@ -161,19 +168,30 @@ impl ApprovalManager {
             }
 
             *state.by_ip.entry(data.source_ip.clone()).or_insert(0) += 1;
-            state.requests.insert(data.id.clone(), PendingEntry {
-                data: data.clone(),
-                tx,
-            });
+            state.requests.insert(
+                data.id.clone(),
+                PendingEntry {
+                    data: data.clone(),
+                    tx,
+                },
+            );
         }
 
         // Wait for approval with timeout (2 minutes, matching Go's ApprovalRequestTimeout)
         let timeout = tokio::time::sleep(Duration::from_secs(120));
 
         let result = tokio::select! {
-            res = rx => res.unwrap_or(ApprovalResult { allowed: false, duration_seconds: 0 }),
+            res = rx => res.unwrap_or(ApprovalResult {
+                allowed: false,
+                retention_mode: ApprovalRetentionMode::Unspecified as i32,
+                duration_seconds: 0,
+            }),
             _ = timeout => {
-                ApprovalResult { allowed: false, duration_seconds: 0 }
+                ApprovalResult {
+                    allowed: false,
+                    retention_mode: ApprovalRetentionMode::Unspecified as i32,
+                    duration_seconds: 0,
+                }
             }
         };
 
@@ -207,6 +225,22 @@ impl ApprovalManager {
     }
 
     pub async fn resolve(&self, id: &str, allowed: bool, duration_seconds: i64) -> bool {
+        self.resolve_with_retention(
+            id,
+            allowed,
+            duration_seconds,
+            ApprovalRetentionMode::Cache as i32,
+        )
+        .await
+    }
+
+    pub async fn resolve_with_retention(
+        &self,
+        id: &str,
+        allowed: bool,
+        duration_seconds: i64,
+        retention_mode: i32,
+    ) -> bool {
         // Resolve pending
         let mut state = self.pending.lock().await;
         if let Some(entry) = state.requests.remove(id) {
@@ -227,32 +261,53 @@ impl ApprovalManager {
             }
             drop(state); // Release lock before sending
 
-            let _ = entry.tx.send(ApprovalResult { allowed, duration_seconds });
-
-            // Add to cache
-            let key = Self::build_key(&entry.data.source_ip, &entry.data.rule_id);
-            let duration = if duration_seconds > 0 { duration_seconds } else { 300 }; // Default 5m
-
-            let cache_entry = ApprovalCacheEntry {
-                key: key.clone(),
-                source_ip: entry.data.source_ip,
-                rule_id: entry.data.rule_id,
-                proxy_id: entry.data.proxy_id,
-                allowed,
-                created_at: Utc::now().timestamp(),
-                expires_at: Utc::now().timestamp() + duration,
-                geo_country: String::new(),
-                geo_city: String::new(),
-                geo_isp: String::new(),
-                bytes_in: 0,
-                bytes_out: 0,
-                blocked_count: 0,
+            let mode = ApprovalRetentionMode::try_from(retention_mode)
+                .unwrap_or(ApprovalRetentionMode::Cache);
+            let mode = if mode == ApprovalRetentionMode::Unspecified {
+                ApprovalRetentionMode::Cache
+            } else {
+                mode
             };
-            let mut cache_lock = self.cache.write().await;
-            cache_lock.insert(key, CacheEntryInternal {
-                data: cache_entry,
-                live_conns: HashMap::new(),
+
+            let _ = entry.tx.send(ApprovalResult {
+                allowed,
+                retention_mode: mode as i32,
+                duration_seconds,
             });
+
+            // CACHE mode stores follow-up decisions in cache.
+            if mode == ApprovalRetentionMode::Cache {
+                let key = Self::build_key(&entry.data.source_ip, &entry.data.rule_id);
+                let duration = if duration_seconds > 0 {
+                    duration_seconds
+                } else {
+                    300
+                }; // Default 5m
+
+                let cache_entry = ApprovalCacheEntry {
+                    key: key.clone(),
+                    source_ip: entry.data.source_ip,
+                    rule_id: entry.data.rule_id,
+                    proxy_id: entry.data.proxy_id,
+                    allowed,
+                    created_at: Utc::now().timestamp(),
+                    expires_at: Utc::now().timestamp() + duration,
+                    geo_country: String::new(),
+                    geo_city: String::new(),
+                    geo_isp: String::new(),
+                    bytes_in: 0,
+                    bytes_out: 0,
+                    blocked_count: 0,
+                };
+                let mut cache_lock = self.cache.write().await;
+                cache_lock.insert(
+                    key,
+                    CacheEntryInternal {
+                        data: cache_entry,
+                        live_conns: HashMap::new(),
+                    },
+                );
+            }
 
             true
         } else {
@@ -273,7 +328,11 @@ impl ApprovalManager {
         geo_isp: &str,
     ) {
         let key = Self::build_key(source_ip, rule_id);
-        let duration = if duration_seconds > 0 { duration_seconds } else { 300 };
+        let duration = if duration_seconds > 0 {
+            duration_seconds
+        } else {
+            300
+        };
         let cache_entry = ApprovalCacheEntry {
             key: key.clone(),
             source_ip: source_ip.to_string(),
@@ -290,10 +349,13 @@ impl ApprovalManager {
             blocked_count: 0,
         };
         let mut cache_lock = self.cache.write().await;
-        cache_lock.insert(key, CacheEntryInternal {
-            data: cache_entry,
-            live_conns: HashMap::new(),
-        });
+        cache_lock.insert(
+            key,
+            CacheEntryInternal {
+                data: cache_entry,
+                live_conns: HashMap::new(),
+            },
+        );
     }
 
     /// Register a live connection with atomic byte counter references.
@@ -312,7 +374,13 @@ impl ApprovalManager {
             if entry.live_conns.len() >= MAX_CONN_IDS_PER_APPROVAL {
                 return false;
             }
-            entry.live_conns.insert(conn_id.to_string(), LiveConnStats { bytes_in, bytes_out });
+            entry.live_conns.insert(
+                conn_id.to_string(),
+                LiveConnStats {
+                    bytes_in,
+                    bytes_out,
+                },
+            );
             true
         } else {
             false
@@ -321,12 +389,7 @@ impl ApprovalManager {
 
     /// Remove a connection from tracking when it closes.
     /// Accumulates final byte counts into the cache entry.
-    pub async fn remove_conn_id(
-        &self,
-        source_ip: &str,
-        rule_id: &str,
-        conn_id: &str,
-    ) {
+    pub async fn remove_conn_id(&self, source_ip: &str, rule_id: &str, conn_id: &str) {
         let key = Self::build_key(source_ip, rule_id);
         let mut cache = self.cache.write().await;
         if let Some(entry) = cache.get_mut(&key) {
@@ -353,7 +416,8 @@ impl ApprovalManager {
     pub async fn list_active(&self) -> Vec<ApprovalCacheEntry> {
         let cache = self.cache.read().await;
         let now = Utc::now().timestamp();
-        cache.values()
+        cache
+            .values()
             .filter(|e| now < e.data.expires_at)
             .map(|entry| {
                 let mut result = entry.data.clone();
@@ -474,15 +538,22 @@ mod tests {
         let manager = Arc::new(ApprovalManager::new());
 
         // Create a cached approval
-        manager.add_to_cache_with_geo(
-            "1.2.3.4", "r1", "p1", true, 300,
-            "US", "NYC", "ISP1",
-        ).await;
+        manager
+            .add_to_cache_with_geo("1.2.3.4", "r1", "p1", true, 300, "US", "NYC", "ISP1")
+            .await;
 
         // Register a live connection with byte counters
         let bytes_in = Arc::new(AtomicU64::new(0));
         let bytes_out = Arc::new(AtomicU64::new(0));
-        let set = manager.set_conn_id("1.2.3.4", "r1", "conn-1", bytes_in.clone(), bytes_out.clone()).await;
+        let set = manager
+            .set_conn_id(
+                "1.2.3.4",
+                "r1",
+                "conn-1",
+                bytes_in.clone(),
+                bytes_out.clone(),
+            )
+            .await;
         assert!(set);
 
         // Simulate data transfer

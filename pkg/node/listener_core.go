@@ -56,22 +56,42 @@ func NewListenerCore(geoIP *GeoIPService) *ListenerCore {
 
 // SetStatsService sets the statistics service.
 func (c *ListenerCore) SetStatsService(s *stats.StatsService) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	c.stats = s
+	if c.listener != nil {
+		c.listener.SetStatsService(s)
+	}
 }
 
 // SetApprovalManager sets the approval manager.
 func (c *ListenerCore) SetApprovalManager(am *ApprovalManager) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	c.approval = am
+	if c.listener != nil {
+		c.listener.SetApprovalManager(am)
+	}
 }
 
 // SetGlobalRules sets the global rules store.
 func (c *ListenerCore) SetGlobalRules(gr *GlobalRulesStore) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	c.globalRules = gr
+	if c.listener != nil {
+		c.listener.SetGlobalRules(gr)
+	}
 }
 
 // SetNodeID sets the node ID for approval requests.
 func (c *ListenerCore) SetNodeID(nodeID string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	c.nodeID = nodeID
+	if c.listener != nil {
+		c.listener.SetNodeID(nodeID)
+	}
 }
 
 // StartListener initializes and starts the listener.

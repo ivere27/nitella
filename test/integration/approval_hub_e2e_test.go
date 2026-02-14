@@ -26,7 +26,6 @@ import (
 	"crypto/sha256"
 	"crypto/x509"
 	"encoding/hex"
-	"encoding/json"
 	"encoding/pem"
 	"fmt"
 	"io"
@@ -42,6 +41,7 @@ import (
 
 	"github.com/ivere27/nitella/pkg/api/common"
 	hubpb "github.com/ivere27/nitella/pkg/api/hub"
+	proxypb "github.com/ivere27/nitella/pkg/api/proxy"
 	nitellacrypto "github.com/ivere27/nitella/pkg/crypto"
 	"github.com/ivere27/nitella/pkg/pairing"
 	"google.golang.org/grpc"
@@ -89,6 +89,7 @@ func TestApproval_Hub_E2E_RealTimeFlow(t *testing.T) {
 	defer backend.Close()
 
 	proxyPort := getFreePort(t)
+	approvalProxyPort := getFreePort(t)
 	nodeCmd := cluster.startNitellad(node, proxyPort, backend.Addr().String())
 	defer stopProcess(nodeCmd)
 
@@ -99,30 +100,28 @@ func TestApproval_Hub_E2E_RealTimeFlow(t *testing.T) {
 	// ===== PHASE 5: Create proxy with REQUIRE_APPROVAL =====
 	t.Log("=== PHASE 5: Creating proxy with REQUIRE_APPROVAL ===")
 
-	// Send command to create proxy via Hub
-	createProxyCmd := map[string]interface{}{
-		"command": "add_proxy",
-		"listen":  fmt.Sprintf(":%d", proxyPort),
-		"backend": backend.Addr().String(),
-		"default_action": "require_approval",
+	createProxyCmd := &proxypb.CreateProxyRequest{
+		Name:           "Approval Test Proxy",
+		ListenAddr:     fmt.Sprintf("127.0.0.1:%d", approvalProxyPort),
+		DefaultBackend: backend.Addr().String(),
+		DefaultAction:  common.ActionType_ACTION_TYPE_REQUIRE_APPROVAL,
 	}
-	cmdJSON, _ := json.Marshal(createProxyCmd)
-
-	ctx := contextWithJWT(context.Background(), cli.jwtToken)
-	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
-
-	_, err := cli.mobileClient.SendCommand(ctx, &hubpb.CommandRequest{
-		NodeId:       node.nodeID,
-		RoutingToken: node.routingToken,
-		Encrypted: &common.EncryptedPayload{
-			Ciphertext: cmdJSON,
-			Nonce:      make([]byte, 12),
-		},
-	})
-	cancel()
+	createResult, err := cluster.sendE2ECommand(cli, node, hubpb.CommandType_COMMAND_TYPE_CREATE_PROXY, createProxyCmd)
 	if err != nil {
-		t.Logf("SendCommand (create proxy): %v (may need implementation)", err)
+		t.Fatalf("SendCommand (create proxy) failed: %v", err)
 	}
+	if createResult.Status != "OK" {
+		t.Fatalf("Create proxy command failed: %s", createResult.ErrorMessage)
+	}
+
+	var createResp proxypb.CreateProxyResponse
+	if err := proto.Unmarshal(createResult.ResponsePayload, &createResp); err != nil {
+		t.Fatalf("Failed to parse create proxy response: %v", err)
+	}
+	if !createResp.Success {
+		t.Fatalf("CreateProxy returned failure: %s", createResp.ErrorMessage)
+	}
+	t.Logf("Proxy created: %s", createResp.ProxyId)
 
 	// ===== PHASE 6: Start alert stream =====
 	t.Log("=== PHASE 6: Starting alert stream ===")
@@ -149,13 +148,13 @@ func TestApproval_Hub_E2E_RealTimeFlow(t *testing.T) {
 				}
 				return
 			}
-			// Alert type is in metadata["type"]
+			// Alert type may be hidden in zero-trust mode; use severity/id fallback.
 			alertType := ""
 			if alert.Metadata != nil {
 				alertType = alert.Metadata["type"]
 			}
 			t.Logf("Received alert: Type=%s, Severity=%s", alertType, alert.Severity)
-			if alertType == "approval_request" {
+			if alertType == "approval_request" || (alert.Id != "" && alert.Severity == "high") {
 				alertReceived <- alert
 			}
 		}
@@ -175,7 +174,7 @@ func TestApproval_Hub_E2E_RealTimeFlow(t *testing.T) {
 
 	go func() {
 		// This connection will be held pending until approved
-		conn, err := net.DialTimeout("tcp", fmt.Sprintf("localhost:%d", proxyPort), 30*time.Second)
+		conn, err := net.DialTimeout("tcp", fmt.Sprintf("localhost:%d", approvalProxyPort), 30*time.Second)
 		if err != nil {
 			clientResult <- struct {
 				success bool
@@ -207,12 +206,16 @@ func TestApproval_Hub_E2E_RealTimeFlow(t *testing.T) {
 	// ===== PHASE 8: Wait for and handle approval request =====
 	t.Log("=== PHASE 8: Waiting for approval request ===")
 
+	var approvalErr error
 	select {
 	case alert := <-alertReceived:
 		t.Logf("Got approval request alert!")
 		t.Logf("  NodeId: %s", alert.NodeId)
 		t.Logf("  Severity: %s", alert.Severity)
 		t.Logf("  Alert.Id: %s", alert.Id)
+		if alert.Id == "" {
+			t.Fatal("approval alert id is empty")
+		}
 
 		// The request ID is the alert's ID (not from metadata - that would leak info to Hub)
 		requestID := alert.Id
@@ -220,16 +223,14 @@ func TestApproval_Hub_E2E_RealTimeFlow(t *testing.T) {
 		// ===== PHASE 9: Submit approval decision via E2E encrypted SendCommand =====
 		t.Log("=== PHASE 9: Submitting approval decision (ALLOW) via E2E SendCommand ===")
 
-		err := cluster.sendE2EApprovalDecision(cli, node, requestID, true, 3600, "E2E Test Approval")
-		if err != nil {
-			t.Logf("sendE2EApprovalDecision error: %v", err)
-		} else {
-			t.Log("E2E encrypted approval decision sent successfully")
+		approvalErr = cluster.sendE2EApprovalDecision(cli, node, requestID, true, 3600, "E2E Test Approval")
+		if approvalErr != nil {
+			t.Fatalf("sendE2EApprovalDecision error: %v", approvalErr)
 		}
+		t.Log("E2E encrypted approval decision sent successfully")
 
 	case <-time.After(10 * time.Second):
-		t.Log("No approval request received within timeout")
-		t.Log("This may be expected if the proxy is not configured for approval")
+		t.Fatal("No approval request received within timeout")
 	}
 
 	// ===== PHASE 10: Check client connection result =====
@@ -238,15 +239,18 @@ func TestApproval_Hub_E2E_RealTimeFlow(t *testing.T) {
 	select {
 	case result := <-clientResult:
 		if result.err != nil {
-			t.Logf("Client connection error: %v", result.err)
-		} else if result.success {
-			t.Logf("Client connection SUCCEEDED with data: %s", result.data)
-			if strings.Contains(result.data, "APPROVAL_HUB_E2E_BACKEND") {
-				t.Log("SUCCESS: Connection approved and data received from backend!")
-			}
+			t.Fatalf("Client connection error: %v", result.err)
 		}
+		if !result.success {
+			t.Fatalf("Client connection failed without explicit error: %+v", result)
+		}
+		t.Logf("Client connection SUCCEEDED with data: %s", result.data)
+		if !strings.Contains(result.data, "APPROVAL_HUB_E2E_BACKEND") {
+			t.Fatalf("Unexpected backend payload: %q", result.data)
+		}
+		t.Log("SUCCESS: Connection approved and data received from backend!")
 	case <-time.After(5 * time.Second):
-		t.Log("Client connection still pending (approval may not have been processed)")
+		t.Fatal("Client connection still pending (approval may not have been processed)")
 	}
 
 	t.Log("=== Hub E2E Approval Test Completed ===")
@@ -534,72 +538,144 @@ func (c *approvalTestCluster) startNitellad(node *approvalNodeProcess, proxyPort
 
 // Note: stopProcess and connectToHubWithNodeCert are defined in hub_realworld_test.go
 
-// sendE2EApprovalDecision sends an approval decision via E2E encrypted SendCommand.
-// This is the correct zero-trust approach where Hub cannot see the decision.
-func (c *approvalTestCluster) sendE2EApprovalDecision(cli *approvalCLIProcess, node *approvalNodeProcess, requestID string, allowed bool, durationSeconds int64, reason string) error {
-	// Get node's public key from its certificate
+func extractApprovalNodePubKey(node *approvalNodeProcess) (ed25519.PublicKey, error) {
 	block, _ := pem.Decode(node.certPEM)
 	if block == nil {
-		return fmt.Errorf("failed to decode node certificate")
+		return nil, fmt.Errorf("failed to decode node certificate")
 	}
 	cert, err := x509.ParseCertificate(block.Bytes)
 	if err != nil {
-		return fmt.Errorf("failed to parse node certificate: %w", err)
+		return nil, fmt.Errorf("failed to parse node certificate: %w", err)
 	}
 	nodePubKey, ok := cert.PublicKey.(ed25519.PublicKey)
 	if !ok {
-		return fmt.Errorf("node certificate does not contain Ed25519 public key")
+		return nil, fmt.Errorf("node certificate does not contain Ed25519 public key")
+	}
+	return nodePubKey, nil
+}
+
+func (c *approvalTestCluster) sendE2ECommand(
+	cli *approvalCLIProcess,
+	node *approvalNodeProcess,
+	cmdType hubpb.CommandType,
+	req proto.Message,
+) (*hubpb.CommandResult, error) {
+	nodePubKey, err := extractApprovalNodePubKey(node)
+	if err != nil {
+		return nil, err
 	}
 
-	// Create the approval command payload
+	var reqPayload []byte
+	if req != nil {
+		reqPayload, err = proto.Marshal(req)
+		if err != nil {
+			return nil, fmt.Errorf("failed to marshal request payload: %w", err)
+		}
+	}
+
+	innerPayload := &hubpb.EncryptedCommandPayload{
+		Type:    cmdType,
+		Payload: reqPayload,
+	}
+	innerBytes, err := proto.Marshal(innerPayload)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal command payload: %w", err)
+	}
+
+	requestIDBytes := make([]byte, 16)
+	if _, err := rand.Read(requestIDBytes); err != nil {
+		return nil, fmt.Errorf("failed to generate request id: %w", err)
+	}
+	securePayload := &common.SecureCommandPayload{
+		RequestId: hex.EncodeToString(requestIDBytes),
+		Timestamp: time.Now().Unix(),
+		Data:      innerBytes,
+	}
+	secureBytes, err := proto.Marshal(securePayload)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal secure payload: %w", err)
+	}
+
+	encrypted, err := nitellacrypto.EncryptWithSignature(secureBytes, nodePubKey, cli.identity.rootKey, "approval-cli-test")
+	if err != nil {
+		return nil, fmt.Errorf("failed to encrypt payload: %w", err)
+	}
+
+	ctx := contextWithJWT(context.Background(), cli.jwtToken)
+	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+
+	resp, err := cli.mobileClient.SendCommand(ctx, &hubpb.CommandRequest{
+		NodeId:       node.nodeID,
+		RoutingToken: node.routingToken,
+		Encrypted: &common.EncryptedPayload{
+			EphemeralPubkey:   encrypted.EphemeralPubKey,
+			Nonce:             encrypted.Nonce,
+			Ciphertext:        encrypted.Ciphertext,
+			SenderFingerprint: encrypted.SenderFingerprint,
+			Signature:         encrypted.Signature,
+		},
+	})
+	if err != nil {
+		return nil, err
+	}
+	if resp.GetEncryptedData() == nil {
+		return nil, fmt.Errorf("hub returned no encrypted response")
+	}
+
+	encResp := &nitellacrypto.EncryptedPayload{
+		EphemeralPubKey:   resp.EncryptedData.EphemeralPubkey,
+		Nonce:             resp.EncryptedData.Nonce,
+		Ciphertext:        resp.EncryptedData.Ciphertext,
+		SenderFingerprint: resp.EncryptedData.SenderFingerprint,
+		Signature:         resp.EncryptedData.Signature,
+	}
+	if err := nitellacrypto.VerifySignature(encResp, nodePubKey); err != nil {
+		return nil, fmt.Errorf("failed to verify node response signature: %w", err)
+	}
+
+	decrypted, err := nitellacrypto.Decrypt(encResp, cli.identity.rootKey)
+	if err != nil {
+		return nil, fmt.Errorf("failed to decrypt node response: %w", err)
+	}
+
+	var result hubpb.CommandResult
+	if err := proto.Unmarshal(decrypted, &result); err != nil {
+		return nil, fmt.Errorf("failed to parse command result: %w", err)
+	}
+	return &result, nil
+}
+
+// sendE2EApprovalDecision sends an approval decision via E2E encrypted SendCommand.
+// This is the correct zero-trust approach where Hub cannot see the decision.
+func (c *approvalTestCluster) sendE2EApprovalDecision(cli *approvalCLIProcess, node *approvalNodeProcess, requestID string, allowed bool, durationSeconds int64, reason string) error {
 	action := common.ApprovalActionType_APPROVAL_ACTION_TYPE_ALLOW
 	if !allowed {
 		action = common.ApprovalActionType_APPROVAL_ACTION_TYPE_BLOCK
 	}
 
-	// Inner payload: JSON-encoded approval data with duration_seconds (not enum!)
-	innerPayload := &hubpb.EncryptedCommandPayload{
-		Type: hubpb.CommandType_COMMAND_TYPE_RESOLVE_APPROVAL,
-		Payload: mustMarshalJSONForTest(map[string]interface{}{
-			"req_id":           requestID,
-			"action":           int32(action),
-			"duration_seconds": durationSeconds,
-			"reason":           reason,
-		}),
+	resolveReq := &proxypb.ResolveApprovalRequest{
+		ReqId:           requestID,
+		Action:          action,
+		DurationSeconds: durationSeconds,
+		Reason:          reason,
 	}
-
-	innerBytes, err := proto.Marshal(innerPayload)
+	result, err := c.sendE2ECommand(cli, node, hubpb.CommandType_COMMAND_TYPE_RESOLVE_APPROVAL, resolveReq)
 	if err != nil {
-		return fmt.Errorf("failed to marshal inner payload: %w", err)
+		return err
+	}
+	if result.Status != "OK" {
+		return fmt.Errorf("resolve approval command failed: %s", result.ErrorMessage)
 	}
 
-	// E2E encrypt with node's public key (Hub cannot decrypt)
-	encrypted, err := nitellacrypto.Encrypt(innerBytes, nodePubKey)
-	if err != nil {
-		return fmt.Errorf("failed to encrypt payload: %w", err)
+	var resolveResp proxypb.ResolveApprovalResponse
+	if len(result.ResponsePayload) > 0 {
+		if err := proto.Unmarshal(result.ResponsePayload, &resolveResp); err != nil {
+			return fmt.Errorf("failed to parse resolve response: %w", err)
+		}
 	}
-
-	// Send via SendCommand (Hub just relays the encrypted blob)
-	ctx := contextWithJWT(context.Background(), cli.jwtToken)
-	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
-	defer cancel()
-
-	_, err = cli.mobileClient.SendCommand(ctx, &hubpb.CommandRequest{
-		NodeId:       node.nodeID,
-		RoutingToken: node.routingToken,
-		Encrypted: &common.EncryptedPayload{
-			EphemeralPubkey: encrypted.EphemeralPubKey,
-			Nonce:           encrypted.Nonce,
-			Ciphertext:      encrypted.Ciphertext,
-		},
-	})
-	return err
-}
-
-func mustMarshalJSONForTest(v interface{}) []byte {
-	b, err := json.Marshal(v)
-	if err != nil {
-		panic(err)
+	if !resolveResp.Success {
+		return fmt.Errorf("resolve approval response not successful: %s", resolveResp.ErrorMessage)
 	}
-	return b
+	return nil
 }

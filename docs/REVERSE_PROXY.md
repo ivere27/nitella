@@ -176,8 +176,6 @@ entrypoints:
 
 ## Rule Engine
 
-> **Full documentation: [RULE_ENGINE.md](RULE_ENGINE.md)**
-
 Rules define how connections are handled based on conditions. Rules are evaluated in priority order (highest first).
 
 ### Quick Reference
@@ -253,7 +251,7 @@ entrypoints:
 
 ## GeoIP Integration
 
-> **Full documentation: [GEOIP.md](../GEOIP.md)**
+> **Full documentation: [GEOIP.md](GEOIP.md)**
 
 Every connection triggers a GeoIP lookup to determine:
 - Country / Country Code
@@ -487,7 +485,6 @@ rpc GetStatsSummary(Empty) returns (StatsSummaryResponse);
 
 ## Related Documentation
 
-- [RULE_ENGINE.md](RULE_ENGINE.md) - Detailed rule conditions and actions
-- [GEOIP.md](../GEOIP.md) - GeoIP service architecture and configuration
+- [GEOIP.md](GEOIP.md) - GeoIP service architecture and configuration
 - [APPROVAL_SYSTEM.md](APPROVAL_SYSTEM.md) - Real-time connection approval workflow
 - [HUB.md](HUB.md) - Hub architecture for remote management

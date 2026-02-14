@@ -33,28 +33,30 @@ import (
 	common "github.com/ivere27/nitella/pkg/api/common"
 	hubpb "github.com/ivere27/nitella/pkg/api/hub"
 	proxypb "github.com/ivere27/nitella/pkg/api/proxy"
+	nitellacrypto "github.com/ivere27/nitella/pkg/crypto"
 	"github.com/ivere27/nitella/pkg/hub/routing"
 	"github.com/ivere27/nitella/pkg/pairing"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/metadata"
+	"google.golang.org/protobuf/proto"
 )
 
 // Environment variables
 var (
-	hubAddr    = getEnv("HUB_ADDR", "localhost:50052")
-	hubHTTPAddr = getEnv("HUB_HTTP_ADDR", "localhost:8080")
-	hubCAPath  = getEnv("HUB_CA_PATH", "")
-	node1Addr  = getEnv("NODE1_ADDR", "localhost:18081")
-	node1Admin = getEnv("NODE1_ADMIN", "localhost:50061")
-	node2Addr  = getEnv("NODE2_ADDR", "localhost:18082")
-	node2Admin = getEnv("NODE2_ADMIN", "localhost:50062")
-	node3Addr  = getEnv("NODE3_ADDR", "localhost:18083")
-	node3Admin = getEnv("NODE3_ADMIN", "localhost:50063")
-	mockHTTP   = getEnv("MOCK_HTTP", "localhost:8090")
-	mockSSH    = getEnv("MOCK_SSH", "localhost:2222")
-	mockMySQL  = getEnv("MOCK_MYSQL", "localhost:3306")
-	adminToken = getEnv("ADMIN_TOKEN", "test-admin-token")
+	hubAddr     = getEnv("HUB_ADDR", "localhost:55052")
+	hubHTTPAddr = getEnv("HUB_HTTP_ADDR", "localhost:58080")
+	hubCAPath   = getEnv("HUB_CA_PATH", "")
+	node1Addr   = getEnv("NODE1_ADDR", "localhost:28081")
+	node1Admin  = getEnv("NODE1_ADMIN", "localhost:55061")
+	node2Addr   = getEnv("NODE2_ADDR", "localhost:28082")
+	node2Admin  = getEnv("NODE2_ADMIN", "localhost:55062")
+	node3Addr   = getEnv("NODE3_ADDR", "localhost:28083")
+	node3Admin  = getEnv("NODE3_ADMIN", "localhost:55063")
+	mockHTTP    = getEnv("MOCK_HTTP", "localhost:18090")
+	mockSSH     = getEnv("MOCK_SSH", "localhost:12222")
+	mockMySQL   = getEnv("MOCK_MYSQL", "localhost:13306")
+	adminToken  = getEnv("ADMIN_TOKEN", "test-admin-token")
 
 	// CA paths (mapped in docker-compose)
 	node1CAPath = getEnv("NODE1_CA_PATH", "/certs/node1/admin_ca.crt")
@@ -74,13 +76,13 @@ func getEnv(key, defaultVal string) string {
 // ============================================================================
 
 type e2eTestSuite struct {
-	t       *testing.T
-	hubConn *grpc.ClientConn
+	t        *testing.T
+	hubConn  *grpc.ClientConn
 	hubCAPEM []byte
-	users   map[string]*testUser
-	nodes   map[string]*testNode
-	proxies map[string]*testProxy
-	mu      sync.Mutex
+	users    map[string]*testUser
+	nodes    map[string]*testNode
+	proxies  map[string]*testProxy
+	mu       sync.Mutex
 }
 
 type testUser struct {
@@ -101,18 +103,120 @@ type userIdentity struct {
 }
 
 type testNode struct {
-	nodeID       string
-	ownerID      string
-	routingToken string
-	pairingMode  string // "pake" or "qr"
-	privateKey   ed25519.PrivateKey
-	certPEM      []byte
-	caCertPEM    []byte
-	proxyAddr    string
-	adminAddr    string
-	conn         *grpc.ClientConn
-	nodeClient   hubpb.NodeServiceClient
-	proxyClient  proxypb.ProxyControlServiceClient
+	nodeID        string
+	ownerID       string
+	routingToken  string
+	pairingMode   string // "pake" or "qr"
+	privateKey    ed25519.PrivateKey
+	certPEM       []byte
+	caCertPEM     []byte
+	proxyAddr     string
+	adminAddr     string
+	conn          *grpc.ClientConn
+	nodeClient    hubpb.NodeServiceClient
+	proxyClient   proxypb.ProxyControlServiceClient
+	viewerPrivKey ed25519.PrivateKey
+	adminCAPEM    []byte
+}
+
+func (n *testNode) sendNodeCommand(ctx context.Context, cmdType hubpb.CommandType, req proto.Message) (*hubpb.CommandResult, error) {
+	if n.proxyClient == nil {
+		return nil, fmt.Errorf("no proxy client for node %s", n.nodeID)
+	}
+
+	// 1. Extract node pubkey from CA PEM
+	if len(n.adminCAPEM) == 0 {
+		return nil, fmt.Errorf("no admin CA PEM for node %s", n.nodeID)
+	}
+	nodePubKey, err := extractNodePubKey(n.adminCAPEM)
+	if err != nil {
+		return nil, fmt.Errorf("extract node pubkey: %w", err)
+	}
+
+	// 2. Marshal request
+	var payload []byte
+	if req != nil {
+		payload, err = proto.Marshal(req)
+		if err != nil {
+			return nil, fmt.Errorf("marshal request: %w", err)
+		}
+	}
+
+	// 3. Build EncryptedCommandPayload
+	cmdPayload := &hubpb.EncryptedCommandPayload{
+		Type:    cmdType,
+		Payload: payload,
+	}
+	cmdBytes, err := proto.Marshal(cmdPayload)
+	if err != nil {
+		return nil, err
+	}
+
+	// 4. Build SecureCommandPayload with anti-replay fields
+	reqID := make([]byte, 16)
+	rand.Read(reqID)
+	securePayload := &common.SecureCommandPayload{
+		RequestId: fmt.Sprintf("%x", reqID),
+		Timestamp: time.Now().Unix(),
+		Data:      cmdBytes,
+	}
+	secureBytes, err := proto.Marshal(securePayload)
+	if err != nil {
+		return nil, err
+	}
+
+	// 5. Encrypt with node's pubkey, sign with identity's private key
+	if n.viewerPrivKey == nil {
+		return nil, fmt.Errorf("viewer private key not available")
+	}
+	viewerPubKey := n.viewerPrivKey.Public().(ed25519.PublicKey)
+	fingerprint := "test-fingerprint" // In real app, this is derived from cert
+	enc, err := nitellacrypto.EncryptWithSignature(secureBytes, nodePubKey, n.viewerPrivKey, fingerprint)
+	if err != nil {
+		return nil, fmt.Errorf("encrypt: %w", err)
+	}
+
+	// 6. Call SendCommand RPC
+	resp, err := n.proxyClient.SendCommand(ctx, &proxypb.SendCommandRequest{
+		Encrypted: &common.EncryptedPayload{
+			EphemeralPubkey:   enc.EphemeralPubKey,
+			Nonce:             enc.Nonce,
+			Ciphertext:        enc.Ciphertext,
+			SenderFingerprint: enc.SenderFingerprint,
+			Signature:         enc.Signature,
+		},
+		ViewerPubkey: viewerPubKey,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	if resp.Status == "ERROR" && resp.Encrypted == nil {
+		return nil, fmt.Errorf("%s", resp.ErrorMessage)
+	}
+
+	// 7. Decrypt response
+	if resp.Encrypted == nil {
+		return nil, fmt.Errorf("no encrypted response")
+	}
+	cryptoResp := &nitellacrypto.EncryptedPayload{
+		EphemeralPubKey:   resp.Encrypted.EphemeralPubkey,
+		Nonce:             resp.Encrypted.Nonce,
+		Ciphertext:        resp.Encrypted.Ciphertext,
+		SenderFingerprint: resp.Encrypted.SenderFingerprint,
+		Signature:         resp.Encrypted.Signature,
+	}
+	plaintext, err := nitellacrypto.Decrypt(cryptoResp, n.viewerPrivKey)
+	if err != nil {
+		return nil, fmt.Errorf("decrypt: %w", err)
+	}
+
+	var result hubpb.CommandResult
+	if err := proto.Unmarshal(plaintext, &result); err != nil {
+		return nil, fmt.Errorf("unmarshal result: %w", err)
+	}
+
+	return &result, nil
 }
 
 type testProxy struct {
@@ -138,7 +242,9 @@ func (s *e2eTestSuite) setup() {
 
 	// Wait for Hub to be ready
 	s.waitForService(hubAddr, 60*time.Second)
-	s.waitForHTTPHealth(fmt.Sprintf("http://%s/health", hubHTTPAddr), 30*time.Second)
+	if ok := s.waitForHTTPHealth(fmt.Sprintf("http://%s/health", hubHTTPAddr), 30*time.Second); !ok {
+		s.t.Logf("HTTP health check unavailable at %s; continuing with gRPC readiness only", hubHTTPAddr)
+	}
 
 	// Get Hub CA for TLS
 	s.hubCAPEM = s.fetchHubCA()
@@ -194,7 +300,7 @@ func (s *e2eTestSuite) waitForService(addr string, timeout time.Duration) {
 	s.t.Fatalf("Timeout waiting for service %s", addr)
 }
 
-func (s *e2eTestSuite) waitForHTTPHealth(url string, timeout time.Duration) {
+func (s *e2eTestSuite) waitForHTTPHealth(url string, timeout time.Duration) bool {
 	deadline := time.Now().Add(timeout)
 	client := &http.Client{Timeout: 2 * time.Second}
 	for time.Now().Before(deadline) {
@@ -202,14 +308,15 @@ func (s *e2eTestSuite) waitForHTTPHealth(url string, timeout time.Duration) {
 		if err == nil && resp.StatusCode == 200 {
 			resp.Body.Close()
 			s.t.Logf("HTTP health check passed: %s", url)
-			return
+			return true
 		}
 		if resp != nil {
 			resp.Body.Close()
 		}
 		time.Sleep(1 * time.Second)
 	}
-	s.t.Fatalf("Timeout waiting for HTTP health: %s", url)
+	s.t.Logf("Timeout waiting for HTTP health: %s", url)
+	return false
 }
 
 func (s *e2eTestSuite) fetchHubCA() []byte {
@@ -396,6 +503,7 @@ func (s *e2eTestSuite) pairNodeWithPAKE(user *testUser, nodeID, proxyAddr, admin
 	}
 
 	var proxyClient proxypb.ProxyControlServiceClient
+	var nodeCAPEM []byte
 	if adminAddr != "" {
 		// Determine which CA to use based on adminAddr
 		var caPath string
@@ -412,7 +520,8 @@ func (s *e2eTestSuite) pairNodeWithPAKE(user *testUser, nodeID, proxyAddr, admin
 			s.waitForFile(caPath, 30*time.Second)
 
 			// Load Node CA
-			nodeCAPEM, err := os.ReadFile(caPath)
+			var err error
+			nodeCAPEM, err = os.ReadFile(caPath)
 			if err != nil {
 				s.t.Logf("Warning: Could not read node CA at %s: %v", caPath, err)
 			} else {
@@ -433,18 +542,20 @@ func (s *e2eTestSuite) pairNodeWithPAKE(user *testUser, nodeID, proxyAddr, admin
 	}
 
 	node := &testNode{
-		nodeID:       nodeID,
-		ownerID:      user.userID,
-		routingToken: routingToken,
-		pairingMode:  "pake",
-		privateKey:   nodePrivKey,
-		certPEM:      finalCert,
-		caCertPEM:    user.identity.rootCertPEM,
-		proxyAddr:    proxyAddr,
-		adminAddr:    adminAddr,
-		conn:         nodeConn,
-		nodeClient:   nodeClient,
-		proxyClient:  proxyClient,
+		nodeID:        nodeID,
+		ownerID:       user.userID,
+		routingToken:  routingToken,
+		pairingMode:   "pake",
+		privateKey:    nodePrivKey,
+		certPEM:       finalCert,
+		caCertPEM:     user.identity.rootCertPEM,
+		proxyAddr:     proxyAddr,
+		adminAddr:     adminAddr,
+		conn:          nodeConn,
+		nodeClient:    nodeClient,
+		proxyClient:   proxyClient,
+		viewerPrivKey: user.identity.rootPrivKey,
+		adminCAPEM:    nodeCAPEM,
 	}
 
 	s.mu.Lock()
@@ -528,6 +639,7 @@ func (s *e2eTestSuite) pairNodeWithQR(user *testUser, nodeID, proxyAddr, adminAd
 	}
 
 	var proxyClient proxypb.ProxyControlServiceClient
+	var nodeCAPEM []byte
 	if adminAddr != "" {
 		// Determine which CA to use based on adminAddr
 		var caPath string
@@ -541,7 +653,8 @@ func (s *e2eTestSuite) pairNodeWithQR(user *testUser, nodeID, proxyAddr, adminAd
 
 		if caPath != "" {
 			s.waitForFile(caPath, 30*time.Second)
-			nodeCAPEM, err := os.ReadFile(caPath)
+			var err error
+			nodeCAPEM, err = os.ReadFile(caPath)
 			if err == nil {
 				nodeCAPool := x509.NewCertPool()
 				nodeCAPool.AppendCertsFromPEM(nodeCAPEM)
@@ -558,18 +671,20 @@ func (s *e2eTestSuite) pairNodeWithQR(user *testUser, nodeID, proxyAddr, adminAd
 	}
 
 	node := &testNode{
-		nodeID:       nodeID,
-		ownerID:      user.userID,
-		routingToken: routingToken,
-		pairingMode:  "qr",
-		privateKey:   nodePrivKey,
-		certPEM:      finalCert,
-		caCertPEM:    caCert,
-		proxyAddr:    proxyAddr,
-		adminAddr:    adminAddr,
-		conn:         nodeConn,
-		nodeClient:   nodeClient,
-		proxyClient:  proxyClient,
+		nodeID:        nodeID,
+		ownerID:       user.userID,
+		routingToken:  routingToken,
+		pairingMode:   "qr",
+		privateKey:    nodePrivKey,
+		certPEM:       finalCert,
+		caCertPEM:     caCert,
+		proxyAddr:     proxyAddr,
+		adminAddr:     adminAddr,
+		conn:          nodeConn,
+		nodeClient:    nodeClient,
+		proxyClient:   proxyClient,
+		viewerPrivKey: user.identity.rootPrivKey,
+		adminCAPEM:    nodeCAPEM,
 	}
 
 	s.mu.Lock()
@@ -597,13 +712,21 @@ func (s *e2eTestSuite) createProxy(node *testNode, listenPort int, backendAddr, 
 	defer cancel()
 	ctx = metadata.AppendToOutgoingContext(ctx, "authorization", "Bearer "+adminToken)
 
-	resp, err := node.proxyClient.CreateProxy(ctx, &proxypb.CreateProxyRequest{
+	req := &proxypb.CreateProxyRequest{
 		ListenAddr:     listenAddr,
 		DefaultBackend: backendAddr,
 		Name:           fmt.Sprintf("%s-%s-proxy", node.nodeID, protocol),
-	})
+	}
+
+	res, err := node.sendNodeCommand(ctx, hubpb.CommandType_COMMAND_TYPE_CREATE_PROXY, req)
 	if err != nil {
 		s.t.Logf("Warning: Failed to create proxy: %v", err)
+		return nil
+	}
+
+	var resp proxypb.CreateProxyResponse
+	if err := proto.Unmarshal(res.ResponsePayload, &resp); err != nil {
+		s.t.Logf("Warning: Failed to unmarshal create proxy response: %v", err)
 		return nil
 	}
 
@@ -632,10 +755,12 @@ func (s *e2eTestSuite) addRule(node *testNode, proxyID string, rule *proxypb.Rul
 	defer cancel()
 	ctx = metadata.AppendToOutgoingContext(ctx, "authorization", "Bearer "+adminToken)
 
-	_, err := node.proxyClient.AddRule(ctx, &proxypb.AddRuleRequest{
+	req := &proxypb.AddRuleRequest{
 		ProxyId: proxyID,
 		Rule:    rule,
-	})
+	}
+
+	_, err := node.sendNodeCommand(ctx, hubpb.CommandType_COMMAND_TYPE_ADD_RULE, req)
 	if err != nil {
 		s.t.Logf("Warning: Failed to add rule: %v", err)
 	}
@@ -824,6 +949,23 @@ func (s *e2eTestSuite) waitForFile(path string, timeout time.Duration) {
 		time.Sleep(1 * time.Second)
 	}
 	s.t.Logf("Warning: Timeout waiting for file %s", path)
+}
+
+// extractNodePubKey extracts the Ed25519 public key from a CA certificate PEM.
+func extractNodePubKey(caPEM []byte) (ed25519.PublicKey, error) {
+	block, _ := pem.Decode(caPEM)
+	if block == nil {
+		return nil, fmt.Errorf("failed to decode PEM")
+	}
+	cert, err := x509.ParseCertificate(block.Bytes)
+	if err != nil {
+		return nil, fmt.Errorf("parse cert: %w", err)
+	}
+	pubKey, ok := cert.PublicKey.(ed25519.PublicKey)
+	if !ok {
+		return nil, fmt.Errorf("not an Ed25519 certificate")
+	}
+	return pubKey, nil
 }
 
 // ============================================================================
@@ -1019,16 +1161,20 @@ func TestE2E_ApprovalSystem(t *testing.T) {
 	defer cancel()
 	ctx = metadata.AppendToOutgoingContext(ctx, "authorization", "Bearer "+adminToken)
 
-	resp, err := node.proxyClient.CreateProxy(ctx, &proxypb.CreateProxyRequest{
-		Name:          "approval-proxy",
-		ListenAddr:    "0.0.0.0:19001",
+	req := &proxypb.CreateProxyRequest{
+		Name:           "approval-proxy",
+		ListenAddr:     "0.0.0.0:19001",
 		DefaultBackend: mockHTTP,
-		DefaultAction: common.ActionType_ACTION_TYPE_REQUIRE_APPROVAL,
-	})
+		DefaultAction:  common.ActionType_ACTION_TYPE_REQUIRE_APPROVAL,
+	}
+
+	res, err := node.sendNodeCommand(ctx, hubpb.CommandType_COMMAND_TYPE_CREATE_PROXY, req)
 	if err != nil {
 		t.Logf("Warning: Failed to create approval proxy: %v", err)
 		t.Skip("Could not create approval proxy")
 	}
+	var resp proxypb.CreateProxyResponse
+	proto.Unmarshal(res.ResponsePayload, &resp)
 	t.Logf("Created approval proxy: %s", resp.ProxyId)
 
 	// Start alert streaming in background
@@ -1072,23 +1218,26 @@ func TestE2E_ApprovalSystem(t *testing.T) {
 	select {
 	case alert := <-alertChan:
 		t.Logf("Received approval alert: id=%s, severity=%s", alert.GetId(), alert.GetSeverity())
+		reqID := alert.GetId()
+		if reqID == "" {
+			t.Fatal("approval alert id is empty")
+		}
 
-		// Test approving the request - check metadata for approval info
-		if reqId := alert.GetMetadata()["approval_req_id"]; reqId != "" {
-			approvalCtx, approvalCancel := context.WithTimeout(context.Background(), 10*time.Second)
-			defer approvalCancel()
-			approvalCtx = metadata.AppendToOutgoingContext(approvalCtx, "authorization", "Bearer "+adminToken)
+		approvalCtx, approvalCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer approvalCancel()
+		approvalCtx = metadata.AppendToOutgoingContext(approvalCtx, "authorization", "Bearer "+adminToken)
 
-			_, err := node.proxyClient.ResolveApproval(approvalCtx, &proxypb.ResolveApprovalRequest{
-				ReqId:           reqId,
-				Action:          common.ApprovalActionType_APPROVAL_ACTION_TYPE_ALLOW,
-				DurationSeconds: 3600,
-			})
-			if err != nil {
-				t.Logf("ResolveApproval failed: %v", err)
-			} else {
-				t.Log("Successfully approved connection")
-			}
+		appReq := &proxypb.ResolveApprovalRequest{
+			ReqId:           reqID,
+			Action:          common.ApprovalActionType_APPROVAL_ACTION_TYPE_ALLOW,
+			DurationSeconds: 3600,
+		}
+
+		_, err := node.sendNodeCommand(approvalCtx, hubpb.CommandType_COMMAND_TYPE_RESOLVE_APPROVAL, appReq)
+		if err != nil {
+			t.Logf("ResolveApproval failed: %v", err)
+		} else {
+			t.Log("Successfully approved connection")
 		}
 	case <-time.After(5 * time.Second):
 		t.Log("No approval alert received (this may be expected if approval system is not fully configured)")
@@ -1099,7 +1248,7 @@ func TestE2E_ApprovalSystem(t *testing.T) {
 	defer blockCancel()
 	blockCtx = metadata.AppendToOutgoingContext(blockCtx, "authorization", "Bearer "+adminToken)
 
-	_, err = node.proxyClient.AddRule(blockCtx, &proxypb.AddRuleRequest{
+	ruleReq := &proxypb.AddRuleRequest{
 		ProxyId: resp.ProxyId,
 		Rule: &proxypb.Rule{
 			Name:     "global-block-test",
@@ -1110,7 +1259,9 @@ func TestE2E_ApprovalSystem(t *testing.T) {
 			},
 			Action: common.ActionType_ACTION_TYPE_BLOCK,
 		},
-	})
+	}
+
+	_, err = node.sendNodeCommand(blockCtx, hubpb.CommandType_COMMAND_TYPE_ADD_RULE, ruleReq)
 	if err != nil {
 		t.Logf("AddRule failed: %v", err)
 	} else {
@@ -1254,7 +1405,6 @@ func TestE2E_CommandRelay(t *testing.T) {
 	t.Log("\n=== COMMAND RELAY TEST PASSED ===")
 }
 
-
 // ============================================================================
 // PHASE 10: Rule Engine Tests
 // ============================================================================
@@ -1282,22 +1432,26 @@ func TestE2E_RuleEngine(t *testing.T) {
 	ctx = metadata.AppendToOutgoingContext(ctx, "authorization", "Bearer "+adminToken)
 
 	// Create a proxy for rule testing
-	proxyResp, err := node.proxyClient.CreateProxy(ctx, &proxypb.CreateProxyRequest{
+	createReq := &proxypb.CreateProxyRequest{
 		Name:           "rule-test-proxy",
 		ListenAddr:     "0.0.0.0:19002",
 		DefaultBackend: mockHTTP,
 		DefaultAction:  common.ActionType_ACTION_TYPE_ALLOW,
-	})
+	}
+
+	createRes, err := node.sendNodeCommand(ctx, hubpb.CommandType_COMMAND_TYPE_CREATE_PROXY, createReq)
 	if err != nil {
 		t.Logf("Warning: Failed to create rule test proxy: %v", err)
 		t.Skip("Could not create proxy for rule testing")
 	}
+	var proxyResp proxypb.CreateProxyResponse
+	proto.Unmarshal(createRes.ResponsePayload, &proxyResp)
 	proxyID := proxyResp.ProxyId
 	t.Logf("Created rule test proxy: %s", proxyID)
 
 	// Test 1: Add IP-based rule
 	t.Log("Testing IP-based rule...")
-	_, err = node.proxyClient.AddRule(ctx, &proxypb.AddRuleRequest{
+	ruleReq1 := &proxypb.AddRuleRequest{
 		ProxyId: proxyID,
 		Rule: &proxypb.Rule{
 			Name:     "block-specific-ip",
@@ -1308,7 +1462,8 @@ func TestE2E_RuleEngine(t *testing.T) {
 			},
 			Action: common.ActionType_ACTION_TYPE_BLOCK,
 		},
-	})
+	}
+	_, err = node.sendNodeCommand(ctx, hubpb.CommandType_COMMAND_TYPE_ADD_RULE, ruleReq1)
 	if err != nil {
 		t.Logf("AddRule (IP) failed: %v", err)
 	} else {
@@ -1317,7 +1472,7 @@ func TestE2E_RuleEngine(t *testing.T) {
 
 	// Test 2: Add CIDR-based rule
 	t.Log("Testing CIDR-based rule...")
-	_, err = node.proxyClient.AddRule(ctx, &proxypb.AddRuleRequest{
+	ruleReq2 := &proxypb.AddRuleRequest{
 		ProxyId: proxyID,
 		Rule: &proxypb.Rule{
 			Name:     "block-cidr",
@@ -1328,7 +1483,8 @@ func TestE2E_RuleEngine(t *testing.T) {
 			},
 			Action: common.ActionType_ACTION_TYPE_BLOCK,
 		},
-	})
+	}
+	_, err = node.sendNodeCommand(ctx, hubpb.CommandType_COMMAND_TYPE_ADD_RULE, ruleReq2)
 	if err != nil {
 		t.Logf("AddRule (CIDR) failed: %v", err)
 	} else {
@@ -1337,7 +1493,7 @@ func TestE2E_RuleEngine(t *testing.T) {
 
 	// Test 3: Add GeoIP-based rule (country)
 	t.Log("Testing GeoIP country rule...")
-	_, err = node.proxyClient.AddRule(ctx, &proxypb.AddRuleRequest{
+	ruleReq3 := &proxypb.AddRuleRequest{
 		ProxyId: proxyID,
 		Rule: &proxypb.Rule{
 			Name:     "allow-korea",
@@ -1348,7 +1504,8 @@ func TestE2E_RuleEngine(t *testing.T) {
 			},
 			Action: common.ActionType_ACTION_TYPE_ALLOW,
 		},
-	})
+	}
+	_, err = node.sendNodeCommand(ctx, hubpb.CommandType_COMMAND_TYPE_ADD_RULE, ruleReq3)
 	if err != nil {
 		t.Logf("AddRule (GeoIP) failed: %v", err)
 	} else {
@@ -1357,12 +1514,15 @@ func TestE2E_RuleEngine(t *testing.T) {
 
 	// Test 4: List rules
 	t.Log("Listing rules...")
-	listResp, err := node.proxyClient.ListRules(ctx, &proxypb.ListRulesRequest{
+	listReq := &proxypb.ListRulesRequest{
 		ProxyId: proxyID,
-	})
+	}
+	listRes, err := node.sendNodeCommand(ctx, hubpb.CommandType_COMMAND_TYPE_LIST_RULES, listReq)
 	if err != nil {
 		t.Logf("ListRules failed: %v", err)
 	} else {
+		var listResp proxypb.ListRulesResponse
+		proto.Unmarshal(listRes.ResponsePayload, &listResp)
 		t.Logf("Listed %d rules", len(listResp.GetRules()))
 		for _, rule := range listResp.GetRules() {
 			t.Logf("  - %s (priority=%d, enabled=%v)", rule.Name, rule.Priority, rule.Enabled)
@@ -1372,15 +1532,16 @@ func TestE2E_RuleEngine(t *testing.T) {
 	// Test 5: Disable a rule (remove + re-add pattern since UpdateRule may not exist)
 	t.Log("Disabling a rule via remove + re-add...")
 	// First remove the rule
-	_, err = node.proxyClient.RemoveRule(ctx, &proxypb.RemoveRuleRequest{
-		ProxyId:  proxyID,
-		RuleId: "block-specific-ip",
-	})
+	rmReq1 := &proxypb.RemoveRuleRequest{
+		ProxyId: proxyID,
+		RuleId:  "block-specific-ip",
+	}
+	_, err = node.sendNodeCommand(ctx, hubpb.CommandType_COMMAND_TYPE_REMOVE_RULE, rmReq1)
 	if err != nil {
 		t.Logf("RemoveRule (for disable) failed: %v", err)
 	} else {
 		// Re-add with enabled=false
-		_, err = node.proxyClient.AddRule(ctx, &proxypb.AddRuleRequest{
+		ruleReqDis := &proxypb.AddRuleRequest{
 			ProxyId: proxyID,
 			Rule: &proxypb.Rule{
 				Name:     "block-specific-ip-disabled",
@@ -1391,7 +1552,8 @@ func TestE2E_RuleEngine(t *testing.T) {
 				},
 				Action: common.ActionType_ACTION_TYPE_BLOCK,
 			},
-		})
+		}
+		_, err = node.sendNodeCommand(ctx, hubpb.CommandType_COMMAND_TYPE_ADD_RULE, ruleReqDis)
 		if err != nil {
 			t.Logf("AddRule (re-add disabled) failed: %v", err)
 		} else {
@@ -1401,10 +1563,11 @@ func TestE2E_RuleEngine(t *testing.T) {
 
 	// Test 6: Remove a rule
 	t.Log("Removing a rule...")
-	_, err = node.proxyClient.RemoveRule(ctx, &proxypb.RemoveRuleRequest{
-		ProxyId:  proxyID,
+	rmReq2 := &proxypb.RemoveRuleRequest{
+		ProxyId: proxyID,
 		RuleId:  "block-cidr",
-	})
+	}
+	_, err = node.sendNodeCommand(ctx, hubpb.CommandType_COMMAND_TYPE_REMOVE_RULE, rmReq2)
 	if err != nil {
 		t.Logf("RemoveRule failed: %v", err)
 	} else {
@@ -1441,16 +1604,19 @@ func TestE2E_Statistics(t *testing.T) {
 	ctx = metadata.AppendToOutgoingContext(ctx, "authorization", "Bearer "+adminToken)
 
 	// Create a proxy for statistics testing
-	proxyResp, err := node.proxyClient.CreateProxy(ctx, &proxypb.CreateProxyRequest{
+	createReq := &proxypb.CreateProxyRequest{
 		Name:           "stats-proxy",
 		ListenAddr:     "0.0.0.0:19003",
 		DefaultBackend: mockHTTP,
 		DefaultAction:  common.ActionType_ACTION_TYPE_ALLOW,
-	})
+	}
+	createRes, err := node.sendNodeCommand(ctx, hubpb.CommandType_COMMAND_TYPE_CREATE_PROXY, createReq)
 	if err != nil {
 		t.Logf("Warning: Failed to create stats proxy: %v", err)
 		t.Skip("Could not create proxy for statistics testing")
 	}
+	var proxyResp proxypb.CreateProxyResponse
+	proto.Unmarshal(createRes.ResponsePayload, &proxyResp)
 	proxyID := proxyResp.ProxyId
 	t.Logf("Created stats proxy: %s", proxyID)
 
@@ -1476,7 +1642,6 @@ func TestE2E_Statistics(t *testing.T) {
 
 	t.Log("\n=== STATISTICS TEST PASSED ===")
 }
-
 
 // ============================================================================
 // PHASE 12: Mock Services Tests
@@ -1506,15 +1671,18 @@ func TestE2E_MockServices(t *testing.T) {
 
 	// Test 1: HTTP Mock (403 Forbidden)
 	t.Log("Testing HTTP 403 mock...")
-	proxyResp, err := node.proxyClient.CreateProxy(ctx, &proxypb.CreateProxyRequest{
+	req1 := &proxypb.CreateProxyRequest{
 		Name:          "http-mock-403",
 		ListenAddr:    "0.0.0.0:19010",
 		DefaultAction: common.ActionType_ACTION_TYPE_MOCK,
 		DefaultMock:   common.MockPreset_MOCK_PRESET_HTTP_403,
-	})
+	}
+	res1, err := node.sendNodeCommand(ctx, hubpb.CommandType_COMMAND_TYPE_CREATE_PROXY, req1)
 	if err != nil {
 		t.Logf("CreateProxy (http-403) failed: %v", err)
 	} else {
+		var proxyResp proxypb.CreateProxyResponse
+		proto.Unmarshal(res1.ResponsePayload, &proxyResp)
 		t.Logf("Created HTTP 403 mock proxy: %s", proxyResp.ProxyId)
 
 		// Test the mock response
@@ -1532,15 +1700,18 @@ func TestE2E_MockServices(t *testing.T) {
 
 	// Test 2: SSH Mock
 	t.Log("Testing SSH mock...")
-	proxyResp2, err := node.proxyClient.CreateProxy(ctx, &proxypb.CreateProxyRequest{
+	req2 := &proxypb.CreateProxyRequest{
 		Name:          "ssh-mock",
 		ListenAddr:    "0.0.0.0:19011",
 		DefaultAction: common.ActionType_ACTION_TYPE_MOCK,
 		DefaultMock:   common.MockPreset_MOCK_PRESET_SSH_SECURE,
-	})
+	}
+	res2, err := node.sendNodeCommand(ctx, hubpb.CommandType_COMMAND_TYPE_CREATE_PROXY, req2)
 	if err != nil {
 		t.Logf("CreateProxy (ssh) failed: %v", err)
 	} else {
+		var proxyResp2 proxypb.CreateProxyResponse
+		proto.Unmarshal(res2.ResponsePayload, &proxyResp2)
 		t.Logf("Created SSH mock proxy: %s", proxyResp2.ProxyId)
 
 		// Test the mock response
@@ -1563,15 +1734,18 @@ func TestE2E_MockServices(t *testing.T) {
 
 	// Test 3: MySQL Mock
 	t.Log("Testing MySQL mock...")
-	proxyResp3, err := node.proxyClient.CreateProxy(ctx, &proxypb.CreateProxyRequest{
+	req3 := &proxypb.CreateProxyRequest{
 		Name:          "mysql-mock",
 		ListenAddr:    "0.0.0.0:19012",
 		DefaultAction: common.ActionType_ACTION_TYPE_MOCK,
 		DefaultMock:   common.MockPreset_MOCK_PRESET_MYSQL_SECURE,
-	})
+	}
+	res3, err := node.sendNodeCommand(ctx, hubpb.CommandType_COMMAND_TYPE_CREATE_PROXY, req3)
 	if err != nil {
 		t.Logf("CreateProxy (mysql) failed: %v", err)
 	} else {
+		var proxyResp3 proxypb.CreateProxyResponse
+		proto.Unmarshal(res3.ResponsePayload, &proxyResp3)
 		t.Logf("Created MySQL mock proxy: %s", proxyResp3.ProxyId)
 
 		// Test the mock response
@@ -1627,7 +1801,6 @@ func TestE2E_EncryptedLogs(t *testing.T) {
 
 	t.Log("\n=== ENCRYPTED LOGS TEST PASSED ===")
 }
-
 
 // ============================================================================
 // PHASE 14: Heartbeat and Status Tests
@@ -1699,7 +1872,6 @@ func TestE2E_HeartbeatStatus(t *testing.T) {
 	t.Log("\n=== HEARTBEAT STATUS TEST PASSED ===")
 }
 
-
 // ============================================================================
 // PHASE 15: Metrics Streaming Tests
 // ============================================================================
@@ -1735,4 +1907,3 @@ func TestE2E_MetricsStreaming(t *testing.T) {
 
 	t.Log("\n=== METRICS STREAMING TEST PASSED ===")
 }
-

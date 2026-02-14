@@ -1,0 +1,23 @@
+# nitella/proxy: v1
+meta:
+  name: "Approval Proxy"
+  description: "Proxy requiring real-time approval"
+
+entryPoints:
+  web:
+    address: ":8082"
+    defaultAction: "approval" # "allow", "block", "mock", or "approval"
+    fallbackAction: "mock"    # "close" (default) or "mock"
+    fallbackMock: "http-403"  # Mock preset to use if fallback is triggered
+
+tcp:
+  routers:
+    to-backend:
+      entryPoints: ["web"]
+      service: backend
+
+  services:
+    backend:
+      loadBalancer:
+        servers:
+          - address: "127.0.0.1:3000"

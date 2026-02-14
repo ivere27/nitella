@@ -4,9 +4,11 @@ package cli
 import (
 	"context"
 	"fmt"
+	"math"
 	"os"
 	"os/signal"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 )
@@ -34,18 +36,58 @@ func RequireArgs(args []string, min int, usage string) bool {
 	return true
 }
 
-// ParseDuration parses a string as an int64 duration in seconds.
-// If the string is empty or parsing fails, returns defaultVal.
-// Returns an error only if parsing fails on a non-empty string (for warning purposes).
+// ParseDuration parses a duration into seconds.
+// Supported formats:
+//   - plain integer seconds (e.g. "300")
+//   - "-1" for permanent
+//   - integer with unit suffix: s, m, h, d, w, y (e.g. "10m", "24h", "7d")
+//
+// If the string is empty or parsing fails, defaultVal is returned.
+// Returns an error only if parsing fails on a non-empty string.
 func ParseDuration(s string, defaultVal int64) (int64, error) {
+	s = strings.TrimSpace(s)
 	if s == "" {
 		return defaultVal, nil
 	}
-	d, err := strconv.ParseInt(s, 10, 64)
-	if err != nil {
-		return defaultVal, fmt.Errorf("invalid duration '%s'", s)
+
+	// Fast path: raw seconds or -1 (permanent)
+	if d, err := strconv.ParseInt(s, 10, 64); err == nil {
+		return d, nil
 	}
-	return d, nil
+
+	if len(s) < 2 {
+		return defaultVal, fmt.Errorf("invalid duration '%s' (use seconds or <n>[s|m|h|d|w|y])", s)
+	}
+
+	unit := strings.ToLower(s[len(s)-1:])
+	valuePart := s[:len(s)-1]
+	n, err := strconv.ParseInt(valuePart, 10, 64)
+	if err != nil || n < 0 {
+		return defaultVal, fmt.Errorf("invalid duration '%s' (use seconds or <n>[s|m|h|d|w|y])", s)
+	}
+
+	multiplier := int64(0)
+	switch unit {
+	case "s":
+		multiplier = 1
+	case "m":
+		multiplier = 60
+	case "h":
+		multiplier = 60 * 60
+	case "d":
+		multiplier = 24 * 60 * 60
+	case "w":
+		multiplier = 7 * 24 * 60 * 60
+	case "y":
+		multiplier = 365 * 24 * 60 * 60
+	default:
+		return defaultVal, fmt.Errorf("invalid duration '%s' (use seconds or <n>[s|m|h|d|w|y])", s)
+	}
+
+	if n > math.MaxInt64/multiplier {
+		return defaultVal, fmt.Errorf("duration too large: %s", s)
+	}
+	return n * multiplier, nil
 }
 
 // SuccessResponse is an interface for responses that have success/error fields.

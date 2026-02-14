@@ -76,7 +76,7 @@ func (x PakeMessage_MessageType) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use PakeMessage_MessageType.Descriptor instead.
 func (PakeMessage_MessageType) EnumDescriptor() ([]byte, []int) {
-	return file_hub_hub_mobile_proto_rawDescGZIP(), []int{14, 0}
+	return file_hub_hub_mobile_proto_rawDescGZIP(), []int{15, 0}
 }
 
 // Node Management
@@ -140,6 +140,82 @@ func (x *RegisterNodeViaCSRRequest) GetNodeId() string {
 	return ""
 }
 
+type RegisterNodeWithCertRequest struct {
+	state             protoimpl.MessageState `protogen:"open.v1"`
+	NodeId            string                 `protobuf:"bytes,1,opt,name=node_id,json=nodeId,proto3" json:"node_id,omitempty"`
+	CertPem           string                 `protobuf:"bytes,2,opt,name=cert_pem,json=certPem,proto3" json:"cert_pem,omitempty"`
+	RoutingToken      string                 `protobuf:"bytes,3,opt,name=routing_token,json=routingToken,proto3" json:"routing_token,omitempty"`
+	EncryptedMetadata []byte                 `protobuf:"bytes,4,opt,name=encrypted_metadata,json=encryptedMetadata,proto3" json:"encrypted_metadata,omitempty"`
+	CaPem             string                 `protobuf:"bytes,5,opt,name=ca_pem,json=caPem,proto3" json:"ca_pem,omitempty"`
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
+}
+
+func (x *RegisterNodeWithCertRequest) Reset() {
+	*x = RegisterNodeWithCertRequest{}
+	mi := &file_hub_hub_mobile_proto_msgTypes[1]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RegisterNodeWithCertRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RegisterNodeWithCertRequest) ProtoMessage() {}
+
+func (x *RegisterNodeWithCertRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_hub_hub_mobile_proto_msgTypes[1]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RegisterNodeWithCertRequest.ProtoReflect.Descriptor instead.
+func (*RegisterNodeWithCertRequest) Descriptor() ([]byte, []int) {
+	return file_hub_hub_mobile_proto_rawDescGZIP(), []int{1}
+}
+
+func (x *RegisterNodeWithCertRequest) GetNodeId() string {
+	if x != nil {
+		return x.NodeId
+	}
+	return ""
+}
+
+func (x *RegisterNodeWithCertRequest) GetCertPem() string {
+	if x != nil {
+		return x.CertPem
+	}
+	return ""
+}
+
+func (x *RegisterNodeWithCertRequest) GetRoutingToken() string {
+	if x != nil {
+		return x.RoutingToken
+	}
+	return ""
+}
+
+func (x *RegisterNodeWithCertRequest) GetEncryptedMetadata() []byte {
+	if x != nil {
+		return x.EncryptedMetadata
+	}
+	return nil
+}
+
+func (x *RegisterNodeWithCertRequest) GetCaPem() string {
+	if x != nil {
+		return x.CaPem
+	}
+	return ""
+}
+
 type ListNodesRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Filter        string                 `protobuf:"bytes,1,opt,name=filter,proto3" json:"filter,omitempty"`                                    // "online", "offline", "all"
@@ -150,7 +226,7 @@ type ListNodesRequest struct {
 
 func (x *ListNodesRequest) Reset() {
 	*x = ListNodesRequest{}
-	mi := &file_hub_hub_mobile_proto_msgTypes[1]
+	mi := &file_hub_hub_mobile_proto_msgTypes[2]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -162,7 +238,7 @@ func (x *ListNodesRequest) String() string {
 func (*ListNodesRequest) ProtoMessage() {}
 
 func (x *ListNodesRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_hub_hub_mobile_proto_msgTypes[1]
+	mi := &file_hub_hub_mobile_proto_msgTypes[2]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -175,7 +251,7 @@ func (x *ListNodesRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListNodesRequest.ProtoReflect.Descriptor instead.
 func (*ListNodesRequest) Descriptor() ([]byte, []int) {
-	return file_hub_hub_mobile_proto_rawDescGZIP(), []int{1}
+	return file_hub_hub_mobile_proto_rawDescGZIP(), []int{2}
 }
 
 func (x *ListNodesRequest) GetFilter() string {
@@ -202,7 +278,7 @@ type ListNodesResponse struct {
 
 func (x *ListNodesResponse) Reset() {
 	*x = ListNodesResponse{}
-	mi := &file_hub_hub_mobile_proto_msgTypes[2]
+	mi := &file_hub_hub_mobile_proto_msgTypes[3]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -214,7 +290,7 @@ func (x *ListNodesResponse) String() string {
 func (*ListNodesResponse) ProtoMessage() {}
 
 func (x *ListNodesResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_hub_hub_mobile_proto_msgTypes[2]
+	mi := &file_hub_hub_mobile_proto_msgTypes[3]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -227,7 +303,7 @@ func (x *ListNodesResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListNodesResponse.ProtoReflect.Descriptor instead.
 func (*ListNodesResponse) Descriptor() ([]byte, []int) {
-	return file_hub_hub_mobile_proto_rawDescGZIP(), []int{2}
+	return file_hub_hub_mobile_proto_rawDescGZIP(), []int{3}
 }
 
 func (x *ListNodesResponse) GetNodes() []*Node {
@@ -254,7 +330,7 @@ type GetNodeRequest struct {
 
 func (x *GetNodeRequest) Reset() {
 	*x = GetNodeRequest{}
-	mi := &file_hub_hub_mobile_proto_msgTypes[3]
+	mi := &file_hub_hub_mobile_proto_msgTypes[4]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -266,7 +342,7 @@ func (x *GetNodeRequest) String() string {
 func (*GetNodeRequest) ProtoMessage() {}
 
 func (x *GetNodeRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_hub_hub_mobile_proto_msgTypes[3]
+	mi := &file_hub_hub_mobile_proto_msgTypes[4]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -279,7 +355,7 @@ func (x *GetNodeRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetNodeRequest.ProtoReflect.Descriptor instead.
 func (*GetNodeRequest) Descriptor() ([]byte, []int) {
-	return file_hub_hub_mobile_proto_rawDescGZIP(), []int{3}
+	return file_hub_hub_mobile_proto_rawDescGZIP(), []int{4}
 }
 
 func (x *GetNodeRequest) GetNodeId() string {
@@ -305,7 +381,7 @@ type RegisterNodeRequest struct {
 
 func (x *RegisterNodeRequest) Reset() {
 	*x = RegisterNodeRequest{}
-	mi := &file_hub_hub_mobile_proto_msgTypes[4]
+	mi := &file_hub_hub_mobile_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -317,7 +393,7 @@ func (x *RegisterNodeRequest) String() string {
 func (*RegisterNodeRequest) ProtoMessage() {}
 
 func (x *RegisterNodeRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_hub_hub_mobile_proto_msgTypes[4]
+	mi := &file_hub_hub_mobile_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -330,7 +406,7 @@ func (x *RegisterNodeRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RegisterNodeRequest.ProtoReflect.Descriptor instead.
 func (*RegisterNodeRequest) Descriptor() ([]byte, []int) {
-	return file_hub_hub_mobile_proto_rawDescGZIP(), []int{4}
+	return file_hub_hub_mobile_proto_rawDescGZIP(), []int{5}
 }
 
 func (x *RegisterNodeRequest) GetRegistrationCode() string {
@@ -351,7 +427,7 @@ type RegisterNodeResponse struct {
 
 func (x *RegisterNodeResponse) Reset() {
 	*x = RegisterNodeResponse{}
-	mi := &file_hub_hub_mobile_proto_msgTypes[5]
+	mi := &file_hub_hub_mobile_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -363,7 +439,7 @@ func (x *RegisterNodeResponse) String() string {
 func (*RegisterNodeResponse) ProtoMessage() {}
 
 func (x *RegisterNodeResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_hub_hub_mobile_proto_msgTypes[5]
+	mi := &file_hub_hub_mobile_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -376,7 +452,7 @@ func (x *RegisterNodeResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RegisterNodeResponse.ProtoReflect.Descriptor instead.
 func (*RegisterNodeResponse) Descriptor() ([]byte, []int) {
-	return file_hub_hub_mobile_proto_rawDescGZIP(), []int{5}
+	return file_hub_hub_mobile_proto_rawDescGZIP(), []int{6}
 }
 
 func (x *RegisterNodeResponse) GetNodeId() string {
@@ -412,7 +488,7 @@ type ApproveNodeRequest struct {
 
 func (x *ApproveNodeRequest) Reset() {
 	*x = ApproveNodeRequest{}
-	mi := &file_hub_hub_mobile_proto_msgTypes[6]
+	mi := &file_hub_hub_mobile_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -424,7 +500,7 @@ func (x *ApproveNodeRequest) String() string {
 func (*ApproveNodeRequest) ProtoMessage() {}
 
 func (x *ApproveNodeRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_hub_hub_mobile_proto_msgTypes[6]
+	mi := &file_hub_hub_mobile_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -437,7 +513,7 @@ func (x *ApproveNodeRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ApproveNodeRequest.ProtoReflect.Descriptor instead.
 func (*ApproveNodeRequest) Descriptor() ([]byte, []int) {
-	return file_hub_hub_mobile_proto_rawDescGZIP(), []int{6}
+	return file_hub_hub_mobile_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *ApproveNodeRequest) GetRegistrationCode() string {
@@ -478,7 +554,7 @@ type DeleteNodeRequest struct {
 
 func (x *DeleteNodeRequest) Reset() {
 	*x = DeleteNodeRequest{}
-	mi := &file_hub_hub_mobile_proto_msgTypes[7]
+	mi := &file_hub_hub_mobile_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -490,7 +566,7 @@ func (x *DeleteNodeRequest) String() string {
 func (*DeleteNodeRequest) ProtoMessage() {}
 
 func (x *DeleteNodeRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_hub_hub_mobile_proto_msgTypes[7]
+	mi := &file_hub_hub_mobile_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -503,7 +579,7 @@ func (x *DeleteNodeRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteNodeRequest.ProtoReflect.Descriptor instead.
 func (*DeleteNodeRequest) Descriptor() ([]byte, []int) {
-	return file_hub_hub_mobile_proto_rawDescGZIP(), []int{7}
+	return file_hub_hub_mobile_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *DeleteNodeRequest) GetNodeId() string {
@@ -532,7 +608,7 @@ type CommandRequest struct {
 
 func (x *CommandRequest) Reset() {
 	*x = CommandRequest{}
-	mi := &file_hub_hub_mobile_proto_msgTypes[8]
+	mi := &file_hub_hub_mobile_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -544,7 +620,7 @@ func (x *CommandRequest) String() string {
 func (*CommandRequest) ProtoMessage() {}
 
 func (x *CommandRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_hub_hub_mobile_proto_msgTypes[8]
+	mi := &file_hub_hub_mobile_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -557,7 +633,7 @@ func (x *CommandRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CommandRequest.ProtoReflect.Descriptor instead.
 func (*CommandRequest) Descriptor() ([]byte, []int) {
-	return file_hub_hub_mobile_proto_rawDescGZIP(), []int{8}
+	return file_hub_hub_mobile_proto_rawDescGZIP(), []int{9}
 }
 
 func (x *CommandRequest) GetNodeId() string {
@@ -592,7 +668,7 @@ type StreamMetricsRequest struct {
 
 func (x *StreamMetricsRequest) Reset() {
 	*x = StreamMetricsRequest{}
-	mi := &file_hub_hub_mobile_proto_msgTypes[9]
+	mi := &file_hub_hub_mobile_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -604,7 +680,7 @@ func (x *StreamMetricsRequest) String() string {
 func (*StreamMetricsRequest) ProtoMessage() {}
 
 func (x *StreamMetricsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_hub_hub_mobile_proto_msgTypes[9]
+	mi := &file_hub_hub_mobile_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -617,7 +693,7 @@ func (x *StreamMetricsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StreamMetricsRequest.ProtoReflect.Descriptor instead.
 func (*StreamMetricsRequest) Descriptor() ([]byte, []int) {
-	return file_hub_hub_mobile_proto_rawDescGZIP(), []int{9}
+	return file_hub_hub_mobile_proto_rawDescGZIP(), []int{10}
 }
 
 func (x *StreamMetricsRequest) GetNodeId() string {
@@ -647,7 +723,7 @@ type GetMetricsHistoryRequest struct {
 
 func (x *GetMetricsHistoryRequest) Reset() {
 	*x = GetMetricsHistoryRequest{}
-	mi := &file_hub_hub_mobile_proto_msgTypes[10]
+	mi := &file_hub_hub_mobile_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -659,7 +735,7 @@ func (x *GetMetricsHistoryRequest) String() string {
 func (*GetMetricsHistoryRequest) ProtoMessage() {}
 
 func (x *GetMetricsHistoryRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_hub_hub_mobile_proto_msgTypes[10]
+	mi := &file_hub_hub_mobile_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -672,7 +748,7 @@ func (x *GetMetricsHistoryRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetMetricsHistoryRequest.ProtoReflect.Descriptor instead.
 func (*GetMetricsHistoryRequest) Descriptor() ([]byte, []int) {
-	return file_hub_hub_mobile_proto_rawDescGZIP(), []int{10}
+	return file_hub_hub_mobile_proto_rawDescGZIP(), []int{11}
 }
 
 func (x *GetMetricsHistoryRequest) GetNodeId() string {
@@ -719,7 +795,7 @@ type GetMetricsHistoryResponse struct {
 
 func (x *GetMetricsHistoryResponse) Reset() {
 	*x = GetMetricsHistoryResponse{}
-	mi := &file_hub_hub_mobile_proto_msgTypes[11]
+	mi := &file_hub_hub_mobile_proto_msgTypes[12]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -731,7 +807,7 @@ func (x *GetMetricsHistoryResponse) String() string {
 func (*GetMetricsHistoryResponse) ProtoMessage() {}
 
 func (x *GetMetricsHistoryResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_hub_hub_mobile_proto_msgTypes[11]
+	mi := &file_hub_hub_mobile_proto_msgTypes[12]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -744,7 +820,7 @@ func (x *GetMetricsHistoryResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetMetricsHistoryResponse.ProtoReflect.Descriptor instead.
 func (*GetMetricsHistoryResponse) Descriptor() ([]byte, []int) {
-	return file_hub_hub_mobile_proto_rawDescGZIP(), []int{11}
+	return file_hub_hub_mobile_proto_rawDescGZIP(), []int{12}
 }
 
 func (x *GetMetricsHistoryResponse) GetSamples() []*EncryptedMetrics {
@@ -758,13 +834,14 @@ func (x *GetMetricsHistoryResponse) GetSamples() []*EncryptedMetrics {
 type StreamAlertsRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	NodeId        string                 `protobuf:"bytes,1,opt,name=node_id,json=nodeId,proto3" json:"node_id,omitempty"`
+	RoutingTokens []string               `protobuf:"bytes,2,rep,name=routing_tokens,json=routingTokens,proto3" json:"routing_tokens,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *StreamAlertsRequest) Reset() {
 	*x = StreamAlertsRequest{}
-	mi := &file_hub_hub_mobile_proto_msgTypes[12]
+	mi := &file_hub_hub_mobile_proto_msgTypes[13]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -776,7 +853,7 @@ func (x *StreamAlertsRequest) String() string {
 func (*StreamAlertsRequest) ProtoMessage() {}
 
 func (x *StreamAlertsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_hub_hub_mobile_proto_msgTypes[12]
+	mi := &file_hub_hub_mobile_proto_msgTypes[13]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -789,7 +866,7 @@ func (x *StreamAlertsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StreamAlertsRequest.ProtoReflect.Descriptor instead.
 func (*StreamAlertsRequest) Descriptor() ([]byte, []int) {
-	return file_hub_hub_mobile_proto_rawDescGZIP(), []int{12}
+	return file_hub_hub_mobile_proto_rawDescGZIP(), []int{13}
 }
 
 func (x *StreamAlertsRequest) GetNodeId() string {
@@ -799,21 +876,29 @@ func (x *StreamAlertsRequest) GetNodeId() string {
 	return ""
 }
 
+func (x *StreamAlertsRequest) GetRoutingTokens() []string {
+	if x != nil {
+		return x.RoutingTokens
+	}
+	return nil
+}
+
 // QR-based pairing (for offline/air-gapped mode)
 // After CLI signs node's CSR offline via QR, node submits the signed cert
 type SubmitSignedCertRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	NodeId        string                 `protobuf:"bytes,1,opt,name=node_id,json=nodeId,proto3" json:"node_id,omitempty"`
-	CertPem       string                 `protobuf:"bytes,2,opt,name=cert_pem,json=certPem,proto3" json:"cert_pem,omitempty"` // Signed certificate
-	CaPem         string                 `protobuf:"bytes,3,opt,name=ca_pem,json=caPem,proto3" json:"ca_pem,omitempty"`       // CLI's Root CA certificate
-	Fingerprint   string                 `protobuf:"bytes,4,opt,name=fingerprint,proto3" json:"fingerprint,omitempty"`        // Emoji fingerprint for audit
+	CertPem       string                 `protobuf:"bytes,2,opt,name=cert_pem,json=certPem,proto3" json:"cert_pem,omitempty"`                // Signed certificate
+	CaPem         string                 `protobuf:"bytes,3,opt,name=ca_pem,json=caPem,proto3" json:"ca_pem,omitempty"`                      // CLI's Root CA certificate
+	Fingerprint   string                 `protobuf:"bytes,4,opt,name=fingerprint,proto3" json:"fingerprint,omitempty"`                       // Emoji fingerprint for audit
+	RoutingToken  string                 `protobuf:"bytes,5,opt,name=routing_token,json=routingToken,proto3" json:"routing_token,omitempty"` // Zero-trust routing token: HMAC(node_id, user_secret)
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *SubmitSignedCertRequest) Reset() {
 	*x = SubmitSignedCertRequest{}
-	mi := &file_hub_hub_mobile_proto_msgTypes[13]
+	mi := &file_hub_hub_mobile_proto_msgTypes[14]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -825,7 +910,7 @@ func (x *SubmitSignedCertRequest) String() string {
 func (*SubmitSignedCertRequest) ProtoMessage() {}
 
 func (x *SubmitSignedCertRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_hub_hub_mobile_proto_msgTypes[13]
+	mi := &file_hub_hub_mobile_proto_msgTypes[14]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -838,7 +923,7 @@ func (x *SubmitSignedCertRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SubmitSignedCertRequest.ProtoReflect.Descriptor instead.
 func (*SubmitSignedCertRequest) Descriptor() ([]byte, []int) {
-	return file_hub_hub_mobile_proto_rawDescGZIP(), []int{13}
+	return file_hub_hub_mobile_proto_rawDescGZIP(), []int{14}
 }
 
 func (x *SubmitSignedCertRequest) GetNodeId() string {
@@ -869,6 +954,13 @@ func (x *SubmitSignedCertRequest) GetFingerprint() string {
 	return ""
 }
 
+func (x *SubmitSignedCertRequest) GetRoutingToken() string {
+	if x != nil {
+		return x.RoutingToken
+	}
+	return ""
+}
+
 // PAKE (Password-Authenticated Key Exchange) Messages
 // Uses SPAKE2 protocol - Hub relays but cannot derive shared secret
 type PakeMessage struct {
@@ -886,7 +978,7 @@ type PakeMessage struct {
 
 func (x *PakeMessage) Reset() {
 	*x = PakeMessage{}
-	mi := &file_hub_hub_mobile_proto_msgTypes[14]
+	mi := &file_hub_hub_mobile_proto_msgTypes[15]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -898,7 +990,7 @@ func (x *PakeMessage) String() string {
 func (*PakeMessage) ProtoMessage() {}
 
 func (x *PakeMessage) ProtoReflect() protoreflect.Message {
-	mi := &file_hub_hub_mobile_proto_msgTypes[14]
+	mi := &file_hub_hub_mobile_proto_msgTypes[15]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -911,7 +1003,7 @@ func (x *PakeMessage) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PakeMessage.ProtoReflect.Descriptor instead.
 func (*PakeMessage) Descriptor() ([]byte, []int) {
-	return file_hub_hub_mobile_proto_rawDescGZIP(), []int{14}
+	return file_hub_hub_mobile_proto_rawDescGZIP(), []int{15}
 }
 
 func (x *PakeMessage) GetSessionCode() string {
@@ -977,7 +1069,7 @@ type RegisterUserRequest struct {
 
 func (x *RegisterUserRequest) Reset() {
 	*x = RegisterUserRequest{}
-	mi := &file_hub_hub_mobile_proto_msgTypes[15]
+	mi := &file_hub_hub_mobile_proto_msgTypes[16]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -989,7 +1081,7 @@ func (x *RegisterUserRequest) String() string {
 func (*RegisterUserRequest) ProtoMessage() {}
 
 func (x *RegisterUserRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_hub_hub_mobile_proto_msgTypes[15]
+	mi := &file_hub_hub_mobile_proto_msgTypes[16]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1002,7 +1094,7 @@ func (x *RegisterUserRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RegisterUserRequest.ProtoReflect.Descriptor instead.
 func (*RegisterUserRequest) Descriptor() ([]byte, []int) {
-	return file_hub_hub_mobile_proto_rawDescGZIP(), []int{15}
+	return file_hub_hub_mobile_proto_rawDescGZIP(), []int{16}
 }
 
 func (x *RegisterUserRequest) GetRootCertPem() string {
@@ -1053,7 +1145,7 @@ type RegisterUserResponse struct {
 
 func (x *RegisterUserResponse) Reset() {
 	*x = RegisterUserResponse{}
-	mi := &file_hub_hub_mobile_proto_msgTypes[16]
+	mi := &file_hub_hub_mobile_proto_msgTypes[17]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1065,7 +1157,7 @@ func (x *RegisterUserResponse) String() string {
 func (*RegisterUserResponse) ProtoMessage() {}
 
 func (x *RegisterUserResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_hub_hub_mobile_proto_msgTypes[16]
+	mi := &file_hub_hub_mobile_proto_msgTypes[17]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1078,7 +1170,7 @@ func (x *RegisterUserResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RegisterUserResponse.ProtoReflect.Descriptor instead.
 func (*RegisterUserResponse) Descriptor() ([]byte, []int) {
-	return file_hub_hub_mobile_proto_rawDescGZIP(), []int{16}
+	return file_hub_hub_mobile_proto_rawDescGZIP(), []int{17}
 }
 
 func (x *RegisterUserResponse) GetUserId() string {
@@ -1127,7 +1219,7 @@ type RegisterDeviceRequest struct {
 
 func (x *RegisterDeviceRequest) Reset() {
 	*x = RegisterDeviceRequest{}
-	mi := &file_hub_hub_mobile_proto_msgTypes[17]
+	mi := &file_hub_hub_mobile_proto_msgTypes[18]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1139,7 +1231,7 @@ func (x *RegisterDeviceRequest) String() string {
 func (*RegisterDeviceRequest) ProtoMessage() {}
 
 func (x *RegisterDeviceRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_hub_hub_mobile_proto_msgTypes[17]
+	mi := &file_hub_hub_mobile_proto_msgTypes[18]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1152,7 +1244,7 @@ func (x *RegisterDeviceRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RegisterDeviceRequest.ProtoReflect.Descriptor instead.
 func (*RegisterDeviceRequest) Descriptor() ([]byte, []int) {
-	return file_hub_hub_mobile_proto_rawDescGZIP(), []int{17}
+	return file_hub_hub_mobile_proto_rawDescGZIP(), []int{18}
 }
 
 func (x *RegisterDeviceRequest) GetUserId() string {
@@ -1187,7 +1279,7 @@ type UpdateLicenseRequest struct {
 
 func (x *UpdateLicenseRequest) Reset() {
 	*x = UpdateLicenseRequest{}
-	mi := &file_hub_hub_mobile_proto_msgTypes[18]
+	mi := &file_hub_hub_mobile_proto_msgTypes[19]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1199,7 +1291,7 @@ func (x *UpdateLicenseRequest) String() string {
 func (*UpdateLicenseRequest) ProtoMessage() {}
 
 func (x *UpdateLicenseRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_hub_hub_mobile_proto_msgTypes[18]
+	mi := &file_hub_hub_mobile_proto_msgTypes[19]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1212,7 +1304,7 @@ func (x *UpdateLicenseRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UpdateLicenseRequest.ProtoReflect.Descriptor instead.
 func (*UpdateLicenseRequest) Descriptor() ([]byte, []int) {
-	return file_hub_hub_mobile_proto_rawDescGZIP(), []int{18}
+	return file_hub_hub_mobile_proto_rawDescGZIP(), []int{19}
 }
 
 func (x *UpdateLicenseRequest) GetUserId() string {
@@ -1247,7 +1339,7 @@ type UpdateLicenseResponse struct {
 
 func (x *UpdateLicenseResponse) Reset() {
 	*x = UpdateLicenseResponse{}
-	mi := &file_hub_hub_mobile_proto_msgTypes[19]
+	mi := &file_hub_hub_mobile_proto_msgTypes[20]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1259,7 +1351,7 @@ func (x *UpdateLicenseResponse) String() string {
 func (*UpdateLicenseResponse) ProtoMessage() {}
 
 func (x *UpdateLicenseResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_hub_hub_mobile_proto_msgTypes[19]
+	mi := &file_hub_hub_mobile_proto_msgTypes[20]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1272,7 +1364,7 @@ func (x *UpdateLicenseResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UpdateLicenseResponse.ProtoReflect.Descriptor instead.
 func (*UpdateLicenseResponse) Descriptor() ([]byte, []int) {
-	return file_hub_hub_mobile_proto_rawDescGZIP(), []int{19}
+	return file_hub_hub_mobile_proto_rawDescGZIP(), []int{20}
 }
 
 func (x *UpdateLicenseResponse) GetTier() string {
@@ -1307,7 +1399,7 @@ type CreateProxyConfigRequest struct {
 
 func (x *CreateProxyConfigRequest) Reset() {
 	*x = CreateProxyConfigRequest{}
-	mi := &file_hub_hub_mobile_proto_msgTypes[20]
+	mi := &file_hub_hub_mobile_proto_msgTypes[21]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1319,7 +1411,7 @@ func (x *CreateProxyConfigRequest) String() string {
 func (*CreateProxyConfigRequest) ProtoMessage() {}
 
 func (x *CreateProxyConfigRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_hub_hub_mobile_proto_msgTypes[20]
+	mi := &file_hub_hub_mobile_proto_msgTypes[21]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1332,7 +1424,7 @@ func (x *CreateProxyConfigRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateProxyConfigRequest.ProtoReflect.Descriptor instead.
 func (*CreateProxyConfigRequest) Descriptor() ([]byte, []int) {
-	return file_hub_hub_mobile_proto_rawDescGZIP(), []int{20}
+	return file_hub_hub_mobile_proto_rawDescGZIP(), []int{21}
 }
 
 func (x *CreateProxyConfigRequest) GetProxyId() string {
@@ -1359,7 +1451,7 @@ type CreateProxyConfigResponse struct {
 
 func (x *CreateProxyConfigResponse) Reset() {
 	*x = CreateProxyConfigResponse{}
-	mi := &file_hub_hub_mobile_proto_msgTypes[21]
+	mi := &file_hub_hub_mobile_proto_msgTypes[22]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1371,7 +1463,7 @@ func (x *CreateProxyConfigResponse) String() string {
 func (*CreateProxyConfigResponse) ProtoMessage() {}
 
 func (x *CreateProxyConfigResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_hub_hub_mobile_proto_msgTypes[21]
+	mi := &file_hub_hub_mobile_proto_msgTypes[22]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1384,7 +1476,7 @@ func (x *CreateProxyConfigResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateProxyConfigResponse.ProtoReflect.Descriptor instead.
 func (*CreateProxyConfigResponse) Descriptor() ([]byte, []int) {
-	return file_hub_hub_mobile_proto_rawDescGZIP(), []int{21}
+	return file_hub_hub_mobile_proto_rawDescGZIP(), []int{22}
 }
 
 func (x *CreateProxyConfigResponse) GetSuccess() bool {
@@ -1411,7 +1503,7 @@ type ListProxyConfigsRequest struct {
 
 func (x *ListProxyConfigsRequest) Reset() {
 	*x = ListProxyConfigsRequest{}
-	mi := &file_hub_hub_mobile_proto_msgTypes[22]
+	mi := &file_hub_hub_mobile_proto_msgTypes[23]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1423,7 +1515,7 @@ func (x *ListProxyConfigsRequest) String() string {
 func (*ListProxyConfigsRequest) ProtoMessage() {}
 
 func (x *ListProxyConfigsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_hub_hub_mobile_proto_msgTypes[22]
+	mi := &file_hub_hub_mobile_proto_msgTypes[23]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1436,7 +1528,7 @@ func (x *ListProxyConfigsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListProxyConfigsRequest.ProtoReflect.Descriptor instead.
 func (*ListProxyConfigsRequest) Descriptor() ([]byte, []int) {
-	return file_hub_hub_mobile_proto_rawDescGZIP(), []int{22}
+	return file_hub_hub_mobile_proto_rawDescGZIP(), []int{23}
 }
 
 func (x *ListProxyConfigsRequest) GetRoutingToken() string {
@@ -1455,7 +1547,7 @@ type ListProxyConfigsResponse struct {
 
 func (x *ListProxyConfigsResponse) Reset() {
 	*x = ListProxyConfigsResponse{}
-	mi := &file_hub_hub_mobile_proto_msgTypes[23]
+	mi := &file_hub_hub_mobile_proto_msgTypes[24]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1467,7 +1559,7 @@ func (x *ListProxyConfigsResponse) String() string {
 func (*ListProxyConfigsResponse) ProtoMessage() {}
 
 func (x *ListProxyConfigsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_hub_hub_mobile_proto_msgTypes[23]
+	mi := &file_hub_hub_mobile_proto_msgTypes[24]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1480,7 +1572,7 @@ func (x *ListProxyConfigsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListProxyConfigsResponse.ProtoReflect.Descriptor instead.
 func (*ListProxyConfigsResponse) Descriptor() ([]byte, []int) {
-	return file_hub_hub_mobile_proto_rawDescGZIP(), []int{23}
+	return file_hub_hub_mobile_proto_rawDescGZIP(), []int{24}
 }
 
 func (x *ListProxyConfigsResponse) GetProxies() []*ProxyConfigInfo {
@@ -1504,7 +1596,7 @@ type ProxyConfigInfo struct {
 
 func (x *ProxyConfigInfo) Reset() {
 	*x = ProxyConfigInfo{}
-	mi := &file_hub_hub_mobile_proto_msgTypes[24]
+	mi := &file_hub_hub_mobile_proto_msgTypes[25]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1516,7 +1608,7 @@ func (x *ProxyConfigInfo) String() string {
 func (*ProxyConfigInfo) ProtoMessage() {}
 
 func (x *ProxyConfigInfo) ProtoReflect() protoreflect.Message {
-	mi := &file_hub_hub_mobile_proto_msgTypes[24]
+	mi := &file_hub_hub_mobile_proto_msgTypes[25]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1529,7 +1621,7 @@ func (x *ProxyConfigInfo) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ProxyConfigInfo.ProtoReflect.Descriptor instead.
 func (*ProxyConfigInfo) Descriptor() ([]byte, []int) {
-	return file_hub_hub_mobile_proto_rawDescGZIP(), []int{24}
+	return file_hub_hub_mobile_proto_rawDescGZIP(), []int{25}
 }
 
 func (x *ProxyConfigInfo) GetProxyId() string {
@@ -1585,7 +1677,7 @@ type DeleteProxyConfigRequest struct {
 
 func (x *DeleteProxyConfigRequest) Reset() {
 	*x = DeleteProxyConfigRequest{}
-	mi := &file_hub_hub_mobile_proto_msgTypes[25]
+	mi := &file_hub_hub_mobile_proto_msgTypes[26]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1597,7 +1689,7 @@ func (x *DeleteProxyConfigRequest) String() string {
 func (*DeleteProxyConfigRequest) ProtoMessage() {}
 
 func (x *DeleteProxyConfigRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_hub_hub_mobile_proto_msgTypes[25]
+	mi := &file_hub_hub_mobile_proto_msgTypes[26]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1610,7 +1702,7 @@ func (x *DeleteProxyConfigRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteProxyConfigRequest.ProtoReflect.Descriptor instead.
 func (*DeleteProxyConfigRequest) Descriptor() ([]byte, []int) {
-	return file_hub_hub_mobile_proto_rawDescGZIP(), []int{25}
+	return file_hub_hub_mobile_proto_rawDescGZIP(), []int{26}
 }
 
 func (x *DeleteProxyConfigRequest) GetProxyId() string {
@@ -1640,7 +1732,7 @@ type PushRevisionRequest struct {
 
 func (x *PushRevisionRequest) Reset() {
 	*x = PushRevisionRequest{}
-	mi := &file_hub_hub_mobile_proto_msgTypes[26]
+	mi := &file_hub_hub_mobile_proto_msgTypes[27]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1652,7 +1744,7 @@ func (x *PushRevisionRequest) String() string {
 func (*PushRevisionRequest) ProtoMessage() {}
 
 func (x *PushRevisionRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_hub_hub_mobile_proto_msgTypes[26]
+	mi := &file_hub_hub_mobile_proto_msgTypes[27]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1665,7 +1757,7 @@ func (x *PushRevisionRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PushRevisionRequest.ProtoReflect.Descriptor instead.
 func (*PushRevisionRequest) Descriptor() ([]byte, []int) {
-	return file_hub_hub_mobile_proto_rawDescGZIP(), []int{26}
+	return file_hub_hub_mobile_proto_rawDescGZIP(), []int{27}
 }
 
 func (x *PushRevisionRequest) GetProxyId() string {
@@ -1711,7 +1803,7 @@ type PushRevisionResponse struct {
 
 func (x *PushRevisionResponse) Reset() {
 	*x = PushRevisionResponse{}
-	mi := &file_hub_hub_mobile_proto_msgTypes[27]
+	mi := &file_hub_hub_mobile_proto_msgTypes[28]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1723,7 +1815,7 @@ func (x *PushRevisionResponse) String() string {
 func (*PushRevisionResponse) ProtoMessage() {}
 
 func (x *PushRevisionResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_hub_hub_mobile_proto_msgTypes[27]
+	mi := &file_hub_hub_mobile_proto_msgTypes[28]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1736,7 +1828,7 @@ func (x *PushRevisionResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PushRevisionResponse.ProtoReflect.Descriptor instead.
 func (*PushRevisionResponse) Descriptor() ([]byte, []int) {
-	return file_hub_hub_mobile_proto_rawDescGZIP(), []int{27}
+	return file_hub_hub_mobile_proto_rawDescGZIP(), []int{28}
 }
 
 func (x *PushRevisionResponse) GetSuccess() bool {
@@ -1800,7 +1892,7 @@ type GetRevisionRequest struct {
 
 func (x *GetRevisionRequest) Reset() {
 	*x = GetRevisionRequest{}
-	mi := &file_hub_hub_mobile_proto_msgTypes[28]
+	mi := &file_hub_hub_mobile_proto_msgTypes[29]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1812,7 +1904,7 @@ func (x *GetRevisionRequest) String() string {
 func (*GetRevisionRequest) ProtoMessage() {}
 
 func (x *GetRevisionRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_hub_hub_mobile_proto_msgTypes[28]
+	mi := &file_hub_hub_mobile_proto_msgTypes[29]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1825,7 +1917,7 @@ func (x *GetRevisionRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetRevisionRequest.ProtoReflect.Descriptor instead.
 func (*GetRevisionRequest) Descriptor() ([]byte, []int) {
-	return file_hub_hub_mobile_proto_rawDescGZIP(), []int{28}
+	return file_hub_hub_mobile_proto_rawDescGZIP(), []int{29}
 }
 
 func (x *GetRevisionRequest) GetProxyId() string {
@@ -1861,7 +1953,7 @@ type GetRevisionResponse struct {
 
 func (x *GetRevisionResponse) Reset() {
 	*x = GetRevisionResponse{}
-	mi := &file_hub_hub_mobile_proto_msgTypes[29]
+	mi := &file_hub_hub_mobile_proto_msgTypes[30]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1873,7 +1965,7 @@ func (x *GetRevisionResponse) String() string {
 func (*GetRevisionResponse) ProtoMessage() {}
 
 func (x *GetRevisionResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_hub_hub_mobile_proto_msgTypes[29]
+	mi := &file_hub_hub_mobile_proto_msgTypes[30]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1886,7 +1978,7 @@ func (x *GetRevisionResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetRevisionResponse.ProtoReflect.Descriptor instead.
 func (*GetRevisionResponse) Descriptor() ([]byte, []int) {
-	return file_hub_hub_mobile_proto_rawDescGZIP(), []int{29}
+	return file_hub_hub_mobile_proto_rawDescGZIP(), []int{30}
 }
 
 func (x *GetRevisionResponse) GetEncryptedBlob() []byte {
@@ -1928,7 +2020,7 @@ type ListRevisionsRequest struct {
 
 func (x *ListRevisionsRequest) Reset() {
 	*x = ListRevisionsRequest{}
-	mi := &file_hub_hub_mobile_proto_msgTypes[30]
+	mi := &file_hub_hub_mobile_proto_msgTypes[31]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1940,7 +2032,7 @@ func (x *ListRevisionsRequest) String() string {
 func (*ListRevisionsRequest) ProtoMessage() {}
 
 func (x *ListRevisionsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_hub_hub_mobile_proto_msgTypes[30]
+	mi := &file_hub_hub_mobile_proto_msgTypes[31]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1953,7 +2045,7 @@ func (x *ListRevisionsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListRevisionsRequest.ProtoReflect.Descriptor instead.
 func (*ListRevisionsRequest) Descriptor() ([]byte, []int) {
-	return file_hub_hub_mobile_proto_rawDescGZIP(), []int{30}
+	return file_hub_hub_mobile_proto_rawDescGZIP(), []int{31}
 }
 
 func (x *ListRevisionsRequest) GetProxyId() string {
@@ -1979,7 +2071,7 @@ type ListRevisionsResponse struct {
 
 func (x *ListRevisionsResponse) Reset() {
 	*x = ListRevisionsResponse{}
-	mi := &file_hub_hub_mobile_proto_msgTypes[31]
+	mi := &file_hub_hub_mobile_proto_msgTypes[32]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1991,7 +2083,7 @@ func (x *ListRevisionsResponse) String() string {
 func (*ListRevisionsResponse) ProtoMessage() {}
 
 func (x *ListRevisionsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_hub_hub_mobile_proto_msgTypes[31]
+	mi := &file_hub_hub_mobile_proto_msgTypes[32]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2004,7 +2096,7 @@ func (x *ListRevisionsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListRevisionsResponse.ProtoReflect.Descriptor instead.
 func (*ListRevisionsResponse) Descriptor() ([]byte, []int) {
-	return file_hub_hub_mobile_proto_rawDescGZIP(), []int{31}
+	return file_hub_hub_mobile_proto_rawDescGZIP(), []int{32}
 }
 
 func (x *ListRevisionsResponse) GetRevisions() []*RevisionMeta {
@@ -2025,7 +2117,7 @@ type RevisionMeta struct {
 
 func (x *RevisionMeta) Reset() {
 	*x = RevisionMeta{}
-	mi := &file_hub_hub_mobile_proto_msgTypes[32]
+	mi := &file_hub_hub_mobile_proto_msgTypes[33]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2037,7 +2129,7 @@ func (x *RevisionMeta) String() string {
 func (*RevisionMeta) ProtoMessage() {}
 
 func (x *RevisionMeta) ProtoReflect() protoreflect.Message {
-	mi := &file_hub_hub_mobile_proto_msgTypes[32]
+	mi := &file_hub_hub_mobile_proto_msgTypes[33]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2050,7 +2142,7 @@ func (x *RevisionMeta) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RevisionMeta.ProtoReflect.Descriptor instead.
 func (*RevisionMeta) Descriptor() ([]byte, []int) {
-	return file_hub_hub_mobile_proto_rawDescGZIP(), []int{32}
+	return file_hub_hub_mobile_proto_rawDescGZIP(), []int{33}
 }
 
 func (x *RevisionMeta) GetRevisionNum() int64 {
@@ -2086,7 +2178,7 @@ type FlushRevisionsRequest struct {
 
 func (x *FlushRevisionsRequest) Reset() {
 	*x = FlushRevisionsRequest{}
-	mi := &file_hub_hub_mobile_proto_msgTypes[33]
+	mi := &file_hub_hub_mobile_proto_msgTypes[34]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2098,7 +2190,7 @@ func (x *FlushRevisionsRequest) String() string {
 func (*FlushRevisionsRequest) ProtoMessage() {}
 
 func (x *FlushRevisionsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_hub_hub_mobile_proto_msgTypes[33]
+	mi := &file_hub_hub_mobile_proto_msgTypes[34]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2111,7 +2203,7 @@ func (x *FlushRevisionsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use FlushRevisionsRequest.ProtoReflect.Descriptor instead.
 func (*FlushRevisionsRequest) Descriptor() ([]byte, []int) {
-	return file_hub_hub_mobile_proto_rawDescGZIP(), []int{33}
+	return file_hub_hub_mobile_proto_rawDescGZIP(), []int{34}
 }
 
 func (x *FlushRevisionsRequest) GetProxyId() string {
@@ -2147,7 +2239,7 @@ type FlushRevisionsResponse struct {
 
 func (x *FlushRevisionsResponse) Reset() {
 	*x = FlushRevisionsResponse{}
-	mi := &file_hub_hub_mobile_proto_msgTypes[34]
+	mi := &file_hub_hub_mobile_proto_msgTypes[35]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2159,7 +2251,7 @@ func (x *FlushRevisionsResponse) String() string {
 func (*FlushRevisionsResponse) ProtoMessage() {}
 
 func (x *FlushRevisionsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_hub_hub_mobile_proto_msgTypes[34]
+	mi := &file_hub_hub_mobile_proto_msgTypes[35]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2172,7 +2264,7 @@ func (x *FlushRevisionsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use FlushRevisionsResponse.ProtoReflect.Descriptor instead.
 func (*FlushRevisionsResponse) Descriptor() ([]byte, []int) {
-	return file_hub_hub_mobile_proto_rawDescGZIP(), []int{34}
+	return file_hub_hub_mobile_proto_rawDescGZIP(), []int{35}
 }
 
 func (x *FlushRevisionsResponse) GetSuccess() bool {
@@ -2203,6 +2295,92 @@ func (x *FlushRevisionsResponse) GetError() string {
 	return ""
 }
 
+// ProxyRevisionPayload is the encrypted payload stored in Hub revisions.
+// This replaces JSON-encoded payload for type safety.
+type ProxyRevisionPayload struct {
+	state           protoimpl.MessageState `protogen:"open.v1"`
+	Name            string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	Description     string                 `protobuf:"bytes,2,opt,name=description,proto3" json:"description,omitempty"`
+	CommitMessage   string                 `protobuf:"bytes,3,opt,name=commit_message,json=commitMessage,proto3" json:"commit_message,omitempty"`
+	ProtocolVersion string                 `protobuf:"bytes,4,opt,name=protocol_version,json=protocolVersion,proto3" json:"protocol_version,omitempty"`
+	ConfigYaml      string                 `protobuf:"bytes,5,opt,name=config_yaml,json=configYaml,proto3" json:"config_yaml,omitempty"`
+	ConfigHash      string                 `protobuf:"bytes,6,opt,name=config_hash,json=configHash,proto3" json:"config_hash,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
+}
+
+func (x *ProxyRevisionPayload) Reset() {
+	*x = ProxyRevisionPayload{}
+	mi := &file_hub_hub_mobile_proto_msgTypes[36]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ProxyRevisionPayload) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ProxyRevisionPayload) ProtoMessage() {}
+
+func (x *ProxyRevisionPayload) ProtoReflect() protoreflect.Message {
+	mi := &file_hub_hub_mobile_proto_msgTypes[36]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ProxyRevisionPayload.ProtoReflect.Descriptor instead.
+func (*ProxyRevisionPayload) Descriptor() ([]byte, []int) {
+	return file_hub_hub_mobile_proto_rawDescGZIP(), []int{36}
+}
+
+func (x *ProxyRevisionPayload) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *ProxyRevisionPayload) GetDescription() string {
+	if x != nil {
+		return x.Description
+	}
+	return ""
+}
+
+func (x *ProxyRevisionPayload) GetCommitMessage() string {
+	if x != nil {
+		return x.CommitMessage
+	}
+	return ""
+}
+
+func (x *ProxyRevisionPayload) GetProtocolVersion() string {
+	if x != nil {
+		return x.ProtocolVersion
+	}
+	return ""
+}
+
+func (x *ProxyRevisionPayload) GetConfigYaml() string {
+	if x != nil {
+		return x.ConfigYaml
+	}
+	return ""
+}
+
+func (x *ProxyRevisionPayload) GetConfigHash() string {
+	if x != nil {
+		return x.ConfigHash
+	}
+	return ""
+}
+
 var File_hub_hub_mobile_proto protoreflect.FileDescriptor
 
 const file_hub_hub_mobile_proto_rawDesc = "" +
@@ -2211,7 +2389,13 @@ const file_hub_hub_mobile_proto_rawDesc = "" +
 	"\x19RegisterNodeViaCSRRequest\x12\x19\n" +
 	"\bcert_pem\x18\x01 \x01(\tR\acertPem\x12-\n" +
 	"\x12encrypted_metadata\x18\x02 \x01(\fR\x11encryptedMetadata\x12\x17\n" +
-	"\anode_id\x18\x03 \x01(\tR\x06nodeId\"Q\n" +
+	"\anode_id\x18\x03 \x01(\tR\x06nodeId\"\xbc\x01\n" +
+	"\x1bRegisterNodeWithCertRequest\x12\x17\n" +
+	"\anode_id\x18\x01 \x01(\tR\x06nodeId\x12\x19\n" +
+	"\bcert_pem\x18\x02 \x01(\tR\acertPem\x12#\n" +
+	"\rrouting_token\x18\x03 \x01(\tR\froutingToken\x12-\n" +
+	"\x12encrypted_metadata\x18\x04 \x01(\fR\x11encryptedMetadata\x12\x15\n" +
+	"\x06ca_pem\x18\x05 \x01(\tR\x05caPem\"Q\n" +
 	"\x10ListNodesRequest\x12\x16\n" +
 	"\x06filter\x18\x01 \x01(\tR\x06filter\x12%\n" +
 	"\x0erouting_tokens\x18\x02 \x03(\tR\rroutingTokens\"]\n" +
@@ -2251,14 +2435,16 @@ const file_hub_hub_mobile_proto_rawDesc = "" +
 	"\bend_time\x18\x04 \x01(\v2\x1a.google.protobuf.TimestampR\aendTime\x12\x14\n" +
 	"\x05limit\x18\x05 \x01(\x05R\x05limit\"T\n" +
 	"\x19GetMetricsHistoryResponse\x127\n" +
-	"\asamples\x18\x01 \x03(\v2\x1d.nitella.hub.EncryptedMetricsR\asamples\".\n" +
+	"\asamples\x18\x01 \x03(\v2\x1d.nitella.hub.EncryptedMetricsR\asamples\"U\n" +
 	"\x13StreamAlertsRequest\x12\x17\n" +
-	"\anode_id\x18\x01 \x01(\tR\x06nodeId\"\x86\x01\n" +
+	"\anode_id\x18\x01 \x01(\tR\x06nodeId\x12%\n" +
+	"\x0erouting_tokens\x18\x02 \x03(\tR\rroutingTokens\"\xab\x01\n" +
 	"\x17SubmitSignedCertRequest\x12\x17\n" +
 	"\anode_id\x18\x01 \x01(\tR\x06nodeId\x12\x19\n" +
 	"\bcert_pem\x18\x02 \x01(\tR\acertPem\x12\x15\n" +
 	"\x06ca_pem\x18\x03 \x01(\tR\x05caPem\x12 \n" +
-	"\vfingerprint\x18\x04 \x01(\tR\vfingerprint\"\xa6\x03\n" +
+	"\vfingerprint\x18\x04 \x01(\tR\vfingerprint\x12#\n" +
+	"\rrouting_token\x18\x05 \x01(\tR\froutingToken\"\xa6\x03\n" +
 	"\vPakeMessage\x12!\n" +
 	"\fsession_code\x18\x01 \x01(\tR\vsessionCode\x128\n" +
 	"\x04type\x18\x02 \x01(\x0e2$.nitella.hub.PakeMessage.MessageTypeR\x04type\x12\x1f\n" +
@@ -2369,9 +2555,19 @@ const file_hub_hub_mobile_proto_rawDesc = "" +
 	"\asuccess\x18\x01 \x01(\bR\asuccess\x12#\n" +
 	"\rdeleted_count\x18\x02 \x01(\x05R\fdeletedCount\x12'\n" +
 	"\x0fremaining_count\x18\x03 \x01(\x05R\x0eremainingCount\x12\x14\n" +
-	"\x05error\x18\x04 \x01(\tR\x05error2\xcc\v\n" +
+	"\x05error\x18\x04 \x01(\tR\x05error\"\xe0\x01\n" +
+	"\x14ProxyRevisionPayload\x12\x12\n" +
+	"\x04name\x18\x01 \x01(\tR\x04name\x12 \n" +
+	"\vdescription\x18\x02 \x01(\tR\vdescription\x12%\n" +
+	"\x0ecommit_message\x18\x03 \x01(\tR\rcommitMessage\x12)\n" +
+	"\x10protocol_version\x18\x04 \x01(\tR\x0fprotocolVersion\x12\x1f\n" +
+	"\vconfig_yaml\x18\x05 \x01(\tR\n" +
+	"configYaml\x12\x1f\n" +
+	"\vconfig_hash\x18\x06 \x01(\tR\n" +
+	"configHash2\xa6\f\n" +
 	"\rMobileService\x12T\n" +
-	"\x12RegisterNodeViaCSR\x12&.nitella.hub.RegisterNodeViaCSRRequest\x1a\x16.google.protobuf.Empty\x12J\n" +
+	"\x12RegisterNodeViaCSR\x12&.nitella.hub.RegisterNodeViaCSRRequest\x1a\x16.google.protobuf.Empty\x12X\n" +
+	"\x14RegisterNodeWithCert\x12(.nitella.hub.RegisterNodeWithCertRequest\x1a\x16.google.protobuf.Empty\x12J\n" +
 	"\tListNodes\x12\x1d.nitella.hub.ListNodesRequest\x1a\x1e.nitella.hub.ListNodesResponse\x129\n" +
 	"\aGetNode\x12\x1b.nitella.hub.GetNodeRequest\x1a\x11.nitella.hub.Node\x12S\n" +
 	"\fRegisterNode\x12 .nitella.hub.RegisterNodeRequest\x1a!.nitella.hub.RegisterNodeResponse\x12B\n" +
@@ -2411,115 +2607,119 @@ func file_hub_hub_mobile_proto_rawDescGZIP() []byte {
 }
 
 var file_hub_hub_mobile_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_hub_hub_mobile_proto_msgTypes = make([]protoimpl.MessageInfo, 35)
+var file_hub_hub_mobile_proto_msgTypes = make([]protoimpl.MessageInfo, 37)
 var file_hub_hub_mobile_proto_goTypes = []any{
-	(PakeMessage_MessageType)(0),      // 0: nitella.hub.PakeMessage.MessageType
-	(*RegisterNodeViaCSRRequest)(nil), // 1: nitella.hub.RegisterNodeViaCSRRequest
-	(*ListNodesRequest)(nil),          // 2: nitella.hub.ListNodesRequest
-	(*ListNodesResponse)(nil),         // 3: nitella.hub.ListNodesResponse
-	(*GetNodeRequest)(nil),            // 4: nitella.hub.GetNodeRequest
-	(*RegisterNodeRequest)(nil),       // 5: nitella.hub.RegisterNodeRequest
-	(*RegisterNodeResponse)(nil),      // 6: nitella.hub.RegisterNodeResponse
-	(*ApproveNodeRequest)(nil),        // 7: nitella.hub.ApproveNodeRequest
-	(*DeleteNodeRequest)(nil),         // 8: nitella.hub.DeleteNodeRequest
-	(*CommandRequest)(nil),            // 9: nitella.hub.CommandRequest
-	(*StreamMetricsRequest)(nil),      // 10: nitella.hub.StreamMetricsRequest
-	(*GetMetricsHistoryRequest)(nil),  // 11: nitella.hub.GetMetricsHistoryRequest
-	(*GetMetricsHistoryResponse)(nil), // 12: nitella.hub.GetMetricsHistoryResponse
-	(*StreamAlertsRequest)(nil),       // 13: nitella.hub.StreamAlertsRequest
-	(*SubmitSignedCertRequest)(nil),   // 14: nitella.hub.SubmitSignedCertRequest
-	(*PakeMessage)(nil),               // 15: nitella.hub.PakeMessage
-	(*RegisterUserRequest)(nil),       // 16: nitella.hub.RegisterUserRequest
-	(*RegisterUserResponse)(nil),      // 17: nitella.hub.RegisterUserResponse
-	(*RegisterDeviceRequest)(nil),     // 18: nitella.hub.RegisterDeviceRequest
-	(*UpdateLicenseRequest)(nil),      // 19: nitella.hub.UpdateLicenseRequest
-	(*UpdateLicenseResponse)(nil),     // 20: nitella.hub.UpdateLicenseResponse
-	(*CreateProxyConfigRequest)(nil),  // 21: nitella.hub.CreateProxyConfigRequest
-	(*CreateProxyConfigResponse)(nil), // 22: nitella.hub.CreateProxyConfigResponse
-	(*ListProxyConfigsRequest)(nil),   // 23: nitella.hub.ListProxyConfigsRequest
-	(*ListProxyConfigsResponse)(nil),  // 24: nitella.hub.ListProxyConfigsResponse
-	(*ProxyConfigInfo)(nil),           // 25: nitella.hub.ProxyConfigInfo
-	(*DeleteProxyConfigRequest)(nil),  // 26: nitella.hub.DeleteProxyConfigRequest
-	(*PushRevisionRequest)(nil),       // 27: nitella.hub.PushRevisionRequest
-	(*PushRevisionResponse)(nil),      // 28: nitella.hub.PushRevisionResponse
-	(*GetRevisionRequest)(nil),        // 29: nitella.hub.GetRevisionRequest
-	(*GetRevisionResponse)(nil),       // 30: nitella.hub.GetRevisionResponse
-	(*ListRevisionsRequest)(nil),      // 31: nitella.hub.ListRevisionsRequest
-	(*ListRevisionsResponse)(nil),     // 32: nitella.hub.ListRevisionsResponse
-	(*RevisionMeta)(nil),              // 33: nitella.hub.RevisionMeta
-	(*FlushRevisionsRequest)(nil),     // 34: nitella.hub.FlushRevisionsRequest
-	(*FlushRevisionsResponse)(nil),    // 35: nitella.hub.FlushRevisionsResponse
-	(*Node)(nil),                      // 36: nitella.hub.Node
-	(*common.EncryptedPayload)(nil),   // 37: nitella.EncryptedPayload
-	(*timestamp.Timestamp)(nil),       // 38: google.protobuf.Timestamp
-	(*EncryptedMetrics)(nil),          // 39: nitella.hub.EncryptedMetrics
-	(*SignalMessage)(nil),             // 40: nitella.hub.SignalMessage
-	(*empty.Empty)(nil),               // 41: google.protobuf.Empty
-	(*Empty)(nil),                     // 42: nitella.hub.Empty
-	(*CommandResponse)(nil),           // 43: nitella.hub.CommandResponse
-	(*common.Alert)(nil),              // 44: nitella.Alert
+	(PakeMessage_MessageType)(0),        // 0: nitella.hub.PakeMessage.MessageType
+	(*RegisterNodeViaCSRRequest)(nil),   // 1: nitella.hub.RegisterNodeViaCSRRequest
+	(*RegisterNodeWithCertRequest)(nil), // 2: nitella.hub.RegisterNodeWithCertRequest
+	(*ListNodesRequest)(nil),            // 3: nitella.hub.ListNodesRequest
+	(*ListNodesResponse)(nil),           // 4: nitella.hub.ListNodesResponse
+	(*GetNodeRequest)(nil),              // 5: nitella.hub.GetNodeRequest
+	(*RegisterNodeRequest)(nil),         // 6: nitella.hub.RegisterNodeRequest
+	(*RegisterNodeResponse)(nil),        // 7: nitella.hub.RegisterNodeResponse
+	(*ApproveNodeRequest)(nil),          // 8: nitella.hub.ApproveNodeRequest
+	(*DeleteNodeRequest)(nil),           // 9: nitella.hub.DeleteNodeRequest
+	(*CommandRequest)(nil),              // 10: nitella.hub.CommandRequest
+	(*StreamMetricsRequest)(nil),        // 11: nitella.hub.StreamMetricsRequest
+	(*GetMetricsHistoryRequest)(nil),    // 12: nitella.hub.GetMetricsHistoryRequest
+	(*GetMetricsHistoryResponse)(nil),   // 13: nitella.hub.GetMetricsHistoryResponse
+	(*StreamAlertsRequest)(nil),         // 14: nitella.hub.StreamAlertsRequest
+	(*SubmitSignedCertRequest)(nil),     // 15: nitella.hub.SubmitSignedCertRequest
+	(*PakeMessage)(nil),                 // 16: nitella.hub.PakeMessage
+	(*RegisterUserRequest)(nil),         // 17: nitella.hub.RegisterUserRequest
+	(*RegisterUserResponse)(nil),        // 18: nitella.hub.RegisterUserResponse
+	(*RegisterDeviceRequest)(nil),       // 19: nitella.hub.RegisterDeviceRequest
+	(*UpdateLicenseRequest)(nil),        // 20: nitella.hub.UpdateLicenseRequest
+	(*UpdateLicenseResponse)(nil),       // 21: nitella.hub.UpdateLicenseResponse
+	(*CreateProxyConfigRequest)(nil),    // 22: nitella.hub.CreateProxyConfigRequest
+	(*CreateProxyConfigResponse)(nil),   // 23: nitella.hub.CreateProxyConfigResponse
+	(*ListProxyConfigsRequest)(nil),     // 24: nitella.hub.ListProxyConfigsRequest
+	(*ListProxyConfigsResponse)(nil),    // 25: nitella.hub.ListProxyConfigsResponse
+	(*ProxyConfigInfo)(nil),             // 26: nitella.hub.ProxyConfigInfo
+	(*DeleteProxyConfigRequest)(nil),    // 27: nitella.hub.DeleteProxyConfigRequest
+	(*PushRevisionRequest)(nil),         // 28: nitella.hub.PushRevisionRequest
+	(*PushRevisionResponse)(nil),        // 29: nitella.hub.PushRevisionResponse
+	(*GetRevisionRequest)(nil),          // 30: nitella.hub.GetRevisionRequest
+	(*GetRevisionResponse)(nil),         // 31: nitella.hub.GetRevisionResponse
+	(*ListRevisionsRequest)(nil),        // 32: nitella.hub.ListRevisionsRequest
+	(*ListRevisionsResponse)(nil),       // 33: nitella.hub.ListRevisionsResponse
+	(*RevisionMeta)(nil),                // 34: nitella.hub.RevisionMeta
+	(*FlushRevisionsRequest)(nil),       // 35: nitella.hub.FlushRevisionsRequest
+	(*FlushRevisionsResponse)(nil),      // 36: nitella.hub.FlushRevisionsResponse
+	(*ProxyRevisionPayload)(nil),        // 37: nitella.hub.ProxyRevisionPayload
+	(*Node)(nil),                        // 38: nitella.hub.Node
+	(*common.EncryptedPayload)(nil),     // 39: nitella.EncryptedPayload
+	(*timestamp.Timestamp)(nil),         // 40: google.protobuf.Timestamp
+	(*EncryptedMetrics)(nil),            // 41: nitella.hub.EncryptedMetrics
+	(*SignalMessage)(nil),               // 42: nitella.hub.SignalMessage
+	(*empty.Empty)(nil),                 // 43: google.protobuf.Empty
+	(*Empty)(nil),                       // 44: nitella.hub.Empty
+	(*CommandResponse)(nil),             // 45: nitella.hub.CommandResponse
+	(*common.Alert)(nil),                // 46: nitella.Alert
 }
 var file_hub_hub_mobile_proto_depIdxs = []int32{
-	36, // 0: nitella.hub.ListNodesResponse.nodes:type_name -> nitella.hub.Node
-	37, // 1: nitella.hub.CommandRequest.encrypted:type_name -> nitella.EncryptedPayload
-	38, // 2: nitella.hub.GetMetricsHistoryRequest.start_time:type_name -> google.protobuf.Timestamp
-	38, // 3: nitella.hub.GetMetricsHistoryRequest.end_time:type_name -> google.protobuf.Timestamp
-	39, // 4: nitella.hub.GetMetricsHistoryResponse.samples:type_name -> nitella.hub.EncryptedMetrics
+	38, // 0: nitella.hub.ListNodesResponse.nodes:type_name -> nitella.hub.Node
+	39, // 1: nitella.hub.CommandRequest.encrypted:type_name -> nitella.EncryptedPayload
+	40, // 2: nitella.hub.GetMetricsHistoryRequest.start_time:type_name -> google.protobuf.Timestamp
+	40, // 3: nitella.hub.GetMetricsHistoryRequest.end_time:type_name -> google.protobuf.Timestamp
+	41, // 4: nitella.hub.GetMetricsHistoryResponse.samples:type_name -> nitella.hub.EncryptedMetrics
 	0,  // 5: nitella.hub.PakeMessage.type:type_name -> nitella.hub.PakeMessage.MessageType
-	25, // 6: nitella.hub.ListProxyConfigsResponse.proxies:type_name -> nitella.hub.ProxyConfigInfo
-	38, // 7: nitella.hub.ProxyConfigInfo.created_at:type_name -> google.protobuf.Timestamp
-	38, // 8: nitella.hub.ProxyConfigInfo.updated_at:type_name -> google.protobuf.Timestamp
-	38, // 9: nitella.hub.GetRevisionResponse.created_at:type_name -> google.protobuf.Timestamp
-	33, // 10: nitella.hub.ListRevisionsResponse.revisions:type_name -> nitella.hub.RevisionMeta
-	38, // 11: nitella.hub.RevisionMeta.created_at:type_name -> google.protobuf.Timestamp
+	26, // 6: nitella.hub.ListProxyConfigsResponse.proxies:type_name -> nitella.hub.ProxyConfigInfo
+	40, // 7: nitella.hub.ProxyConfigInfo.created_at:type_name -> google.protobuf.Timestamp
+	40, // 8: nitella.hub.ProxyConfigInfo.updated_at:type_name -> google.protobuf.Timestamp
+	40, // 9: nitella.hub.GetRevisionResponse.created_at:type_name -> google.protobuf.Timestamp
+	34, // 10: nitella.hub.ListRevisionsResponse.revisions:type_name -> nitella.hub.RevisionMeta
+	40, // 11: nitella.hub.RevisionMeta.created_at:type_name -> google.protobuf.Timestamp
 	1,  // 12: nitella.hub.MobileService.RegisterNodeViaCSR:input_type -> nitella.hub.RegisterNodeViaCSRRequest
-	2,  // 13: nitella.hub.MobileService.ListNodes:input_type -> nitella.hub.ListNodesRequest
-	4,  // 14: nitella.hub.MobileService.GetNode:input_type -> nitella.hub.GetNodeRequest
-	5,  // 15: nitella.hub.MobileService.RegisterNode:input_type -> nitella.hub.RegisterNodeRequest
-	7,  // 16: nitella.hub.MobileService.ApproveNode:input_type -> nitella.hub.ApproveNodeRequest
-	8,  // 17: nitella.hub.MobileService.DeleteNode:input_type -> nitella.hub.DeleteNodeRequest
-	9,  // 18: nitella.hub.MobileService.SendCommand:input_type -> nitella.hub.CommandRequest
-	10, // 19: nitella.hub.MobileService.StreamMetrics:input_type -> nitella.hub.StreamMetricsRequest
-	11, // 20: nitella.hub.MobileService.GetMetricsHistory:input_type -> nitella.hub.GetMetricsHistoryRequest
-	13, // 21: nitella.hub.MobileService.StreamAlerts:input_type -> nitella.hub.StreamAlertsRequest
-	40, // 22: nitella.hub.MobileService.StreamSignaling:input_type -> nitella.hub.SignalMessage
-	21, // 23: nitella.hub.MobileService.CreateProxyConfig:input_type -> nitella.hub.CreateProxyConfigRequest
-	23, // 24: nitella.hub.MobileService.ListProxyConfigs:input_type -> nitella.hub.ListProxyConfigsRequest
-	26, // 25: nitella.hub.MobileService.DeleteProxyConfig:input_type -> nitella.hub.DeleteProxyConfigRequest
-	27, // 26: nitella.hub.MobileService.PushRevision:input_type -> nitella.hub.PushRevisionRequest
-	29, // 27: nitella.hub.MobileService.GetRevision:input_type -> nitella.hub.GetRevisionRequest
-	31, // 28: nitella.hub.MobileService.ListRevisions:input_type -> nitella.hub.ListRevisionsRequest
-	34, // 29: nitella.hub.MobileService.FlushRevisions:input_type -> nitella.hub.FlushRevisionsRequest
-	15, // 30: nitella.hub.PairingService.PakeExchange:input_type -> nitella.hub.PakeMessage
-	14, // 31: nitella.hub.PairingService.SubmitSignedCert:input_type -> nitella.hub.SubmitSignedCertRequest
-	16, // 32: nitella.hub.AuthService.RegisterUser:input_type -> nitella.hub.RegisterUserRequest
-	18, // 33: nitella.hub.AuthService.RegisterDevice:input_type -> nitella.hub.RegisterDeviceRequest
-	19, // 34: nitella.hub.AuthService.UpdateLicense:input_type -> nitella.hub.UpdateLicenseRequest
-	41, // 35: nitella.hub.MobileService.RegisterNodeViaCSR:output_type -> google.protobuf.Empty
-	3,  // 36: nitella.hub.MobileService.ListNodes:output_type -> nitella.hub.ListNodesResponse
-	36, // 37: nitella.hub.MobileService.GetNode:output_type -> nitella.hub.Node
-	6,  // 38: nitella.hub.MobileService.RegisterNode:output_type -> nitella.hub.RegisterNodeResponse
-	42, // 39: nitella.hub.MobileService.ApproveNode:output_type -> nitella.hub.Empty
-	42, // 40: nitella.hub.MobileService.DeleteNode:output_type -> nitella.hub.Empty
-	43, // 41: nitella.hub.MobileService.SendCommand:output_type -> nitella.hub.CommandResponse
-	39, // 42: nitella.hub.MobileService.StreamMetrics:output_type -> nitella.hub.EncryptedMetrics
-	12, // 43: nitella.hub.MobileService.GetMetricsHistory:output_type -> nitella.hub.GetMetricsHistoryResponse
-	44, // 44: nitella.hub.MobileService.StreamAlerts:output_type -> nitella.Alert
-	40, // 45: nitella.hub.MobileService.StreamSignaling:output_type -> nitella.hub.SignalMessage
-	22, // 46: nitella.hub.MobileService.CreateProxyConfig:output_type -> nitella.hub.CreateProxyConfigResponse
-	24, // 47: nitella.hub.MobileService.ListProxyConfigs:output_type -> nitella.hub.ListProxyConfigsResponse
-	42, // 48: nitella.hub.MobileService.DeleteProxyConfig:output_type -> nitella.hub.Empty
-	28, // 49: nitella.hub.MobileService.PushRevision:output_type -> nitella.hub.PushRevisionResponse
-	30, // 50: nitella.hub.MobileService.GetRevision:output_type -> nitella.hub.GetRevisionResponse
-	32, // 51: nitella.hub.MobileService.ListRevisions:output_type -> nitella.hub.ListRevisionsResponse
-	35, // 52: nitella.hub.MobileService.FlushRevisions:output_type -> nitella.hub.FlushRevisionsResponse
-	15, // 53: nitella.hub.PairingService.PakeExchange:output_type -> nitella.hub.PakeMessage
-	42, // 54: nitella.hub.PairingService.SubmitSignedCert:output_type -> nitella.hub.Empty
-	17, // 55: nitella.hub.AuthService.RegisterUser:output_type -> nitella.hub.RegisterUserResponse
-	42, // 56: nitella.hub.AuthService.RegisterDevice:output_type -> nitella.hub.Empty
-	20, // 57: nitella.hub.AuthService.UpdateLicense:output_type -> nitella.hub.UpdateLicenseResponse
-	35, // [35:58] is the sub-list for method output_type
-	12, // [12:35] is the sub-list for method input_type
+	2,  // 13: nitella.hub.MobileService.RegisterNodeWithCert:input_type -> nitella.hub.RegisterNodeWithCertRequest
+	3,  // 14: nitella.hub.MobileService.ListNodes:input_type -> nitella.hub.ListNodesRequest
+	5,  // 15: nitella.hub.MobileService.GetNode:input_type -> nitella.hub.GetNodeRequest
+	6,  // 16: nitella.hub.MobileService.RegisterNode:input_type -> nitella.hub.RegisterNodeRequest
+	8,  // 17: nitella.hub.MobileService.ApproveNode:input_type -> nitella.hub.ApproveNodeRequest
+	9,  // 18: nitella.hub.MobileService.DeleteNode:input_type -> nitella.hub.DeleteNodeRequest
+	10, // 19: nitella.hub.MobileService.SendCommand:input_type -> nitella.hub.CommandRequest
+	11, // 20: nitella.hub.MobileService.StreamMetrics:input_type -> nitella.hub.StreamMetricsRequest
+	12, // 21: nitella.hub.MobileService.GetMetricsHistory:input_type -> nitella.hub.GetMetricsHistoryRequest
+	14, // 22: nitella.hub.MobileService.StreamAlerts:input_type -> nitella.hub.StreamAlertsRequest
+	42, // 23: nitella.hub.MobileService.StreamSignaling:input_type -> nitella.hub.SignalMessage
+	22, // 24: nitella.hub.MobileService.CreateProxyConfig:input_type -> nitella.hub.CreateProxyConfigRequest
+	24, // 25: nitella.hub.MobileService.ListProxyConfigs:input_type -> nitella.hub.ListProxyConfigsRequest
+	27, // 26: nitella.hub.MobileService.DeleteProxyConfig:input_type -> nitella.hub.DeleteProxyConfigRequest
+	28, // 27: nitella.hub.MobileService.PushRevision:input_type -> nitella.hub.PushRevisionRequest
+	30, // 28: nitella.hub.MobileService.GetRevision:input_type -> nitella.hub.GetRevisionRequest
+	32, // 29: nitella.hub.MobileService.ListRevisions:input_type -> nitella.hub.ListRevisionsRequest
+	35, // 30: nitella.hub.MobileService.FlushRevisions:input_type -> nitella.hub.FlushRevisionsRequest
+	16, // 31: nitella.hub.PairingService.PakeExchange:input_type -> nitella.hub.PakeMessage
+	15, // 32: nitella.hub.PairingService.SubmitSignedCert:input_type -> nitella.hub.SubmitSignedCertRequest
+	17, // 33: nitella.hub.AuthService.RegisterUser:input_type -> nitella.hub.RegisterUserRequest
+	19, // 34: nitella.hub.AuthService.RegisterDevice:input_type -> nitella.hub.RegisterDeviceRequest
+	20, // 35: nitella.hub.AuthService.UpdateLicense:input_type -> nitella.hub.UpdateLicenseRequest
+	43, // 36: nitella.hub.MobileService.RegisterNodeViaCSR:output_type -> google.protobuf.Empty
+	43, // 37: nitella.hub.MobileService.RegisterNodeWithCert:output_type -> google.protobuf.Empty
+	4,  // 38: nitella.hub.MobileService.ListNodes:output_type -> nitella.hub.ListNodesResponse
+	38, // 39: nitella.hub.MobileService.GetNode:output_type -> nitella.hub.Node
+	7,  // 40: nitella.hub.MobileService.RegisterNode:output_type -> nitella.hub.RegisterNodeResponse
+	44, // 41: nitella.hub.MobileService.ApproveNode:output_type -> nitella.hub.Empty
+	44, // 42: nitella.hub.MobileService.DeleteNode:output_type -> nitella.hub.Empty
+	45, // 43: nitella.hub.MobileService.SendCommand:output_type -> nitella.hub.CommandResponse
+	41, // 44: nitella.hub.MobileService.StreamMetrics:output_type -> nitella.hub.EncryptedMetrics
+	13, // 45: nitella.hub.MobileService.GetMetricsHistory:output_type -> nitella.hub.GetMetricsHistoryResponse
+	46, // 46: nitella.hub.MobileService.StreamAlerts:output_type -> nitella.Alert
+	42, // 47: nitella.hub.MobileService.StreamSignaling:output_type -> nitella.hub.SignalMessage
+	23, // 48: nitella.hub.MobileService.CreateProxyConfig:output_type -> nitella.hub.CreateProxyConfigResponse
+	25, // 49: nitella.hub.MobileService.ListProxyConfigs:output_type -> nitella.hub.ListProxyConfigsResponse
+	44, // 50: nitella.hub.MobileService.DeleteProxyConfig:output_type -> nitella.hub.Empty
+	29, // 51: nitella.hub.MobileService.PushRevision:output_type -> nitella.hub.PushRevisionResponse
+	31, // 52: nitella.hub.MobileService.GetRevision:output_type -> nitella.hub.GetRevisionResponse
+	33, // 53: nitella.hub.MobileService.ListRevisions:output_type -> nitella.hub.ListRevisionsResponse
+	36, // 54: nitella.hub.MobileService.FlushRevisions:output_type -> nitella.hub.FlushRevisionsResponse
+	16, // 55: nitella.hub.PairingService.PakeExchange:output_type -> nitella.hub.PakeMessage
+	44, // 56: nitella.hub.PairingService.SubmitSignedCert:output_type -> nitella.hub.Empty
+	18, // 57: nitella.hub.AuthService.RegisterUser:output_type -> nitella.hub.RegisterUserResponse
+	44, // 58: nitella.hub.AuthService.RegisterDevice:output_type -> nitella.hub.Empty
+	21, // 59: nitella.hub.AuthService.UpdateLicense:output_type -> nitella.hub.UpdateLicenseResponse
+	36, // [36:60] is the sub-list for method output_type
+	12, // [12:36] is the sub-list for method input_type
 	12, // [12:12] is the sub-list for extension type_name
 	12, // [12:12] is the sub-list for extension extendee
 	0,  // [0:12] is the sub-list for field type_name
@@ -2537,7 +2737,7 @@ func file_hub_hub_mobile_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_hub_hub_mobile_proto_rawDesc), len(file_hub_hub_mobile_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   35,
+			NumMessages:   37,
 			NumExtensions: 0,
 			NumServices:   3,
 		},

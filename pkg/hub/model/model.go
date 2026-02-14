@@ -7,13 +7,13 @@ import (
 // Node represents a managed proxy node
 // Zero-Trust: No OwnerID - Hub cannot correlate nodes to users
 type Node struct {
-	ID                string `xorm:"pk"`
+	ID                string `xorm:"'id' pk"`
 	RoutingToken      string `xorm:"unique"` // Blind routing identifier (replaces OwnerID)
 	EncryptedMetadata []byte `xorm:"blob"`   // E2E Encrypted Name and other metadata
 	Status            string
 	LastSeen          time.Time
-	CertPEM           string    `xorm:"text"` // Client certificate for mTLS
-	PublicKeyPEM      string    `xorm:"text"`
+	CertPEM           string    `xorm:"'cert_pem' text"` // Client certificate for mTLS
+	PublicKeyPEM      string    `xorm:"'public_key_pem' text"`
 	CreatedAt         time.Time `xorm:"created"`
 	UpdatedAt         time.Time `xorm:"updated"`
 	// Note: PublicIP, ListenPorts, Version, GeoIPEnabled moved to EncryptedMetadata
@@ -21,14 +21,14 @@ type Node struct {
 
 // User represents an authenticated user
 type User struct {
-	ID               string `xorm:"pk"`
+	ID               string `xorm:"'id' pk"`
 	BlindIndex       string `xorm:"unique"` // SHA256(Email + Salt)
 	EncryptedProfile []byte `xorm:"blob"`   // Encrypted Email, Avatar, etc.
 	Role             string
 	LastLogin        time.Time
 
 	// Internal fields not in Proto
-	PublicKeyPEM       string `xorm:"text"`
+	PublicKeyPEM       string `xorm:"'public_key_pem' text"`
 	BiometricPublicKey []byte `xorm:"blob"` // Raw Ed25519 public key
 	Tier               string // free, pro, business
 	MaxNodes           int
@@ -40,11 +40,11 @@ type User struct {
 // RoutingTokenInfo stores routing metadata for blind routing
 // Zero-Trust: Hub routes by token, cannot correlate to user identity
 type RoutingTokenInfo struct {
-	RoutingToken string    `xorm:"pk"`           // HMAC(node_id, user_secret)
-	LicenseKey   string    `xorm:"index"`        // For tier lookups and bulk updates
-	Tier         string    `xorm:"index"`        // free, pro, business
-	FCMTopic     string    `xorm:"index"`        // FCM topic for mobile push
-	AuditPubKey  []byte    `xorm:"blob"`         // Ed25519 public key for encrypting audit logs
+	RoutingToken string    `xorm:"pk"`                // HMAC(node_id, user_secret)
+	LicenseKey   string    `xorm:"index"`             // For tier lookups and bulk updates
+	Tier         string    `xorm:"index"`             // free, pro, business
+	FCMTopic     string    `xorm:"'fcm_topic' index"` // FCM topic for mobile push
+	AuditPubKey  []byte    `xorm:"blob"`              // Ed25519 public key for encrypting audit logs
 	CreatedAt    time.Time `xorm:"created"`
 	UpdatedAt    time.Time `xorm:"updated"`
 }
@@ -53,21 +53,21 @@ type RoutingTokenInfo struct {
 // Zero-Trust: Linked to FCMTopic (blind), not UserID
 type FCMToken struct {
 	Token      string    `xorm:"pk"`
-	FCMTopic   string    `xorm:"index"` // Blind topic (replaces UserID)
+	FCMTopic   string    `xorm:"'fcm_topic' index"` // Blind topic (replaces UserID)
 	DeviceType string    // android, ios, web
 	UpdatedAt  time.Time `xorm:"updated"`
 }
 
 // RegistrationRequest represents a pending node registration request
 type RegistrationRequest struct {
-	Code              string `xorm:"pk"`
-	CSR               string `xorm:"text"`
-	EncryptedMetadata []byte `xorm:"blob"`
-	NodeID            string // Extracted from CSR
-	RoutingToken      string // Blind routing token (provided by CLI during pairing)
-	Status            string // PENDING, APPROVED, REJECTED
-	CertPEM           string `xorm:"text"`
-	CaPEM             string `xorm:"text"`
+	Code              string    `xorm:"pk"`
+	CSR               string    `xorm:"'csr' text"`
+	EncryptedMetadata []byte    `xorm:"blob"`
+	NodeID            string    // Extracted from CSR
+	RoutingToken      string    // Blind routing token (provided by CLI during pairing)
+	Status            string    // PENDING, APPROVED, REJECTED
+	CertPEM           string    `xorm:"'cert_pem' text"`
+	CaPEM             string    `xorm:"'ca_pem' text"`
 	LicenseKey        string    // License key for tier lookup
 	WatchSecret       string    // Secret required for WatchRegistration (only registrant knows)
 	ExpiresAt         time.Time `xorm:"index"`
@@ -78,15 +78,15 @@ type RegistrationRequest struct {
 
 // InviteCode represents an invitation code for user registration
 type InviteCode struct {
-	Code          string    `xorm:"pk"`
-	CreatedBy     string    `xorm:"index"` // Admin who created it
-	MaxUses       int       // 0 = unlimited
-	CurrentUses   int
-	TierID        string    // Tier assigned to users who use this code
-	ExpiresAt     time.Time `xorm:"index"`
-	CreatedAt     time.Time `xorm:"created"`
-	Note          string    // Optional admin note
-	Active        bool      `xorm:"index default 1"`
+	Code        string `xorm:"pk"`
+	CreatedBy   string `xorm:"index"` // Admin who created it
+	MaxUses     int    // 0 = unlimited
+	CurrentUses int
+	TierID      string    // Tier assigned to users who use this code
+	ExpiresAt   time.Time `xorm:"index"`
+	CreatedAt   time.Time `xorm:"created"`
+	Note        string    // Optional admin note
+	Active      bool      `xorm:"index default 1"`
 }
 
 // EncryptedMetric stores encrypted metrics for zero-trust architecture
@@ -135,21 +135,21 @@ type CertificateRevocation struct {
 // ProxyConfig stores proxy configuration metadata
 // Zero-Trust: No name/description - those are inside encrypted revisions
 type ProxyConfig struct {
-	ProxyID      string    `xorm:"pk 'proxy_id'"`           // UUID, stable across revisions
-	RoutingToken string    `xorm:"unique index"`            // Blind routing (HMAC)
+	ProxyID      string    `xorm:"pk 'proxy_id'"` // UUID, stable across revisions
+	RoutingToken string    `xorm:"index"`         // Blind routing (HMAC) - not unique, user can have multiple proxies
 	CreatedAt    time.Time `xorm:"created"`
 	UpdatedAt    time.Time `xorm:"updated"`
-	Deleted      bool      `xorm:"index default 0"`         // Soft delete
+	Deleted      bool      `xorm:"index default 0"` // Soft delete
 }
 
 // ProxyRevision stores each revision of a proxy config
 // Zero-Trust: All user data (name, description, config) is encrypted
 type ProxyRevision struct {
 	ID            int64     `xorm:"pk autoincr"`
-	ProxyID       string    `xorm:"index 'proxy_id'"`                    // FK to ProxyConfig
-	RevisionNum   int64     `xorm:"unique(proxy_rev) 'revision_num'"`    // Sequence: 1, 2, 3...
-	EncryptedBlob []byte    `xorm:"blob 'encrypted_blob'"`               // E2E encrypted payload
-	SizeBytes     int32     `xorm:"'size_bytes'"`                        // For quota enforcement
+	ProxyID       string    `xorm:"index unique(proxy_rev_pair) 'proxy_id'"` // FK to ProxyConfig
+	RevisionNum   int64     `xorm:"unique(proxy_rev_pair) 'revision_num'"`   // Sequence: 1, 2, 3... (per proxy)
+	EncryptedBlob []byte    `xorm:"blob 'encrypted_blob'"`                   // E2E encrypted payload
+	SizeBytes     int32     `xorm:"'size_bytes'"`                            // For quota enforcement
 	CreatedAt     time.Time `xorm:"created"`
 }
 
@@ -184,12 +184,12 @@ type ApprovalRequest struct {
 // ApprovalRequestDetails is encrypted inside ApprovalRequest.EncryptedPayload
 // Only the user can decrypt this - Hub never sees traffic metadata
 type ApprovalRequestDetails struct {
-	SourceIP    string            `json:"source_ip"`
-	DestAddr    string            `json:"dest_addr"`
-	Protocol    string            `json:"protocol,omitempty"`
-	RuleName    string            `json:"rule_name,omitempty"`
-	Reason      string            `json:"reason,omitempty"`
-	Metadata    map[string]string `json:"metadata,omitempty"`
+	SourceIP string            `json:"source_ip"`
+	DestAddr string            `json:"dest_addr"`
+	Protocol string            `json:"protocol,omitempty"`
+	RuleName string            `json:"rule_name,omitempty"`
+	Reason   string            `json:"reason,omitempty"`
+	Metadata map[string]string `json:"metadata,omitempty"`
 }
 
 // AuditLog stores encrypted audit events

@@ -1,11 +1,10 @@
 #[cfg(unix)]
 use std::os::fd::FromRawFd;
 #[cfg(unix)]
-
-use tracing::{info, error};
+use tracing::{error, info};
 
 /// Retrieves the Synurang IPC transport.
-/// 
+///
 /// Synurang (Go) passes the IPC socket to the child process via File Descriptor 3 on Unix systems.
 /// This function attempts to adopt FD 3 as a UnixStream (connected socket).
 pub fn get_ipc_transport() -> Option<tokio::net::UnixStream> {
@@ -14,7 +13,7 @@ pub fn get_ipc_transport() -> Option<tokio::net::UnixStream> {
         let fd = 3;
         // Safety: We assume the parent process (Synurang/Go) has passed us a valid connected socket at FD 3.
         let stream = unsafe { std::os::unix::net::UnixStream::from_raw_fd(fd) };
-        
+
         match stream.peer_addr() {
             Ok(_) => {
                 info!("Synurang: Inherited IPC socket on FD 3");
@@ -29,7 +28,7 @@ pub fn get_ipc_transport() -> Option<tokio::net::UnixStream> {
                         None
                     }
                 }
-            },
+            }
             Err(e) => {
                 // If it's a valid socket but not connected, peer_addr might fail?
                 // For socketpair, it should be connected.

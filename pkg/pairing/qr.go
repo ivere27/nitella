@@ -7,17 +7,18 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 
 	"github.com/mdp/qrterminal/v3"
 )
 
 // QRPayload represents data encoded in pairing QR codes
 type QRPayload struct {
-	Type        string `json:"t"`           // "csr" or "cert"
+	Type        string `json:"t"` // "csr" or "cert"
 	CSR         string `json:"csr,omitempty"`
 	Cert        string `json:"cert,omitempty"`
 	CACert      string `json:"ca,omitempty"`
-	Fingerprint string `json:"fp"`          // Emoji fingerprint for verification
+	Fingerprint string `json:"fp"` // Emoji fingerprint for verification
 	NodeID      string `json:"nid,omitempty"`
 }
 
@@ -156,19 +157,21 @@ func PrintQRToTerminal(data string) {
 	qrterminal.GenerateWithConfig(data, config)
 }
 
-// DisplayCSRInfo displays CSR information for user verification
-func DisplayCSRInfo(csrPEM []byte, nodeID string) {
+// FormatCSRInfo builds a human-readable CSR summary for display layers.
+func FormatCSRInfo(csrPEM []byte, nodeID string) string {
 	fp := DeriveFingerprint(csrPEM)
-	fmt.Println()
-	fmt.Println("╔══════════════════════════════════════════════════════════════╗")
-	fmt.Println("║                    NODE PAIRING REQUEST                       ║")
-	fmt.Println("╠══════════════════════════════════════════════════════════════╣")
-	fmt.Printf("║  Node ID:     %-46s  ║\n", truncate(nodeID, 46))
-	fmt.Printf("║  Fingerprint: %-46s  ║\n", fp)
-	fmt.Println("╠══════════════════════════════════════════════════════════════╣")
-	fmt.Println("║  Verify the fingerprint matches what the node displays!      ║")
-	fmt.Println("╚══════════════════════════════════════════════════════════════╝")
-	fmt.Println()
+	var b strings.Builder
+	b.WriteString("\n")
+	b.WriteString("╔══════════════════════════════════════════════════════════════╗\n")
+	b.WriteString("║                    NODE PAIRING REQUEST                       ║\n")
+	b.WriteString("╠══════════════════════════════════════════════════════════════╣\n")
+	b.WriteString(fmt.Sprintf("║  Node ID:     %-46s  ║\n", truncate(nodeID, 46)))
+	b.WriteString(fmt.Sprintf("║  Fingerprint: %-46s  ║\n", fp))
+	b.WriteString("╠══════════════════════════════════════════════════════════════╣\n")
+	b.WriteString("║  Verify the fingerprint matches what the node displays!      ║\n")
+	b.WriteString("╚══════════════════════════════════════════════════════════════╝\n")
+	b.WriteString("\n")
+	return b.String()
 }
 
 func truncate(s string, maxLen int) string {

@@ -1,6 +1,7 @@
 package p2p
 
 import (
+	"context"
 	"crypto/ed25519"
 	"encoding/json"
 	"fmt"
@@ -33,11 +34,9 @@ type Manager struct {
 	// Metrics Callback - called periodically to get encrypted metrics
 	GetMetrics func() *pb.EncryptedMetrics
 
-	// Incoming Command Callback - called when data is received via P2P
-	OnCommand func(sessionID string, data []byte)
-
-	// On Response Callback - called when a response is received
-	OnResponse func(sessionID string, data []byte)
+	// CommandHandler processes incoming P2P commands and returns a response.
+	// This replaces the generic OnCommand callback with typed request-response.
+	CommandHandler func(ctx context.Context, cmdType int32, payload []byte) (status string, errMsg string, data []byte)
 
 	// OnApprovalDecision - called when approval decision received via P2P
 	OnApprovalDecision func(sessionID string, decision *ApprovalDecision)
@@ -292,21 +291,42 @@ func (m *Manager) streamMetrics(d *webrtc.DataChannel, sessionID string) {
 	ticker := time.NewTicker(1 * time.Second)
 	defer ticker.Stop()
 
-	for {
-		select {
-		case <-ticker.C:
-			// Check if channel open
-			if d.ReadyState() != webrtc.DataChannelStateOpen {
-				return
+	for range ticker.C {
+		// Check if channel open
+		if d.ReadyState() != webrtc.DataChannelStateOpen {
+			return
+		}
+
+		// Only send metrics to authenticated sessions with known public keys
+		if !m.IsSessionAuthenticated(sessionID) {
+			continue
+		}
+		pubKey := m.GetSessionPubKey(sessionID)
+		if pubKey == nil {
+			continue
+		}
+
+		if m.GetMetrics != nil {
+			metrics := m.GetMetrics()
+			metricsJSON, err := json.Marshal(metrics)
+			if err != nil {
+				continue
 			}
 
-			if m.GetMetrics != nil {
-				metrics := m.GetMetrics()
-				data, err := json.Marshal(metrics)
-				if err == nil {
-					d.Send(data)
-				}
+			// Wrap in P2PMessage and encrypt with session's public key
+			msg, err := NewP2PMessage(MessageTypeMetrics, json.RawMessage(metricsJSON))
+			if err != nil {
+				log.Printf("[P2P] Failed to create metrics message for %s: %v", sessionID, err)
+				continue
 			}
+
+			encData, err := EncryptP2PMessage(msg, pubKey)
+			if err != nil {
+				log.Printf("[P2P] Failed to encrypt metrics for %s: %v", sessionID, err)
+				continue
+			}
+
+			d.Send(encData)
 		}
 	}
 }
@@ -356,27 +376,15 @@ func (m *Manager) handleIncomingMessage(sessionID string, data []byte) {
 		return
 	}
 
-	// Try to decrypt if we have a private key
-	var msg *P2PMessage
-	var err error
-
 	if privKey == nil {
 		log.Printf("[P2P] SECURITY: Rejecting message from %s - no private key configured", sessionID)
 		return
 	}
 
 	// Require encrypted messages - no unencrypted fallback for security
-	msg, err = DecryptP2PMessage(data, privKey)
+	msg, err := DecryptP2PMessage(data, privKey)
 	if err != nil {
 		log.Printf("[P2P] SECURITY: Rejecting unencrypted/invalid message from %s: %v", sessionID, err)
-		return
-	}
-
-	if err != nil {
-		// Fallback to legacy command handler
-		if m.OnCommand != nil {
-			m.OnCommand(sessionID, data)
-		}
 		return
 	}
 
@@ -389,16 +397,70 @@ func (m *Manager) handleIncomingMessage(sessionID string, data []byte) {
 				log.Printf("[P2P] Failed to parse approval decision: %v", err)
 			}
 		}
-	case MessageTypeCommand, MessageTypeCommandResponse:
-		// Forward to legacy command handler
-		if m.OnCommand != nil {
-			m.OnCommand(sessionID, msg.Payload)
-		}
+	case MessageTypeCommand:
+		m.handleCommandMessage(sessionID, msg)
+	case MessageTypeCommandResponse:
+		log.Printf("[P2P] Received unexpected command_response from %s (node should not receive responses)", sessionID)
 	default:
-		// Unknown type, try legacy handler
-		if m.OnCommand != nil {
-			m.OnCommand(sessionID, data)
-		}
+		log.Printf("[P2P] Unknown message type %q from %s", msg.Type, sessionID)
+	}
+}
+
+// handleCommandMessage processes an incoming command and sends the response back via P2P.
+func (m *Manager) handleCommandMessage(sessionID string, msg *P2PMessage) {
+	if m.CommandHandler == nil {
+		log.Printf("[P2P] No CommandHandler set, ignoring command from %s", sessionID)
+		return
+	}
+
+	// Parse command payload
+	cmdPayload, err := msg.ParseCommandPayload()
+	if err != nil {
+		log.Printf("[P2P] Failed to parse command payload from %s: %v", sessionID, err)
+		return
+	}
+
+	requestID := msg.RequestID
+	if requestID == "" {
+		log.Printf("[P2P] Command from %s has no RequestID, cannot send response", sessionID)
+		return
+	}
+
+	// Execute the command handler
+	ctx := context.Background()
+	status, errMsg, data := m.CommandHandler(ctx, cmdPayload.CommandType, cmdPayload.Data)
+
+	// Build response
+	respPayload := &P2PCommandResponse{
+		RequestID: requestID,
+		Status:    status,
+		Error:     errMsg,
+		Data:      data,
+	}
+
+	respMsg, err := NewP2PMessageWithRequestID(MessageTypeCommandResponse, requestID, respPayload)
+	if err != nil {
+		log.Printf("[P2P] Failed to create response message: %v", err)
+		return
+	}
+
+	// Get session's public key for encryption
+	pubKey := m.GetSessionPubKey(sessionID)
+	if pubKey == nil {
+		log.Printf("[P2P] No public key for session %s, cannot send response", sessionID)
+		return
+	}
+
+	// Encrypt response
+	encData, err := EncryptP2PMessage(respMsg, pubKey)
+	if err != nil {
+		log.Printf("[P2P] Failed to encrypt response for %s: %v", sessionID, err)
+		return
+	}
+
+	// Send via data channel
+	if err := m.SendCommand(sessionID, encData); err != nil {
+		log.Printf("[P2P] Failed to send response to %s: %v", sessionID, err)
 	}
 }
 

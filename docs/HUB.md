@@ -883,14 +883,22 @@ Nodes can require real-time user approval for incoming connections using `ACTION
 # List pending approval requests
 nitella pending
 
-# Approve a connection (with duration)
-nitella approve <request_id> 1h      # Allow for 1 hour
-nitella approve <request_id> 24h     # Allow for 24 hours
+# Approve a connection (default: cache mode, 5 min)
+nitella approve <request_id>
+nitella approve cache <request_id> 1h    # Cache approval for 1 hour
+nitella approve once <request_id>        # Allow this connection only
 
-# Deny a connection
+# Deny a connection (default: connection-only)
 nitella deny <request_id>
-nitella deny <request_id> "Suspicious source"
+nitella deny cache <request_id> 1h       # Cache denial for 1 hour
+nitella deny <request_id> "Suspicious"   # Deny with reason
 ```
+
+**Retention modes:**
+- `cache` — Decision cached for duration; future connections from same source IP auto-handled
+- `once` / `single` / `conn` — Decision applies only to this connection
+
+**Duration formats:** `10s`, `1m`, `5m`, `10m`, `1h`, `1d`, `1w`, `1y`
 
 **Note:** Global IP blocking/allowing (`block`, `allow`, `global-rules`) commands work locally on nitellad, not via Hub. Use `nitella send <node-id> block <ip>` to send commands to remote nodes.
 
@@ -999,20 +1007,21 @@ service NodeService {
 # View logs statistics
 nitella logs stats
 
-# List logs (encrypted metadata)
-nitella logs list
+# List logs by routing token
+nitella logs list <routing_token>
 
-# List logs for specific node
-nitella logs list --node <node-id>
+# List logs with filters
+nitella logs list <routing_token> --node <node_id> --limit 100
 
 # Delete logs by routing token
-nitella logs delete --token <routing-token>
+nitella logs delete <routing_token> --all
 
-# Delete logs for specific node
-nitella logs delete --node <node-id>
+# Delete logs with filters
+nitella logs delete <routing_token> --node <node_id> --before 2026-01-01
 
 # Cleanup old logs (admin operation)
-nitella logs cleanup --days 30
+nitella logs cleanup <days>
+nitella logs cleanup 30 --dry-run
 ```
 
 ### Admin API for Logs

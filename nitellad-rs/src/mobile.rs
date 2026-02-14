@@ -1,11 +1,11 @@
-use std::ffi::{CStr};
+use crate::mobile_service::MobileLogicService;
+use lazy_static::lazy_static;
+use std::ffi::CStr;
 use std::os::raw::{c_char, c_int, c_longlong, c_void};
 use std::ptr;
 use std::slice;
 use std::sync::{Arc, Mutex};
-use lazy_static::lazy_static;
 use tokio::runtime::Runtime;
-use crate::mobile_service::MobileLogicService;
 
 #[repr(C)]
 pub struct CoreArgument {
@@ -52,7 +52,9 @@ pub extern "C" fn StartGrpcServer(args: CoreArgument) -> c_int {
 
     let storage_path = unsafe {
         if !args.storage_path.is_null() {
-            CStr::from_ptr(args.storage_path).to_string_lossy().to_string()
+            CStr::from_ptr(args.storage_path)
+                .to_string_lossy()
+                .to_string()
         } else {
             ".".to_string()
         }
@@ -60,7 +62,7 @@ pub extern "C" fn StartGrpcServer(args: CoreArgument) -> c_int {
 
     // Initialize Service
     let service = Arc::new(MobileLogicService::new(storage_path));
-    
+
     // Run initialization logic async
     let service_clone = service.clone();
     rt.block_on(async move {
@@ -92,10 +94,17 @@ pub extern "C" fn StopGrpcServer() -> c_int {
 }
 
 #[no_mangle]
-pub extern "C" fn InvokeBackend(method: *mut c_char, data: *mut c_void, data_len: c_longlong) -> FfiData {
+pub extern "C" fn InvokeBackend(
+    method: *mut c_char,
+    data: *mut c_void,
+    data_len: c_longlong,
+) -> FfiData {
     let method_str = unsafe {
         if method.is_null() {
-            return FfiData { data: ptr::null_mut(), len: 0 };
+            return FfiData {
+                data: ptr::null_mut(),
+                len: 0,
+            };
         }
         CStr::from_ptr(method).to_string_lossy().to_string()
     };
@@ -112,32 +121,36 @@ pub extern "C" fn InvokeBackend(method: *mut c_char, data: *mut c_void, data_len
     let runtime_lock = RUNTIME.lock().unwrap();
 
     if let (Some(service), Some(rt)) = (service_opt, runtime_lock.as_ref()) {
-        let result = rt.block_on(async move {
-            service.invoke(&method_str, input_data).await
-        });
+        let result = rt.block_on(async move { service.invoke(&method_str, input_data).await });
 
         // Copy result to C-compatible buffer
         let (ptr, len) = alloc_c_buffer(&result);
-        FfiData { data: ptr, len: len as c_longlong }
+        FfiData {
+            data: ptr,
+            len: len as c_longlong,
+        }
     } else {
         // Error: Service not initialized
         let err_msg = "Service not initialized".as_bytes();
         let (ptr, len) = alloc_c_buffer(err_msg);
         // Negative length indicates error in some conventions, but FfiData usually just returns data.
         // The Go code returns error string with negative length?
-        // Checking Go code: 
+        // Checking Go code:
         // return C.FfiData{data: cErr, len: C.longlong(-len(errStr))}
-        FfiData { data: ptr, len: -(len as c_longlong) }
+        FfiData {
+            data: ptr,
+            len: -(len as c_longlong),
+        }
     }
 }
 
 #[no_mangle]
 pub extern "C" fn InvokeBackendWithMeta(
-    method: *mut c_char, 
-    data: *mut c_void, 
-    data_len: c_longlong, 
-    _meta: *mut c_void, 
-    _meta_len: c_longlong
+    method: *mut c_char,
+    data: *mut c_void,
+    data_len: c_longlong,
+    _meta: *mut c_void,
+    _meta_len: c_longlong,
 ) -> FfiData {
     InvokeBackend(method, data, data_len)
 }
@@ -155,24 +168,69 @@ pub extern "C" fn RegisterDartCallback(cb: InvokeDartCallback) {
 }
 
 #[no_mangle]
-pub extern "C" fn SendFfiResponse(_request_id: c_longlong, _data: *mut c_void, _data_len: c_longlong) {
+pub extern "C" fn SendFfiResponse(
+    _request_id: c_longlong,
+    _data: *mut c_void,
+    _data_len: c_longlong,
+) {
     // Logic to handle async responses would go here (matching Go's pendingRequests)
     // For now, we stub it as we primarily use sync InvokeBackend for this MVP
 }
 
 // Stubs for Streaming and Caching
-#[no_mangle] pub extern "C" fn RegisterStreamCallback(_cb: StreamCallback) {}
-#[no_mangle] pub extern "C" fn InvokeBackendServerStream(_m: *mut c_char, _d: *mut c_void, _l: c_longlong) -> c_longlong { -1 }
-#[no_mangle] pub extern "C" fn InvokeBackendClientStream(_m: *mut c_char) -> c_longlong { -1 }
-#[no_mangle] pub extern "C" fn InvokeBackendBidiStream(_m: *mut c_char) -> c_longlong { -1 }
-#[no_mangle] pub extern "C" fn SendStreamData(_id: c_longlong, _d: *mut c_void, _l: c_longlong) -> c_int { -1 }
-#[no_mangle] pub extern "C" fn CloseStream(_id: c_longlong) {}
-#[no_mangle] pub extern "C" fn CloseStreamInput(_id: c_longlong) {}
-#[no_mangle] pub extern "C" fn StreamReady(_id: c_longlong) {}
-#[no_mangle] pub extern "C" fn CacheGet(_s: *mut c_char, _k: *mut c_char) -> FfiData { FfiData { data: ptr::null_mut(), len: 0 } }
-#[no_mangle] pub extern "C" fn CachePut(_s: *mut c_char, _k: *mut c_char, _d: *mut c_void, _l: c_longlong, _t: c_longlong) -> c_int { -1 }
-#[no_mangle] pub extern "C" fn CacheContains(_s: *mut c_char, _k: *mut c_char) -> c_int { -1 }
-#[no_mangle] pub extern "C" fn CacheDelete(_s: *mut c_char, _k: *mut c_char) -> c_int { -1 }
+#[no_mangle]
+pub extern "C" fn RegisterStreamCallback(_cb: StreamCallback) {}
+#[no_mangle]
+pub extern "C" fn InvokeBackendServerStream(
+    _m: *mut c_char,
+    _d: *mut c_void,
+    _l: c_longlong,
+) -> c_longlong {
+    -1
+}
+#[no_mangle]
+pub extern "C" fn InvokeBackendClientStream(_m: *mut c_char) -> c_longlong {
+    -1
+}
+#[no_mangle]
+pub extern "C" fn InvokeBackendBidiStream(_m: *mut c_char) -> c_longlong {
+    -1
+}
+#[no_mangle]
+pub extern "C" fn SendStreamData(_id: c_longlong, _d: *mut c_void, _l: c_longlong) -> c_int {
+    -1
+}
+#[no_mangle]
+pub extern "C" fn CloseStream(_id: c_longlong) {}
+#[no_mangle]
+pub extern "C" fn CloseStreamInput(_id: c_longlong) {}
+#[no_mangle]
+pub extern "C" fn StreamReady(_id: c_longlong) {}
+#[no_mangle]
+pub extern "C" fn CacheGet(_s: *mut c_char, _k: *mut c_char) -> FfiData {
+    FfiData {
+        data: ptr::null_mut(),
+        len: 0,
+    }
+}
+#[no_mangle]
+pub extern "C" fn CachePut(
+    _s: *mut c_char,
+    _k: *mut c_char,
+    _d: *mut c_void,
+    _l: c_longlong,
+    _t: c_longlong,
+) -> c_int {
+    -1
+}
+#[no_mangle]
+pub extern "C" fn CacheContains(_s: *mut c_char, _k: *mut c_char) -> c_int {
+    -1
+}
+#[no_mangle]
+pub extern "C" fn CacheDelete(_s: *mut c_char, _k: *mut c_char) -> c_int {
+    -1
+}
 
 // Helper to allocate buffer using libc::malloc
 fn alloc_c_buffer(data: &[u8]) -> (*mut c_void, usize) {

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/hex"
 	"flag"
@@ -18,10 +19,12 @@ import (
 	pb "github.com/ivere27/nitella/pkg/api/proxy"
 	cfgpkg "github.com/ivere27/nitella/pkg/config"
 	"github.com/ivere27/nitella/pkg/geoip"
+	"github.com/ivere27/nitella/pkg/identity"
 	"github.com/ivere27/nitella/pkg/log"
 	"github.com/ivere27/nitella/pkg/node"
 	"github.com/ivere27/nitella/pkg/node/admincert"
 	"github.com/ivere27/nitella/pkg/node/stats"
+	nitellaPprof "github.com/ivere27/nitella/pkg/pprof"
 	"github.com/ivere27/nitella/pkg/server"
 	"github.com/ivere27/synurang/pkg/synurang"
 	"google.golang.org/grpc"
@@ -70,7 +73,11 @@ func main() {
 	adminPort := flag.Int("admin-port", 0, "Port for Admin gRPC API (0 = disabled)")
 	adminToken := flag.String("admin-token", os.Getenv("NITELLA_TOKEN"), "Authentication token for Admin API (env: NITELLA_TOKEN)")
 
+	// Profiling flags (only effective with -tags pprof)
+	pprofPort := flag.Int("pprof-port", 0, "Port for pprof HTTP server (0 = disabled, requires -tags pprof build)")
+
 	flag.Parse()
+	nitellaPprof.Start(*pprofPort)
 
 	log.Println("Nitella Proxy Daemon starting...")
 
@@ -244,7 +251,20 @@ func main() {
 			for _, router := range yamlConfig.TCP.Routers {
 				if containsString(router.EntryPoints, name) && router.Service != "" {
 					if svc, ok := yamlConfig.TCP.Services[router.Service]; ok {
-						lc.defaultBackend = svc.Address
+						if svc.LoadBalancer != nil && len(svc.LoadBalancer.Servers) > 0 {
+							// Use first server from load balancer list
+							srv := svc.LoadBalancer.Servers[0]
+							if srv.Address != "" {
+								lc.defaultBackend = srv.Address
+							} else {
+								lc.defaultBackend = srv.URL
+							}
+							if len(svc.LoadBalancer.Servers) > 1 {
+								log.Printf("[Config] Warning: Service '%s' defines multiple servers, but load balancing is not supported yet. Using first server: %s", router.Service, lc.defaultBackend)
+							}
+						} else {
+							lc.defaultBackend = svc.Address
+						}
 						break
 					}
 				}
@@ -283,6 +303,8 @@ func main() {
 			actionType = common.ActionType_ACTION_TYPE_BLOCK
 		case "mock":
 			actionType = common.ActionType_ACTION_TYPE_MOCK
+		case "approval":
+			actionType = common.ActionType_ACTION_TYPE_REQUIRE_APPROVAL
 		default:
 			actionType = common.ActionType_ACTION_TYPE_ALLOW
 		}
@@ -326,6 +348,9 @@ func main() {
 				Preset: node.StringToMockPreset(lc.defaultMock),
 			}
 			log.Printf("  Default: MOCK (preset: %s)", lc.defaultMock)
+		} else if defaultAction == "approval" {
+			defaultRule.Action = common.ActionType_ACTION_TYPE_REQUIRE_APPROVAL
+			log.Printf("  Default: APPROVAL (manual approval mode)")
 		} else {
 			defaultRule.Action = common.ActionType_ACTION_TYPE_ALLOW
 			log.Printf("  Default: ALLOW (blacklist mode)")
@@ -345,6 +370,12 @@ func main() {
 		// Continue without Hub - standalone mode
 	}
 	_ = hubActive // Hub mode active - node can receive commands even without proxies
+
+	// Ensure ApprovalManager is initialized even if Hub is inactive (standalone mode)
+	if pm.Approval == nil {
+		log.Println("[INFO] Initializing local ApprovalManager (standalone mode)")
+		pm.SetApprovalManager(node.NewApprovalManager(&localAlertSender{}))
+	}
 
 	// Start Admin API Server with TLS
 	var adminServer *grpc.Server
@@ -378,7 +409,9 @@ func main() {
 			grpc.UnaryInterceptor(server.ProxyAdminAuthInterceptor(*adminToken)),
 			grpc.StreamInterceptor(server.ProxyAdminStreamAuthInterceptor(*adminToken)),
 		)
-		server.RegisterProxyAdmin(adminServer, server.NewProxyAdminServer(pm))
+		nodePrivKey := certMgr.GetCAPrivateKey()
+		nodeFingerprint := identity.GenerateFingerprint(nodePrivKey.Public().(ed25519.PublicKey))
+		server.RegisterProxyAdmin(adminServer, server.NewProxyAdminServer(pm, nodePrivKey, nodeFingerprint))
 
 		log.Printf("[Admin] gRPC API listening on :%d (TLS enabled)", *adminPort)
 		log.Printf("[Admin] Clients should use: --tls-ca %s", certMgr.GetCACertPath())
@@ -553,4 +586,12 @@ func runChild() {
 	}
 
 	log.Println("[child] Goodbye.")
+}
+
+// localAlertSender handles alerts when Hub is not connected
+type localAlertSender struct{}
+
+func (s *localAlertSender) SendAlert(alert *common.Alert, info string) error {
+	log.Printf("[Local] Alert generated (pending approval): %s - %s", alert.Id, info)
+	return nil
 }

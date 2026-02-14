@@ -1,0 +1,53 @@
+FROM ubuntu:22.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Install dependencies
+RUN apt-get update && apt-get install -y \
+    curl git unzip xz-utils zip libglu1-mesa openjdk-21-jdk cmake ninja-build build-essential patch \
+    clang pkg-config libgtk-3-dev rsync protobuf-compiler libprotobuf-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Go 1.24.1
+RUN curl -L https://go.dev/dl/go1.24.1.linux-amd64.tar.gz -o go.tar.gz && \
+    tar -C /usr/local -xzf go.tar.gz && \
+    rm go.tar.gz
+ENV PATH=$PATH:/usr/local/go/bin
+ENV GOPATH=/go
+ENV PATH=$PATH:$GOPATH/bin
+
+# Install Flutter (Stable)
+RUN git clone https://github.com/flutter/flutter.git -b stable /opt/flutter
+ENV PATH=$PATH:/opt/flutter/bin
+RUN git config --global --add safe.directory /opt/flutter
+
+# Install Android SDK and NDK
+ENV ANDROID_HOME=/opt/android-sdk
+ENV PATH=$PATH:$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME/platform-tools
+
+RUN mkdir -p $ANDROID_HOME/cmdline-tools && \
+    curl -L https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip -o cmdline-tools.zip && \
+    unzip cmdline-tools.zip -d $ANDROID_HOME/cmdline-tools && \
+    mv $ANDROID_HOME/cmdline-tools/cmdline-tools $ANDROID_HOME/cmdline-tools/latest && \
+    rm cmdline-tools.zip
+
+# Accept licenses and install packages
+RUN yes | sdkmanager --licenses && \
+    sdkmanager "platform-tools" "platforms;android-34" "build-tools;34.0.0" "ndk;23.1.7779620"
+
+# Set ANDROID_NDK_HOME
+ENV ANDROID_NDK_HOME=$ANDROID_HOME/ndk/23.1.7779620
+
+# Install UPX
+RUN apt-get update && apt-get install -y upx
+
+# Pre-download Flutter artifacts
+RUN flutter config --no-analytics && flutter doctor
+
+# Install Go Protobuf plugins
+RUN go install google.golang.org/protobuf/cmd/protoc-gen-go@latest && \
+    go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@latest
+
+ENV PATH=$PATH:/root/.pub-cache/bin
+
+WORKDIR /app

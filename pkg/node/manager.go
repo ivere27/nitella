@@ -412,6 +412,38 @@ func (m *ProxyManager) CreateProxy(req *pb.CreateProxyRequest) (*pb.CreateProxyR
 	return m.CreateProxyWithID("", req)
 }
 
+// RemoveProxy completely removes a proxy (stop listener, delete from map and DB).
+func (m *ProxyManager) RemoveProxy(id string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	mp, ok := m.proxies[id]
+	if !ok {
+		return nil // Already gone
+	}
+
+	// Stop event forwarder and listener
+	m.stopEventForwarder(mp)
+	if mp.Listener != nil {
+		mp.Listener.Stop()
+		mp.Listener = nil
+	}
+
+	// Stop health check
+	if m.HealthCheck != nil {
+		m.HealthCheck.RemoveService(id)
+	}
+
+	delete(m.proxies, id)
+
+	// DB cleanup
+	if m.db != nil {
+		m.db.ID(id).Delete(new(ProxyModel))
+	}
+
+	return nil
+}
+
 func (m *ProxyManager) DisableProxy(id string) (*pb.DisableProxyResponse, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -1036,20 +1068,42 @@ func (m *ProxyManager) CloseConnection(proxyID, connID string) error {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
-	if proxy, ok := m.proxies[proxyID]; ok && proxy.Listener != nil {
-		return proxy.Listener.CloseConnection(proxyID, connID)
+	if proxyID != "" {
+		if proxy, ok := m.proxies[proxyID]; ok && proxy.Listener != nil {
+			return proxy.Listener.CloseConnection(proxyID, connID)
+		}
+		return fmt.Errorf("proxy not found")
 	}
-	return fmt.Errorf("proxy not found")
+
+	// Search all proxies for the connection
+	for pid, proxy := range m.proxies {
+		if proxy.Listener != nil {
+			if err := proxy.Listener.CloseConnection(pid, connID); err == nil {
+				return nil
+			}
+		}
+	}
+	return fmt.Errorf("connection not found: %s", connID)
 }
 
 func (m *ProxyManager) CloseAllConnections(proxyID string) error {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
-	if proxy, ok := m.proxies[proxyID]; ok && proxy.Listener != nil {
-		return proxy.Listener.CloseAllConnections()
+	if proxyID != "" {
+		if proxy, ok := m.proxies[proxyID]; ok && proxy.Listener != nil {
+			return proxy.Listener.CloseAllConnections()
+		}
+		return fmt.Errorf("proxy not found")
 	}
-	return fmt.Errorf("proxy not found")
+
+	// Close all connections on all proxies
+	for _, proxy := range m.proxies {
+		if proxy.Listener != nil {
+			proxy.Listener.CloseAllConnections()
+		}
+	}
+	return nil
 }
 
 func (m *ProxyManager) ConfigureGeoIP(req *pb.ConfigureGeoIPRequest) (*pb.ConfigureGeoIPResponse, error) {

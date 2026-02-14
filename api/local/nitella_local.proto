@@ -1,0 +1,2271 @@
+syntax = "proto3";
+
+package nitella.local;
+
+option go_package = "github.com/ivere27/nitella/pkg/api/local";
+
+import "google/protobuf/timestamp.proto";
+import "google/protobuf/empty.proto";
+import "google/protobuf/field_mask.proto";
+import "common/common.proto";
+import "proxy/proxy.proto";
+
+// ===========================================================================
+// MOBILE LOGIC SERVICE - FFI interface for Flutter app
+// ===========================================================================
+// This service runs embedded in the mobile app via Synurang FFI.
+// It provides local business logic and coordinates with Hub for remote ops.
+
+service MobileLogicService {
+  // ---------------------------------------------------------------------------
+  // Lifecycle
+  // ---------------------------------------------------------------------------
+
+  // Initialize the mobile backend with data directory
+  rpc Initialize(InitializeRequest) returns (InitializeResponse);
+
+  // Shutdown the mobile backend gracefully
+  rpc Shutdown(google.protobuf.Empty) returns (google.protobuf.Empty);
+
+  // Get backend-owned startup state for app routing (setup/auth/ready)
+  rpc GetBootstrapState(google.protobuf.Empty) returns (BootstrapStateResponse);
+
+  // ---------------------------------------------------------------------------
+  // Identity Management (BIP-39 Mnemonic)
+  // ---------------------------------------------------------------------------
+
+  // Get current identity status
+  rpc GetIdentity(google.protobuf.Empty) returns (IdentityInfo);
+
+  // Create new identity with generated mnemonic
+  rpc CreateIdentity(CreateIdentityRequest) returns (CreateIdentityResponse);
+
+  // Restore identity from existing mnemonic
+  rpc RestoreIdentity(RestoreIdentityRequest) returns (RestoreIdentityResponse);
+
+  // Import identity from certificate/key PEM files
+  rpc ImportIdentity(ImportIdentityRequest) returns (ImportIdentityResponse);
+
+  // Unlock identity with passphrase (if encrypted)
+  rpc UnlockIdentity(UnlockIdentityRequest) returns (UnlockIdentityResponse);
+
+  // Lock identity (clear from memory)
+  rpc LockIdentity(google.protobuf.Empty) returns (google.protobuf.Empty);
+
+  // Change passphrase
+  rpc ChangePassphrase(ChangePassphraseRequest) returns (google.protobuf.Empty);
+
+  // Evaluate passphrase strength/policy (backend-owned security logic)
+  rpc EvaluatePassphrase(EvaluatePassphraseRequest) returns (EvaluatePassphraseResponse);
+
+  // Delete identity and all associated data (nodes, settings, templates)
+  rpc ResetIdentity(google.protobuf.Empty) returns (google.protobuf.Empty);
+
+  // ---------------------------------------------------------------------------
+  // Node Management (Paired Nodes)
+  // ---------------------------------------------------------------------------
+
+  // List all paired nodes
+  rpc ListNodes(ListNodesRequest) returns (ListNodesResponse);
+
+  // Get detailed info for a specific node
+  rpc GetNode(GetNodeRequest) returns (NodeInfo);
+
+  // Get node detail snapshot for status/rules/stats surfaces
+  rpc GetNodeDetailSnapshot(GetNodeDetailSnapshotRequest) returns (NodeDetailSnapshot);
+
+  // Update node metadata (name, tags)
+  rpc UpdateNode(UpdateNodeRequest) returns (NodeInfo);
+
+  // Remove/unpair a node
+  rpc RemoveNode(RemoveNodeRequest) returns (google.protobuf.Empty);
+
+  // Add a node with direct connection (no Hub required)
+  // Used to connect to standalone nitellad admin API
+  rpc AddNodeDirect(AddNodeDirectRequest) returns (AddNodeDirectResponse);
+
+  // Test connection to a direct node
+  rpc TestDirectConnection(TestDirectConnectionRequest) returns (TestDirectConnectionResponse);
+
+  // ---------------------------------------------------------------------------
+  // Proxy Management (Remote via Node)
+  // ---------------------------------------------------------------------------
+
+  // List proxies on a node
+  rpc ListProxies(ListProxiesRequest) returns (ListProxiesResponse);
+
+  // Get node+proxy snapshot for proxy surfaces
+  rpc GetProxiesSnapshot(GetProxiesSnapshotRequest) returns (GetProxiesSnapshotResponse);
+
+  // Get proxy details
+  rpc GetProxy(GetProxyRequest) returns (ProxyInfo);
+
+  // Create new proxy on node
+  rpc AddProxy(AddProxyRequest) returns (ProxyInfo);
+
+  // Update proxy configuration
+  rpc UpdateProxy(UpdateProxyRequest) returns (ProxyInfo);
+
+  // Enable/disable all proxies on a node in one backend-owned operation
+  rpc SetNodeProxiesRunning(SetNodeProxiesRunningRequest) returns (SetNodeProxiesRunningResponse);
+
+  // Remove proxy from node
+  rpc RemoveProxy(RemoveProxyRequest) returns (google.protobuf.Empty);
+
+  // ---------------------------------------------------------------------------
+  // Rule Management
+  // ---------------------------------------------------------------------------
+
+  // List rules for a proxy
+  rpc ListRules(ListRulesRequest) returns (ListRulesResponse);
+
+  // Get rule details
+  rpc GetRule(GetRuleRequest) returns (nitella.proxy.Rule);
+
+  // Add new rule to proxy
+  rpc AddRule(AddRuleRequest) returns (nitella.proxy.Rule);
+
+  // Add a quick rule with backend-owned mapping (block/allow/ip/geo shortcuts)
+  rpc AddQuickRule(AddQuickRuleRequest) returns (AddQuickRuleResponse);
+
+  // Update existing rule
+  rpc UpdateRule(UpdateRuleRequest) returns (nitella.proxy.Rule);
+
+  // Remove rule from proxy
+  rpc RemoveRule(RemoveRuleRequest) returns (google.protobuf.Empty);
+
+  // Block IP address (creates block rule)
+  rpc BlockIP(BlockIPRequest) returns (BlockIPResponse);
+
+  // Block ISP (creates block rule)
+  rpc BlockISP(BlockISPRequest) returns (BlockISPResponse);
+
+  // Block Country (creates block rule)
+  rpc BlockCountry(BlockCountryRequest) returns (BlockCountryResponse);
+
+  // Global Rules (node-level, cross-proxy runtime rules)
+  rpc AddGlobalRule(AddGlobalRuleRequest) returns (AddGlobalRuleResponse);
+  rpc ListGlobalRules(ListGlobalRulesRequest) returns (ListGlobalRulesResponse);
+  rpc RemoveGlobalRule(RemoveGlobalRuleRequest) returns (RemoveGlobalRuleResponse);
+
+  // ---------------------------------------------------------------------------
+  // Approval Workflow
+  // ---------------------------------------------------------------------------
+
+  // List pending approval requests (real-time from nodes)
+  rpc ListPendingApprovals(ListPendingApprovalsRequest) returns (ListPendingApprovalsResponse);
+
+  // Get pending + history snapshot for approval center views
+  rpc GetApprovalsSnapshot(GetApprovalsSnapshotRequest) returns (GetApprovalsSnapshotResponse);
+
+  // Approve a connection request
+  rpc ApproveRequest(ApproveRequestRequest) returns (ApproveRequestResponse);
+
+  // Deny a connection request
+  rpc DenyRequest(DenyRequestRequest) returns (DenyRequestResponse);
+
+  // Resolve an approval request (backend-owned approve/deny orchestration)
+  rpc ResolveApprovalDecision(ResolveApprovalDecisionRequest) returns (ResolveApprovalDecisionResponse);
+
+  // Stream approval requests in real-time
+  rpc StreamApprovals(StreamApprovalsRequest) returns (stream ApprovalRequest);
+
+  // List approval decision history (backend-owned)
+  rpc ListApprovalHistory(ListApprovalHistoryRequest) returns (ListApprovalHistoryResponse);
+
+  // Clear approval decision history
+  rpc ClearApprovalHistory(ClearApprovalHistoryRequest) returns (ClearApprovalHistoryResponse);
+
+  // ---------------------------------------------------------------------------
+  // Connection Statistics
+  // ---------------------------------------------------------------------------
+
+  // Get connection statistics summary
+  rpc GetConnectionStats(GetConnectionStatsRequest) returns (ConnectionStats);
+
+  // List active connections on a node/proxy
+  rpc ListConnections(ListConnectionsRequest) returns (ListConnectionsResponse);
+
+  // Get IP statistics
+  rpc GetIPStats(GetIPStatsRequest) returns (GetIPStatsResponse);
+
+  // Get geo statistics
+  rpc GetGeoStats(GetGeoStatsRequest) returns (GetGeoStatsResponse);
+
+  // Stream connection events
+  rpc StreamConnections(StreamConnectionsRequest) returns (stream ConnectionEvent);
+
+  // Close a specific connection
+  rpc CloseConnection(CloseConnectionRequest) returns (CloseConnectionResponse);
+
+  // Close all connections on a proxy
+  rpc CloseAllConnections(CloseAllConnectionsRequest) returns (CloseAllConnectionsResponse);
+
+  // Close all connections across every proxy on a node
+  rpc CloseAllNodeConnections(CloseAllNodeConnectionsRequest) returns (CloseAllNodeConnectionsResponse);
+
+  // ---------------------------------------------------------------------------
+  // Pairing (PAKE and QR Code)
+  // ---------------------------------------------------------------------------
+
+  // Start PAKE pairing session (returns human-readable code)
+  rpc StartPairing(StartPairingRequest) returns (StartPairingResponse);
+
+  // Join existing pairing session using code from node
+  rpc JoinPairing(JoinPairingRequest) returns (JoinPairingResponse);
+
+  // Complete PAKE pairing (after code exchange)
+  rpc CompletePairing(CompletePairingRequest) returns (CompletePairingResponse);
+
+  // Finalize pairing decision (approve/reject) for PAKE or offline QR sessions
+  rpc FinalizePairing(FinalizePairingRequest) returns (FinalizePairingResponse);
+
+  // Cancel ongoing pairing session
+  rpc CancelPairing(CancelPairingRequest) returns (google.protobuf.Empty);
+
+  // Generate QR code data for offline pairing
+  rpc GenerateQRCode(GenerateQRCodeRequest) returns (GenerateQRCodeResponse);
+
+  // Scan and process QR code from node
+  rpc ScanQRCode(ScanQRCodeRequest) returns (ScanQRCodeResponse);
+
+  // Generate QR response (signed certificate) for node to scan
+  rpc GenerateQRResponse(GenerateQRReplyRequest) returns (GenerateQRReplyResponse);
+
+  // ---------------------------------------------------------------------------
+  // Templates
+  // ---------------------------------------------------------------------------
+
+  // List available templates
+  rpc ListTemplates(ListTemplatesRequest) returns (ListTemplatesResponse);
+
+  // Get template details
+  rpc GetTemplate(GetTemplateRequest) returns (Template);
+
+  // Create new template from current config
+  rpc CreateTemplate(CreateTemplateRequest) returns (Template);
+
+  // Apply template to a node
+  rpc ApplyTemplate(ApplyTemplateRequest) returns (ApplyTemplateResponse);
+
+  // Delete a template
+  rpc DeleteTemplate(DeleteTemplateRequest) returns (google.protobuf.Empty);
+
+  // Sync templates with Hub
+  rpc SyncTemplates(google.protobuf.Empty) returns (SyncTemplatesResponse);
+
+  // Export template as YAML (backend-owned format/policy)
+  rpc ExportTemplateYaml(ExportTemplateYamlRequest) returns (ExportTemplateYamlResponse);
+
+  // Import template from YAML (backend-owned parsing/validation)
+  rpc ImportTemplateYaml(ImportTemplateYamlRequest) returns (ImportTemplateYamlResponse);
+
+  // ---------------------------------------------------------------------------
+  // Settings
+  // ---------------------------------------------------------------------------
+
+  // Get current settings
+  rpc GetSettings(google.protobuf.Empty) returns (Settings);
+
+  // Get identity + hub + p2p settings snapshot for thin settings surfaces
+  rpc GetSettingsOverviewSnapshot(google.protobuf.Empty) returns (SettingsOverviewSnapshot);
+
+  // Update settings
+  rpc UpdateSettings(UpdateSettingsRequest) returns (Settings);
+
+  // ---------------------------------------------------------------------------
+  // FCM (Firebase Cloud Messaging)
+  // ---------------------------------------------------------------------------
+
+  // Register FCM token for push notifications
+  rpc RegisterFCMToken(RegisterFCMTokenRequest) returns (google.protobuf.Empty);
+
+  // Unregister FCM token
+  rpc UnregisterFCMToken(google.protobuf.Empty) returns (google.protobuf.Empty);
+
+  // ---------------------------------------------------------------------------
+  // Hub Connection
+  // ---------------------------------------------------------------------------
+
+  // Connect to Hub server
+  rpc ConnectToHub(ConnectToHubRequest) returns (ConnectToHubResponse);
+
+  // Disconnect from Hub
+  rpc DisconnectFromHub(google.protobuf.Empty) returns (google.protobuf.Empty);
+
+  // Get Hub connection status
+  rpc GetHubStatus(google.protobuf.Empty) returns (HubStatus);
+
+  // Get hub settings snapshot for settings/onboarding surfaces
+  rpc GetHubSettingsSnapshot(google.protobuf.Empty) returns (HubSettingsSnapshot);
+
+  // Get aggregated hub/node overview for thin clients
+  rpc GetHubOverview(google.protobuf.Empty) returns (HubOverview);
+
+  // Get hub dashboard snapshot for home/status surfaces
+  rpc GetHubDashboardSnapshot(GetHubDashboardSnapshotRequest) returns (HubDashboardSnapshot);
+
+  // Register user with Hub
+  rpc RegisterUser(RegisterUserRequest) returns (RegisterUserResponse);
+
+  // Fetch Hub's CA certificate for TOFU (Trust On First Use) verification
+  rpc FetchHubCA(FetchHubCARequest) returns (FetchHubCAResponse);
+
+  // Run Hub onboarding flow (connect + optional TOFU + register)
+  rpc OnboardHub(OnboardHubRequest) returns (OnboardHubResponse);
+
+  // Ensure Hub connection using backend-owned defaults/state (no registration)
+  rpc EnsureHubConnected(EnsureHubConnectedRequest) returns (OnboardHubResponse);
+
+  // Ensure Hub registration using backend-owned defaults/state
+  rpc EnsureHubRegistered(EnsureHubRegisteredRequest) returns (OnboardHubResponse);
+
+  // Resolve a pending Hub trust challenge and continue onboarding
+  rpc ResolveHubTrustChallenge(ResolveHubTrustChallengeRequest) returns (OnboardHubResponse);
+
+  // ---------------------------------------------------------------------------
+  // P2P Management
+  // ---------------------------------------------------------------------------
+
+  // Get current P2P connection status
+  rpc GetP2PStatus(google.protobuf.Empty) returns (P2PStatus);
+
+  // Get P2P + settings snapshot for P2P configuration surfaces
+  rpc GetP2PSettingsSnapshot(google.protobuf.Empty) returns (P2PSettingsSnapshot);
+
+  // Stream P2P status changes
+  rpc StreamP2PStatus(google.protobuf.Empty) returns (stream P2PStatus);
+
+  // Set P2P mode (auto, always, disabled)
+  rpc SetP2PMode(SetP2PModeRequest) returns (google.protobuf.Empty);
+
+  // ---------------------------------------------------------------------------
+  // GeoIP Lookup
+  // ---------------------------------------------------------------------------
+
+  // Lookup IP geolocation (with cache indicator)
+  rpc LookupIP(LookupIPRequest) returns (LookupIPResponse);
+
+  // Configure GeoIP mode/provider/database for a node
+  rpc ConfigureGeoIP(ConfigureGeoIPNodeRequest) returns (nitella.proxy.ConfigureGeoIPResponse);
+
+  // Get GeoIP runtime status for a node
+  rpc GetGeoIPStatus(GetGeoIPStatusNodeRequest) returns (nitella.proxy.GetGeoIPStatusResponse);
+
+  // Restart proxy listeners on a node
+  rpc RestartListeners(RestartListenersNodeRequest) returns (nitella.proxy.RestartListenersResponse);
+
+  // ---------------------------------------------------------------------------
+  // Local Proxy Config Storage (business logic owned by MobileLogicService)
+  // ---------------------------------------------------------------------------
+
+  // List proxy configs stored locally on this device
+  rpc ListLocalProxyConfigs(ListLocalProxyConfigsRequest) returns (ListLocalProxyConfigsResponse);
+
+  // Get local proxy config content + metadata
+  rpc GetLocalProxyConfig(GetLocalProxyConfigRequest) returns (GetLocalProxyConfigResponse);
+
+  // Import raw proxy file content into local storage
+  rpc ImportLocalProxyConfig(ImportLocalProxyConfigRequest) returns (ImportLocalProxyConfigResponse);
+
+  // Save/update local proxy config content + metadata
+  rpc SaveLocalProxyConfig(SaveLocalProxyConfigRequest) returns (SaveLocalProxyConfigResponse);
+
+  // Delete a local proxy config
+  rpc DeleteLocalProxyConfig(DeleteLocalProxyConfigRequest) returns (DeleteLocalProxyConfigResponse);
+
+  // Validate local proxy config (checksum/header/YAML/required sections)
+  rpc ValidateLocalProxyConfig(ValidateLocalProxyConfigRequest) returns (ValidateLocalProxyConfigResponse);
+
+  // ---------------------------------------------------------------------------
+  // Proxy Versioning (Hub sync)
+  // ---------------------------------------------------------------------------
+
+  // Push a proxy revision to Hub (encrypt + store)
+  rpc PushProxyRevision(PushProxyRevisionRequest) returns (PushProxyRevisionResponse);
+
+  // Push locally-stored proxy revision to Hub (backend orchestration)
+  rpc PushLocalProxyRevision(PushLocalProxyRevisionRequest) returns (PushLocalProxyRevisionResponse);
+
+  // Pull a proxy revision from Hub (fetch + decrypt)
+  rpc PullProxyRevision(PullProxyRevisionRequest) returns (PullProxyRevisionResponse);
+
+  // Diff local/remote proxy revisions in backend
+  rpc DiffProxyRevisions(DiffProxyRevisionsRequest) returns (DiffProxyRevisionsResponse);
+
+  // List proxy revision history on Hub
+  rpc ListProxyRevisions(ListProxyRevisionsRequest) returns (ListProxyRevisionsResponse);
+
+  // Flush old proxy revisions on Hub
+  rpc FlushProxyRevisions(FlushProxyRevisionsRequest) returns (FlushProxyRevisionsResponse);
+
+  // List proxy configs stored on Hub
+  rpc ListProxyConfigs(ListProxyConfigsRequest) returns (ListProxyConfigsResponse);
+
+  // Create a proxy config entry on Hub
+  rpc CreateProxyConfig(CreateProxyConfigRequest) returns (CreateProxyConfigResponse);
+
+  // Delete a proxy config from Hub
+  rpc DeleteProxyConfig(DeleteProxyConfigRequest) returns (DeleteProxyConfigResponse);
+
+  // ---------------------------------------------------------------------------
+  // Proxy Deployment (to nodes via E2E commands)
+  // ---------------------------------------------------------------------------
+
+  // Apply a proxy config to a node
+  rpc ApplyProxyToNode(ApplyProxyToNodeRequest) returns (ApplyProxyToNodeResponse);
+
+  // Remove a proxy config from a node
+  rpc UnapplyProxyFromNode(UnapplyProxyFromNodeRequest) returns (UnapplyProxyFromNodeResponse);
+
+  // Get proxies applied on a node
+  rpc GetAppliedProxies(GetAppliedProxiesRequest) returns (GetAppliedProxiesResponse);
+
+  // ---------------------------------------------------------------------------
+  // Allow IP (complement to BlockIP)
+  // ---------------------------------------------------------------------------
+
+  // Allow an IP address (creates allow rule)
+  rpc AllowIP(AllowIPRequest) returns (AllowIPResponse);
+
+  // ---------------------------------------------------------------------------
+  // Metrics Streaming
+  // ---------------------------------------------------------------------------
+
+  // Stream metrics from a node
+  rpc StreamMetrics(StreamMetricsRequest) returns (stream NodeMetrics);
+
+  // Get local runtime debug stats from MobileLogicService process
+  rpc GetDebugRuntimeStats(GetDebugRuntimeStatsRequest) returns (DebugRuntimeStats);
+
+  // ---------------------------------------------------------------------------
+  // Log Management (Admin)
+  // ---------------------------------------------------------------------------
+
+  // Get logs storage statistics
+  rpc GetLogsStats(GetLogsStatsRequest) returns (GetLogsStatsResponse);
+
+  // List logs for a routing token
+  rpc ListLogs(ListLogsRequest) returns (ListLogsResponse);
+
+  // Delete logs
+  rpc DeleteLogs(DeleteLogsRequest) returns (DeleteLogsResponse);
+
+  // Clean up old logs
+  rpc CleanupOldLogs(CleanupOldLogsRequest) returns (CleanupOldLogsResponse);
+
+  // ---------------------------------------------------------------------------
+  // Node Info from Hub
+  // ---------------------------------------------------------------------------
+
+  // Get node info directly from Hub (not via E2E command)
+  rpc GetNodeFromHub(GetNodeFromHubRequest) returns (GetNodeFromHubResponse);
+
+  // Register a node with Hub using an existing certificate (after PAKE pairing)
+  rpc RegisterNodeWithHub(RegisterNodeWithHubRequest) returns (RegisterNodeWithHubResponse);
+
+}
+
+// ===========================================================================
+// MOBILE UI SERVICE - Callback interface from Go to Flutter
+// ===========================================================================
+// This service is implemented by Flutter and called by Go backend.
+
+service MobileUIService {
+  // New approval request arrived
+  rpc OnApprovalRequest(ApprovalRequest) returns (google.protobuf.Empty);
+
+  // Node status changed (online/offline)
+  rpc OnNodeStatusChange(NodeStatusChange) returns (google.protobuf.Empty);
+
+  // Connection event (new connection, closed, blocked)
+  rpc OnConnectionEvent(ConnectionEvent) returns (google.protobuf.Empty);
+
+  // Alert notification
+  rpc OnAlert(Alert) returns (google.protobuf.Empty);
+
+  // Toast message
+  rpc OnToast(ToastMessage) returns (google.protobuf.Empty);
+}
+
+// ===========================================================================
+// ENUMS
+// ===========================================================================
+
+enum GeoStatsType {
+  GEO_STATS_TYPE_UNSPECIFIED = 0;
+  GEO_STATS_TYPE_COUNTRY = 1;
+  GEO_STATS_TYPE_CITY = 2;
+  GEO_STATS_TYPE_ISP = 3;
+}
+
+enum Theme {
+  THEME_UNSPECIFIED = 0;
+  THEME_LIGHT = 1;
+  THEME_DARK = 2;
+  THEME_SYSTEM = 3;
+}
+
+enum AlertSeverity {
+  ALERT_SEVERITY_UNSPECIFIED = 0;
+  ALERT_SEVERITY_INFO = 1;
+  ALERT_SEVERITY_WARNING = 2;
+  ALERT_SEVERITY_CRITICAL = 3;
+}
+
+enum ToastType {
+  TOAST_TYPE_UNSPECIFIED = 0;
+  TOAST_TYPE_INFO = 1;
+  TOAST_TYPE_SUCCESS = 2;
+  TOAST_TYPE_WARNING = 3;
+  TOAST_TYPE_ERROR = 4;
+}
+
+enum DeviceType {
+  DEVICE_TYPE_UNSPECIFIED = 0;
+  DEVICE_TYPE_ANDROID = 1;
+  DEVICE_TYPE_IOS = 2;
+}
+
+// ===========================================================================
+// MESSAGES
+// ===========================================================================
+
+// ---------------------------------------------------------------------------
+// Lifecycle
+// ---------------------------------------------------------------------------
+
+message InitializeRequest {
+  string data_dir = 1;           // App data directory
+  string cache_dir = 2;          // Cache directory
+  string hub_address = 3;        // Hub server address (optional)
+  bool debug_mode = 4;           // Enable debug logging
+}
+
+message InitializeResponse {
+  bool success = 1;
+  string error = 2;
+  bool identity_exists = 3;      // True if identity already created
+  bool identity_locked = 4;      // True if identity needs unlock
+}
+
+enum BootstrapStage {
+  BOOTSTRAP_STAGE_UNSPECIFIED = 0;
+  BOOTSTRAP_STAGE_SETUP_NEEDED = 1;
+  BOOTSTRAP_STAGE_AUTH_NEEDED = 2;
+  BOOTSTRAP_STAGE_READY = 3;
+}
+
+message BootstrapStateResponse {
+  BootstrapStage stage = 1;
+  bool identity_exists = 2;
+  bool identity_locked = 3;
+  bool require_biometric = 4;
+}
+
+// ---------------------------------------------------------------------------
+// Identity
+// ---------------------------------------------------------------------------
+
+message IdentityInfo {
+  bool exists = 1;
+  bool locked = 2;
+  string fingerprint = 3;        // SHA256 fingerprint of root cert
+  string emoji_hash = 4;         // Visual emoji representation
+  string root_cert_pem = 5;      // Root CA certificate (public)
+  google.protobuf.Timestamp created_at = 6;
+  int32 paired_nodes = 7;        // Number of paired nodes
+}
+
+message CreateIdentityRequest {
+  string passphrase = 1;         // Optional passphrase to encrypt key
+  string common_name = 2;        // Common name for root CA (default: "Nitella Root CA")
+  string organization = 3;       // Optional organization (O) field
+  bool allow_weak_passphrase = 4; // Explicit user acknowledgement for weak passphrase
+}
+
+message CreateIdentityResponse {
+  bool success = 1;
+  string error = 2;
+  string mnemonic = 3;           // BIP-39 mnemonic (24 words) - SHOW ONCE
+  IdentityInfo identity = 4;
+}
+
+message RestoreIdentityRequest {
+  string mnemonic = 1;           // BIP-39 mnemonic to restore from
+  string passphrase = 2;         // Optional passphrase
+  string common_name = 3;        // Common name for root CA
+  string organization = 4;       // Optional organization (O) field
+  bool allow_weak_passphrase = 5; // Explicit user acknowledgement for weak passphrase
+}
+
+message RestoreIdentityResponse {
+  bool success = 1;
+  string error = 2;
+  IdentityInfo identity = 3;
+}
+
+message ImportIdentityRequest {
+  string cert_pem = 1;           // Root CA certificate PEM content
+  string key_pem = 2;            // Root CA private key PEM content
+  string key_passphrase = 3;     // Passphrase if key is encrypted
+}
+
+message ImportIdentityResponse {
+  bool success = 1;
+  string error = 2;
+  IdentityInfo identity = 3;
+}
+
+message UnlockIdentityRequest {
+  string passphrase = 1;
+}
+
+message UnlockIdentityResponse {
+  bool success = 1;
+  string error = 2;
+  IdentityInfo identity = 3;
+}
+
+message ChangePassphraseRequest {
+  string old_passphrase = 1;
+  string new_passphrase = 2;
+  bool allow_weak_passphrase = 3; // Explicit user acknowledgement for weak passphrase
+}
+
+enum PassphraseStrength {
+  PASSPHRASE_STRENGTH_UNSPECIFIED = 0;
+  PASSPHRASE_STRENGTH_WEAK = 1;
+  PASSPHRASE_STRENGTH_FAIR = 2;
+  PASSPHRASE_STRENGTH_STRONG = 3;
+}
+
+message EvaluatePassphraseRequest {
+  string passphrase = 1;
+}
+
+message EvaluatePassphraseResponse {
+  PassphraseStrength strength = 1;
+  double entropy = 2;
+  string message = 3;
+  string crack_time = 4;
+  string gpu_scenario = 5;
+  bool should_warn = 6;          // True when UI should ask for explicit confirmation
+  string report = 7;             // Human-readable report for CLI/UI
+}
+
+// ---------------------------------------------------------------------------
+// Node Management
+// ---------------------------------------------------------------------------
+
+// NodeConnectionType specifies how the mobile app connects to a node.
+enum NodeConnectionType {
+  NODE_CONNECTION_TYPE_UNSPECIFIED = 0; // Unspecified (proto3 default)
+  NODE_CONNECTION_TYPE_HUB = 1;        // Via Hub relay (E2E encrypted)
+  NODE_CONNECTION_TYPE_DIRECT = 2;     // Direct to nitellad admin API (no Hub)
+}
+
+message NodeInfo {
+  string node_id = 1;
+  string name = 2;
+  string fingerprint = 3;        // Certificate fingerprint
+  string emoji_hash = 4;         // Visual emoji representation
+  bool online = 5;
+  google.protobuf.Timestamp last_seen = 6;
+  google.protobuf.Timestamp paired_at = 7;
+  repeated string tags = 8;
+  NodeMetrics metrics = 9;       // Latest metrics (if available)
+  string version = 10;           // Node software version
+  string os = 11;                // Node OS info
+  bool pinned = 12;              // Pinned to home screen
+  bool alerts_enabled = 13;      // Show alert notifications
+  int32 proxy_count = 14;        // Number of active proxies
+
+  // Direct connection fields (only for NODE_CONNECTION_TYPE_DIRECT)
+  NodeConnectionType conn_type = 15;  // Connection type enum
+  string direct_address = 16;    // nitellad admin API address (host:port)
+  string direct_token = 17;      // Admin authentication token
+  string direct_ca_pem = 18;     // Admin CA certificate PEM for TLS
+}
+
+message NodeMetrics {
+  int64 active_connections = 1;
+  int64 total_connections = 2;
+  int64 bytes_in = 3;
+  int64 bytes_out = 4;
+  int64 blocked_total = 5;
+  int32 proxy_count = 6;
+  int64 uptime_seconds = 7;
+}
+
+message ListNodesRequest {
+  string filter = 1;             // "all", "online", "offline"
+}
+
+message ListNodesResponse {
+  repeated NodeInfo nodes = 1;
+  int32 total_count = 2;
+  int32 online_count = 3;
+}
+
+message GetNodeRequest {
+  string node_id = 1;
+}
+
+message GetNodeDetailSnapshotRequest {
+  string node_id = 1;
+  bool include_runtime_status = 2;
+  bool include_proxies = 3;
+  bool include_rules = 4;
+  bool include_connection_stats = 5;
+}
+
+message NodeRuntimeStatus {
+  string status = 1;
+  google.protobuf.Timestamp last_seen = 2;
+  string public_ip = 3;
+  string version = 4;
+  bool geoip_enabled = 5;
+}
+
+message NodeDetailSnapshot {
+  NodeInfo node = 1;
+  NodeRuntimeStatus runtime_status = 2;
+  repeated ProxyInfo proxies = 3;
+  repeated nitella.proxy.Rule rules = 4;
+  ConnectionStats connection_stats = 5;
+}
+
+message UpdateNodeRequest {
+  string node_id = 1;
+  string name = 2;
+  repeated string tags = 3;
+  bool pinned = 4;
+  bool alerts_enabled = 5;
+  google.protobuf.FieldMask update_mask = 6;
+}
+
+message RemoveNodeRequest {
+  string node_id = 1;
+}
+
+// AddNodeDirect adds a standalone nitellad with direct connection.
+// This bypasses Hub and connects directly to the node's admin API.
+message AddNodeDirectRequest {
+  string name = 1;               // Friendly name for the node
+  string address = 2;            // Admin API address (host:port)
+  string token = 3;              // Admin authentication token
+  string ca_pem = 4;             // Admin CA certificate PEM for TLS verification
+}
+
+message AddNodeDirectResponse {
+  bool success = 1;
+  string error = 2;
+  NodeInfo node = 3;             // The newly added node
+}
+
+// TestDirectConnection tests connectivity to a nitellad admin API.
+message TestDirectConnectionRequest {
+  string address = 1;            // Admin API address (host:port)
+  string token = 2;              // Admin authentication token
+  string ca_pem = 3;             // Admin CA certificate PEM
+}
+
+message TestDirectConnectionResponse {
+  bool success = 1;
+  string error = 2;
+  string node_version = 3;       // nitellad version
+  string node_hostname = 4;      // Node hostname
+  int32 proxy_count = 5;         // Number of active proxies
+  string emoji_hash = 6;         // Visual fingerprint of the Admin CA
+}
+
+
+
+// ---------------------------------------------------------------------------
+// Proxy Management
+// ---------------------------------------------------------------------------
+
+message ProxyInfo {
+  string proxy_id = 1;
+  string node_id = 2;
+  string name = 3;
+  string listen_addr = 4;
+  string default_backend = 5;
+  bool running = 6;
+  nitella.ActionType default_action = 7;
+  nitella.FallbackAction fallback_action = 8;
+  int32 rule_count = 9;
+  int64 active_connections = 10;
+  int64 total_connections = 11;
+  repeated string tags = 12;
+}
+
+message ListProxiesRequest {
+  string node_id = 1;            // Required: which node to query
+  int32 limit = 2;               // 0 = backend default cap
+  int32 offset = 3;              // Pagination offset
+}
+
+message ListProxiesResponse {
+  repeated ProxyInfo proxies = 1;
+  int32 total_count = 2;
+}
+
+message GetProxiesSnapshotRequest {
+  string node_id = 1;            // Optional: restrict to one node
+  string node_filter = 2;        // Optional: "all", "online", "offline"
+}
+
+message NodeProxiesSnapshot {
+  NodeInfo node = 1;
+  repeated ProxyInfo proxies = 2;
+}
+
+message GetProxiesSnapshotResponse {
+  repeated NodeProxiesSnapshot node_snapshots = 1;
+  int32 total_nodes = 2;
+  int32 total_proxies = 3;
+}
+
+message GetProxyRequest {
+  string node_id = 1;
+  string proxy_id = 2;
+}
+
+message AddProxyRequest {
+  string node_id = 1;
+  string name = 2;
+  string listen_addr = 3;
+  string default_backend = 4;
+  nitella.ActionType default_action = 5;
+  nitella.FallbackAction fallback_action = 6;
+  nitella.MockPreset default_mock = 7;
+  nitella.MockPreset fallback_mock = 8;
+  repeated string tags = 9;
+  // TLS configuration
+  string cert_pem = 10;
+  string key_pem = 11;
+  string ca_pem = 12;
+}
+
+message UpdateProxyRequest {
+  string node_id = 1;
+  string proxy_id = 2;
+  string name = 3;
+  string listen_addr = 4;
+  string default_backend = 5;
+  nitella.ActionType default_action = 6;
+  nitella.FallbackAction fallback_action = 7;
+  nitella.MockPreset default_mock = 8;
+  nitella.MockPreset fallback_mock = 9;
+  repeated string tags = 10;
+  bool running = 11;
+  google.protobuf.FieldMask update_mask = 12;
+}
+
+message RemoveProxyRequest {
+  string node_id = 1;
+  string proxy_id = 2;
+}
+
+message SetNodeProxiesRunningRequest {
+  string node_id = 1;
+  bool running = 2;
+}
+
+message SetNodeProxiesRunningResponse {
+  bool success = 1;
+  string error = 2;
+  int32 updated_count = 3;
+  int32 skipped_count = 4;
+  repeated string failed_proxy_ids = 5;
+}
+
+// ---------------------------------------------------------------------------
+// Rule Management
+// ---------------------------------------------------------------------------
+
+message ListRulesRequest {
+  string node_id = 1;
+  string proxy_id = 2;
+}
+
+message ListRulesResponse {
+  repeated nitella.proxy.Rule rules = 1;
+  int32 total_count = 2;
+  RuleComposerPolicy composer_policy = 3;
+}
+
+message RuleComposerConditionPolicy {
+  nitella.ConditionType condition_type = 1;
+  repeated nitella.Operator operators = 2;
+  nitella.Operator default_operator = 3;
+  string value_hint = 4;
+}
+
+message RuleComposerPolicy {
+  repeated RuleComposerConditionPolicy condition_policies = 1;
+  repeated nitella.ActionType allowed_actions = 2;
+  int32 default_priority = 3;
+}
+
+message GetRuleRequest {
+  string node_id = 1;
+  string proxy_id = 2;
+  string rule_id = 3;
+}
+
+message AddRuleRequest {
+  string node_id = 1;
+  string proxy_id = 2;
+  nitella.proxy.Rule rule = 3;
+}
+
+message AddQuickRuleRequest {
+  string node_id = 1;
+  // Empty proxy_id is allowed for:
+  // - SOURCE_IP BLOCK/ALLOW: maps to node-level global rules
+  // - GEO_COUNTRY/GEO_ISP BLOCK: applies on all proxies of the target node
+  string proxy_id = 2;
+  string name = 3;
+  nitella.ActionType action = 4;
+  nitella.ConditionType condition_type = 5;
+  string value = 6;
+  // Optional duration for global SOURCE_IP BLOCK/ALLOW quick rules.
+  int32 duration_seconds = 7;
+  // If true and condition_type is SOURCE_IP, normalize IPv4 to x.y.z.0/24.
+  bool source_ip_to_cidr24 = 8;
+  // If true for SOURCE_IP BLOCK/ALLOW quick rules, apply across reachable nodes.
+  bool apply_to_all_nodes = 9;
+}
+
+message AddQuickRuleResponse {
+  bool success = 1;
+  string error = 2;
+  string rule_id = 3;
+  int32 rules_created = 4;
+}
+
+message UpdateRuleRequest {
+  string node_id = 1;
+  string proxy_id = 2;
+  nitella.proxy.Rule rule = 3;
+  google.protobuf.FieldMask update_mask = 4;
+}
+
+message RemoveRuleRequest {
+  string node_id = 1;
+  string proxy_id = 2;
+  string rule_id = 3;
+}
+
+message BlockIPRequest {
+  string node_id = 1;            // Required: target node (empty = all nodes)
+  string proxy_id = 2;           // Optional: specific proxy
+  string ip = 3;                 // IP address or CIDR to block
+  bool apply_to_all_nodes = 4;   // If true, apply to all online nodes
+}
+
+message BlockIPResponse {
+  bool success = 1;
+  string error = 2;
+  int32 rules_created = 3;       // Number of rules created
+}
+
+message BlockISPRequest {
+  string node_id = 1;            // Required: target node
+  string proxy_id = 2;           // Optional: specific proxy
+  string isp = 3;                // ISP name to block
+}
+
+message BlockISPResponse {
+  bool success = 1;
+  string error = 2;
+  string rule_id = 3;
+}
+
+message BlockCountryRequest {
+  string node_id = 1;            // Required: target node
+  string proxy_id = 2;           // Optional: specific proxy
+  string country = 3;            // Country name/code to block
+}
+
+message BlockCountryResponse {
+  bool success = 1;
+  string error = 2;
+  string rule_id = 3;
+}
+
+// Global Rules (node-level, cross-proxy runtime rules)
+
+message AddGlobalRuleRequest {
+  string node_id = 1;
+  string ip = 2;                      // IP or CIDR
+  nitella.ActionType action = 3;      // BLOCK or ALLOW
+  int64 duration_seconds = 4;         // 0 = permanent
+}
+
+message AddGlobalRuleResponse {
+  bool success = 1;
+  string error = 2;
+  string rule_id = 3;
+}
+
+message ListGlobalRulesRequest {
+  string node_id = 1;
+}
+
+message ListGlobalRulesResponse {
+  repeated nitella.proxy.GlobalRule rules = 1;
+}
+
+message RemoveGlobalRuleRequest {
+  string node_id = 1;
+  string rule_id = 2;
+}
+
+message RemoveGlobalRuleResponse {
+  bool success = 1;
+  string error = 2;
+}
+
+// ---------------------------------------------------------------------------
+// Approval Workflow
+// ---------------------------------------------------------------------------
+
+message ApprovalRequest {
+  string request_id = 1;
+  string node_id = 2;
+  string node_name = 3;
+  string proxy_id = 4;
+  string proxy_name = 5;
+  string source_ip = 6;
+  int32 source_port = 7;
+  string dest_addr = 8;
+  string rule_id = 9;
+  string rule_name = 10;
+  nitella.GeoInfo geo = 11;
+  google.protobuf.Timestamp timestamp = 12;
+  string tls_cn = 13;            // TLS Common Name (if present)
+  string tls_fingerprint = 14;   // TLS fingerprint (if present)
+}
+
+message ListPendingApprovalsRequest {
+  string node_id = 1;            // Optional: filter by node
+}
+
+message ListPendingApprovalsResponse {
+  repeated ApprovalRequest requests = 1;
+  int32 total_count = 2;
+}
+
+message GetApprovalsSnapshotRequest {
+  string node_id = 1;            // Optional: filter by node
+  int32 history_limit = 2;       // 0 = backend default
+  int32 history_offset = 3;      // Pagination offset
+  bool include_history = 4;      // If false, skip history payload
+}
+
+message GetApprovalsSnapshotResponse {
+  repeated ApprovalRequest pending_requests = 1;
+  int32 pending_total_count = 2;
+  repeated ApprovalHistoryEntry history_entries = 3;
+  int32 history_total_count = 4;
+  repeated int64 approve_duration_options = 5;      // Backend-owned approve presets (seconds; -1 = permanent)
+  int64 default_approve_duration_seconds = 6;       // Backend-owned CLI/UI default when not specified
+  repeated DenyBlockType deny_block_options = 7;    // Backend-owned deny/block options
+  int32 recommended_poll_interval_seconds = 8;      // Backend-owned poll interval for approval UIs
+}
+
+message ApproveRequestRequest {
+  string request_id = 1;
+  nitella.ApprovalRetentionMode retention_mode = 2;  // UNSPECIFIED -> CACHE
+  int64 duration_seconds = 3;    // CACHE: cache TTL, CONNECTION_ONLY: max lifetime (0 = until close)
+  bool create_rule = 4;          // Create permanent allow rule
+}
+
+message ApproveRequestResponse {
+  bool success = 1;
+  string error = 2;
+  string rule_id = 3;            // If rule was created
+  bool decision_applied = 4;     // True when node accepted the decision
+  bool history_persisted = 5;    // True when approval history was durably written
+  string history_error = 6;      // Persistence failure details (if any)
+}
+
+enum DenyBlockType {
+  DENY_BLOCK_TYPE_NONE = 0;      // Just deny, no rule
+  DENY_BLOCK_TYPE_IP = 1;        // Create block rule for source IP
+  DENY_BLOCK_TYPE_ISP = 2;       // Create block rule for source ISP
+}
+
+enum ApprovalDecision {
+  APPROVAL_DECISION_UNSPECIFIED = 0;
+  APPROVAL_DECISION_APPROVE = 1;
+  APPROVAL_DECISION_DENY = 2;
+}
+
+message DenyRequestRequest {
+  string request_id = 1;
+  nitella.ApprovalRetentionMode retention_mode = 2;  // UNSPECIFIED -> CACHE
+  int64 duration_seconds = 3;    // CACHE: cache TTL, CONNECTION_ONLY: max lifetime (usually 0)
+  DenyBlockType block_type = 4;  // What kind of block rule to create
+}
+
+message DenyRequestResponse {
+  bool success = 1;
+  string error = 2;
+  string rule_id = 3;            // If rule was created
+  bool decision_applied = 4;     // True when node accepted the decision
+  bool history_persisted = 5;    // True when approval history was durably written
+  string history_error = 6;      // Persistence failure details (if any)
+}
+
+message ResolveApprovalDecisionRequest {
+  string request_id = 1;
+  ApprovalDecision decision = 2;
+  nitella.ApprovalRetentionMode retention_mode = 3;  // UNSPECIFIED -> CACHE
+  int64 duration_seconds = 4;    // CACHE: cache TTL, CONNECTION_ONLY: max lifetime
+  DenyBlockType deny_block_type = 5;
+}
+
+message ResolveApprovalDecisionResponse {
+  bool success = 1;
+  string error = 2;
+  string rule_id = 3;
+  bool decision_applied = 4;     // True when node accepted the decision
+  bool history_persisted = 5;    // True when approval history was durably written
+  string history_error = 6;      // Persistence failure details (if any)
+}
+
+message StreamApprovalsRequest {
+  string node_id = 1;            // Optional: filter by node
+}
+
+enum ApprovalHistoryAction {
+  APPROVAL_HISTORY_ACTION_UNSPECIFIED = 0;
+  APPROVAL_HISTORY_ACTION_APPROVED = 1;
+  APPROVAL_HISTORY_ACTION_DENIED = 2;
+  APPROVAL_HISTORY_ACTION_EXPIRED = 3;
+}
+
+message ApprovalHistoryEntry {
+  string request_id = 1;
+  string node_id = 2;
+  string node_name = 3;
+  string proxy_id = 4;
+  string proxy_name = 5;
+  string source_ip = 6;
+  string dest_addr = 7;
+  nitella.GeoInfo geo = 8;
+  ApprovalHistoryAction action = 9;
+  int64 duration_seconds = 10;
+  DenyBlockType block_type = 11;
+  string rule_id = 12;
+  google.protobuf.Timestamp decided_at = 13;
+}
+
+message ListApprovalHistoryRequest {
+  string node_id = 1;            // Optional: filter by node
+  int32 limit = 2;               // 0 = backend default
+  int32 offset = 3;              // Pagination offset
+}
+
+message ListApprovalHistoryResponse {
+  repeated ApprovalHistoryEntry entries = 1;
+  int32 total_count = 2;
+}
+
+message ClearApprovalHistoryRequest {
+}
+
+message ClearApprovalHistoryResponse {
+  bool success = 1;
+  string error = 2;
+  int32 deleted_count = 3;
+}
+
+// ---------------------------------------------------------------------------
+// Connection Statistics
+// ---------------------------------------------------------------------------
+
+message ConnectionStats {
+  int64 active_connections = 1;
+  int64 total_connections = 2;
+  int64 bytes_in = 3;
+  int64 bytes_out = 4;
+  int64 blocked_total = 5;
+  int64 allowed_total = 6;
+  int64 unique_ips = 7;
+  int64 unique_countries = 8;
+  int64 pending_approvals = 9;
+  int32 recommended_poll_interval_seconds = 10;
+}
+
+message GetConnectionStatsRequest {
+  string node_id = 1;            // Optional: specific node
+  string proxy_id = 2;           // Optional: specific proxy
+}
+
+message ConnectionInfo {
+  string conn_id = 1;
+  string node_id = 2;
+  string proxy_id = 3;
+  string source_ip = 4;
+  int32 source_port = 5;
+  string dest_addr = 6;
+  google.protobuf.Timestamp start_time = 7;
+  int64 bytes_in = 8;
+  int64 bytes_out = 9;
+  nitella.GeoInfo geo = 10;
+  string rule_matched = 11;
+  nitella.ActionType action = 12;
+}
+
+message ListConnectionsRequest {
+  string node_id = 1;
+  string proxy_id = 2;           // Optional: filter by proxy
+  bool active_only = 3;          // Only show active connections
+  int32 limit = 4;
+  int32 offset = 5;
+}
+
+message ListConnectionsResponse {
+  repeated ConnectionInfo connections = 1;
+  int32 total_count = 2;
+}
+
+message GetIPStatsRequest {
+  string node_id = 1;
+  int32 limit = 2;
+  int32 offset = 3;
+  string source_ip_filter = 4;
+  string country_filter = 5;
+  nitella.SortOrder sort_by = 6;
+}
+
+message IPStats {
+  string source_ip = 1;
+  google.protobuf.Timestamp first_seen = 2;
+  google.protobuf.Timestamp last_seen = 3;
+  int64 connection_count = 4;
+  int64 total_bytes_in = 5;
+  int64 total_bytes_out = 6;
+  int64 blocked_count = 7;
+  int64 allowed_count = 8;
+  string geo_country = 9;
+  string geo_city = 10;
+  string geo_isp = 11;
+}
+
+message GetIPStatsResponse {
+  repeated IPStats stats = 1;
+  int64 total_count = 2;
+}
+
+message GetGeoStatsRequest {
+  string node_id = 1;
+  GeoStatsType type = 2;
+  int32 limit = 3;
+}
+
+message GeoStats {
+  GeoStatsType type = 1;
+  string value = 2;
+  int64 connection_count = 3;
+  int64 unique_ips = 4;
+  int64 total_bytes = 5;
+  int64 blocked_count = 6;
+}
+
+message GetGeoStatsResponse {
+  repeated GeoStats stats = 1;
+  int32 total_count = 2;
+}
+
+message StreamConnectionsRequest {
+  string node_id = 1;
+  string proxy_id = 2;
+}
+
+message ConnectionEvent {
+  string conn_id = 1;
+  string node_id = 2;
+  string proxy_id = 3;
+  string source_ip = 4;
+  int32 source_port = 5;
+  string dest_addr = 6;
+
+  enum EventType {
+    EVENT_TYPE_UNSPECIFIED = 0;
+    EVENT_TYPE_CONNECTED = 1;
+    EVENT_TYPE_CLOSED = 2;
+    EVENT_TYPE_BLOCKED = 3;
+    EVENT_TYPE_PENDING_APPROVAL = 4;
+    EVENT_TYPE_APPROVED = 5;
+  }
+  EventType event_type = 7;
+  google.protobuf.Timestamp timestamp = 8;
+
+  string rule_matched = 9;
+  nitella.ActionType action_taken = 10;
+  int64 bytes_in = 11;
+  int64 bytes_out = 12;
+  nitella.GeoInfo geo = 13;
+}
+
+message CloseConnectionRequest {
+  string node_id = 1;
+  string proxy_id = 2;
+  oneof identifier {
+    string conn_id = 3;          // Connection ID
+    string source_ip = 4;        // Or close by source IP
+  }
+}
+
+message CloseConnectionResponse {
+  bool success = 1;
+  string error = 2;
+}
+
+message CloseAllConnectionsRequest {
+  string node_id = 1;
+  string proxy_id = 2;
+}
+
+message CloseAllConnectionsResponse {
+  bool success = 1;
+  string error = 2;
+  int32 closed_count = 3;
+}
+
+message CloseAllNodeConnectionsRequest {
+  string node_id = 1;
+}
+
+message CloseAllNodeConnectionsResponse {
+  bool success = 1;
+  string error = 2;
+  int32 processed_proxy_count = 3;
+  int32 closed_count = 4;
+  repeated string failed_proxy_ids = 5;
+}
+
+// ---------------------------------------------------------------------------
+// Pairing
+// ---------------------------------------------------------------------------
+
+message StartPairingRequest {
+  string node_name = 1;          // Friendly name for the node
+}
+
+message StartPairingResponse {
+  string session_id = 1;
+  string pairing_code = 2;       // Human-readable code: "7-tiger-castle"
+  int32 expires_in_seconds = 3;
+}
+
+message JoinPairingRequest {
+  string pairing_code = 1;       // Code entered by user from node
+}
+
+message JoinPairingResponse {
+  bool success = 1;
+  string error = 2;
+  string session_id = 3;
+  string emoji_fingerprint = 4;  // Emoji fingerprint to verify
+  string node_name = 5;          // Node name from the session
+  string fingerprint = 6;        // Node public key fingerprint (SHA-256 hex)
+  string emoji_hash = 7;         // Node public key emoji hash
+  string csr_fingerprint = 8;    // CSR fingerprint shown on node (emoji)
+  string csr_hash = 9;           // CSR SHA-256 hash shown on node
+}
+
+message CompletePairingRequest {
+  string session_id = 1;
+}
+
+message CompletePairingResponse {
+  bool success = 1;
+  string error = 2;
+  NodeInfo node = 3;             // The newly paired node
+}
+
+message FinalizePairingRequest {
+  string session_id = 1;
+  bool accepted = 2;             // true = approve/sign, false = reject/cancel
+  string node_name = 3;          // Optional override for offline QR pairing
+}
+
+message FinalizePairingResponse {
+  bool success = 1;
+  string error = 2;
+  bool completed = 3;            // true when pairing/signing completed
+  bool cancelled = 4;            // true when user rejected and session was canceled
+  NodeInfo node = 5;             // Paired node (if available)
+  bytes qr_data = 6;             // Offline QR response payload (when applicable)
+}
+
+message CancelPairingRequest {
+  string session_id = 1;
+}
+
+message GenerateQRCodeRequest {
+  // Empty - uses current identity
+}
+
+message GenerateQRCodeResponse {
+  bytes qr_data = 1;             // Data to encode in QR code
+  string fingerprint = 2;        // Identity fingerprint for verification
+}
+
+message ScanQRCodeRequest {
+  bytes qr_data = 1;             // Scanned QR code data
+}
+
+message ScanQRCodeResponse {
+  bool success = 1;
+  string error = 2;
+  string session_id = 7;         // Backend-owned offline pairing session ID
+  string node_id = 3;            // Node ID from CSR
+  string csr_pem = 4;            // Certificate Signing Request
+  string fingerprint = 5;        // Node's public key fingerprint
+  string emoji_hash = 6;         // Visual verification
+}
+
+message GenerateQRReplyRequest {
+  string node_id = 1;
+  string csr_pem = 2;
+  string node_name = 3;
+  string scan_session_id = 4;    // Preferred: generated by ScanQRCode
+}
+
+message GenerateQRReplyResponse {
+  bytes qr_data = 1;             // Data to encode in response QR
+  NodeInfo node = 2;             // The paired node info
+}
+
+// ---------------------------------------------------------------------------
+// Templates
+// ---------------------------------------------------------------------------
+
+message Template {
+  string template_id = 1;
+  string name = 2;
+  string description = 3;
+  google.protobuf.Timestamp created_at = 4;
+  google.protobuf.Timestamp updated_at = 5;
+  string author = 6;             // Who created it
+  bool is_public = 7;            // Shared with community
+  int32 downloads = 8;           // Number of times applied
+  repeated string tags = 9;
+
+  // Template content
+  repeated ProxyTemplate proxies = 10;
+}
+
+message ProxyTemplate {
+  string name = 1;
+  string listen_addr = 2;
+  nitella.ActionType default_action = 3;
+  nitella.FallbackAction fallback_action = 4;
+  repeated nitella.proxy.Rule rules = 5;
+  repeated string tags = 6;
+}
+
+message ListTemplatesRequest {
+  bool include_public = 1;       // Include community templates
+  repeated string tags = 2;      // Filter by tags
+}
+
+message ListTemplatesResponse {
+  repeated Template templates = 1;
+  int32 total_count = 2;
+}
+
+message GetTemplateRequest {
+  string template_id = 1;
+}
+
+message CreateTemplateRequest {
+  string name = 1;
+  string description = 2;
+  string node_id = 3;            // Source node to copy from
+  repeated string proxy_ids = 4; // Which proxies to include (empty = all)
+  repeated string tags = 5;
+}
+
+message ApplyTemplateRequest {
+  string template_id = 1;
+  string node_id = 2;            // Target node
+  bool overwrite = 3;            // Replace existing proxies
+}
+
+message ApplyTemplateResponse {
+  bool success = 1;
+  string error = 2;
+  int32 proxies_created = 3;
+  int32 rules_created = 4;
+}
+
+message DeleteTemplateRequest {
+  string template_id = 1;
+}
+
+message SyncTemplatesResponse {
+  int32 uploaded = 1;
+  int32 downloaded = 2;
+  int32 conflicts = 3;
+}
+
+message ExportTemplateYamlRequest {
+  string template_id = 1;
+}
+
+message ExportTemplateYamlResponse {
+  bool success = 1;
+  string error = 2;
+  string yaml = 3;
+  Template template = 4;
+}
+
+message ImportTemplateYamlRequest {
+  string yaml = 1;
+}
+
+message ImportTemplateYamlResponse {
+  bool success = 1;
+  string error = 2;
+  Template template = 3;
+  string name = 4;
+  string description = 5;
+  int32 proxy_count = 6;
+  repeated string tags = 7;
+}
+
+// ---------------------------------------------------------------------------
+// Settings
+// ---------------------------------------------------------------------------
+
+message Settings {
+  // Hub settings
+  string hub_address = 1;
+  bool auto_connect_hub = 2;
+
+  // Notification settings
+  bool notifications_enabled = 3;
+  bool approval_notifications = 4;
+  bool connection_notifications = 5;
+  bool alert_notifications = 6;
+
+  // P2P settings
+  nitella.P2PMode p2p_mode = 7;
+
+  // Security settings
+  bool require_biometric = 8;
+  int32 auto_lock_minutes = 9;   // 0 = never
+
+  // Display settings
+  Theme theme = 10;
+  string language = 11;          // ISO 639-1 code
+
+  // Hub TLS settings (zero-trust)
+  bytes hub_ca_pem = 12;         // Custom CA PEM for Hub TLS verification
+  string hub_cert_pin = 13;      // SPKI SHA256 fingerprint for certificate pinning
+
+  // ICE settings (backend-owned; UI/CLI are thin inputs only)
+  repeated string stun_servers = 14;
+  string turn_server = 15;
+  string turn_username = 16;
+  string turn_password = 17;
+
+  // Hub onboarding defaults
+  string hub_invite_code = 18;
+}
+
+message UpdateSettingsRequest {
+  Settings settings = 1;
+  google.protobuf.FieldMask update_mask = 2;
+}
+
+message SettingsOverviewSnapshot {
+  IdentityInfo identity = 1;
+  HubSettingsSnapshot hub = 2;
+  P2PSettingsSnapshot p2p = 3;
+}
+
+// ---------------------------------------------------------------------------
+// FCM
+// ---------------------------------------------------------------------------
+
+message RegisterFCMTokenRequest {
+  string fcm_token = 1;
+  DeviceType device_type = 2;
+  string device_name = 3;
+}
+
+// ---------------------------------------------------------------------------
+// Hub Connection
+// ---------------------------------------------------------------------------
+
+message ConnectToHubRequest {
+  string hub_address = 1;
+  bool use_p2p = 2;              // Enable P2P mode
+  bytes hub_ca_pem = 3;          // Custom CA PEM for Hub TLS verification
+  string hub_cert_pin = 4;       // SPKI SHA256 fingerprint for certificate pinning
+  string token = 5;              // JWT auth token (from saved config)
+}
+
+message FetchHubCARequest {
+  string hub_address = 1;        // Hub address to probe
+}
+
+message FetchHubCAResponse {
+  bool success = 1;
+  string error = 2;
+  bytes ca_pem = 3;              // Hub CA certificate PEM
+  string fingerprint = 4;        // SHA256 fingerprint of the CA public key
+  string emoji_hash = 5;         // Emoji visual hash for verification
+  string subject = 6;            // CA certificate subject (CN)
+  string expires = 7;            // Expiry date string
+}
+
+message ConnectToHubResponse {
+  bool success = 1;
+  string error = 2;
+}
+
+message HubStatus {
+  bool connected = 1;
+  string hub_address = 2;
+  google.protobuf.Timestamp connected_since = 3;
+  int64 messages_sent = 4;
+  int64 messages_received = 5;
+  string user_id = 6;
+  string tier = 7;               // "free", "pro", "enterprise"
+  int32 max_nodes = 8;
+}
+
+message HubSettingsSnapshot {
+  HubStatus status = 1;
+  Settings settings = 2;
+  string resolved_hub_address = 3;
+  string resolved_invite_code = 4;
+  HubTrustChallenge pending_trust_challenge = 5;
+}
+
+message HubOverview {
+  bool hub_connected = 1;
+  string hub_address = 2;
+  string user_id = 3;
+  string tier = 4;
+  int32 max_nodes = 5;
+  int32 total_nodes = 6;
+  int32 online_nodes = 7;
+  int32 pinned_nodes = 8;
+  int32 total_proxies = 9;
+  int64 total_active_connections = 10;
+}
+
+message GetHubDashboardSnapshotRequest {
+  string node_filter = 1;        // Optional: "all", "online", "offline"
+}
+
+message HubDashboardSnapshot {
+  HubOverview overview = 1;
+  repeated NodeInfo nodes = 2;
+  repeated NodeInfo pinned_nodes = 3;
+}
+
+message RegisterUserRequest {
+  string email = 1;              // Optional
+  string invite_code = 2;        // Optional
+  bytes biometric_public_key = 3;
+}
+
+message RegisterUserResponse {
+  bool success = 1;
+  string error = 2;
+  string user_id = 3;
+  string tier = 4;
+  int32 max_nodes = 5;
+  string jwt_token = 6;          // JWT token for CLI to save
+}
+
+message OnboardHubRequest {
+  string hub_address = 1;
+  string invite_code = 2;
+  string token = 3;              // Optional existing JWT token override
+  bytes biometric_public_key = 4;
+
+  // TOFU confirmation fields (used when stage = NEEDS_TRUST)
+  bool trust_prompt_accepted = 10;
+  string trust_challenge_id = 11;
+  reserved 12, 13;
+
+  // If true, only establish verified connection (skip registration).
+  bool skip_registration = 14;
+
+  // If true, persist hub_address/invite_code into backend settings before onboarding.
+  bool persist_settings = 15;
+}
+
+message EnsureHubRegisteredRequest {
+  string hub_address = 1;
+  string invite_code = 2;
+  string token = 3;              // Optional existing JWT token override
+  bytes biometric_public_key = 4;
+  bool persist_settings = 5;
+}
+
+message EnsureHubConnectedRequest {
+  string hub_address = 1;
+  string token = 2;              // Optional existing JWT token override
+  bool persist_settings = 3;
+}
+
+message HubTrustChallenge {
+  bytes ca_pem = 1;
+  string fingerprint = 2;
+  string emoji_hash = 3;
+  string subject = 4;
+  string expires = 5;
+  string challenge_id = 6;
+}
+
+message ResolveHubTrustChallengeRequest {
+  string challenge_id = 1;
+  bool accepted = 2;
+}
+
+message OnboardHubResponse {
+  enum Stage {
+    STAGE_UNSPECIFIED = 0;
+    STAGE_COMPLETED = 1;
+    STAGE_NEEDS_TRUST = 2;
+    STAGE_FAILED = 3;
+  }
+
+  Stage stage = 1;
+  bool success = 2;
+  string error = 3;
+  string hub_address = 4;
+  bool connected = 5;
+  bool registered = 6;
+  string user_id = 7;
+  string tier = 8;
+  int32 max_nodes = 9;
+  HubTrustChallenge trust_challenge = 10;
+}
+
+// ---------------------------------------------------------------------------
+// GeoIP
+// ---------------------------------------------------------------------------
+
+message LookupIPRequest {
+  string ip = 1;
+}
+
+message LookupIPResponse {
+  nitella.GeoInfo geo = 1;
+  bool cached = 2;
+}
+
+message ConfigureGeoIPNodeRequest {
+  string node_id = 1;
+  nitella.proxy.ConfigureGeoIPRequest config = 2;
+}
+
+message GetGeoIPStatusNodeRequest {
+  string node_id = 1;
+}
+
+message RestartListenersNodeRequest {
+  string node_id = 1;
+}
+
+// ---------------------------------------------------------------------------
+// UI Callbacks
+// ---------------------------------------------------------------------------
+
+message NodeStatusChange {
+  string node_id = 1;
+  string name = 2;
+  bool online = 3;
+  google.protobuf.Timestamp timestamp = 4;
+}
+
+message Alert {
+  string id = 1;
+  string node_id = 2;
+  string title = 3;
+  string message = 4;
+  AlertSeverity severity = 5;
+  google.protobuf.Timestamp timestamp = 6;
+  map<string, string> metadata = 7;
+}
+
+message ToastMessage {
+  string message = 1;
+  ToastType type = 2;
+  int32 duration_ms = 3;         // 0 = default
+}
+
+// ---------------------------------------------------------------------------
+// P2P Management
+// ---------------------------------------------------------------------------
+
+message P2PStatus {
+  bool enabled = 1;
+  nitella.P2PMode mode = 2;
+  int32 active_connections = 3;
+  repeated string connected_nodes = 4;
+}
+
+message P2PSettingsSnapshot {
+  P2PStatus status = 1;
+  Settings settings = 2;
+}
+
+message SetP2PModeRequest {
+  nitella.P2PMode mode = 1;
+}
+
+// ---------------------------------------------------------------------------
+// Local Proxy Config Storage
+// ---------------------------------------------------------------------------
+
+message LocalProxyConfig {
+  string proxy_id = 1;
+  string name = 2;
+  string description = 3;
+  google.protobuf.Timestamp created_at = 4;
+  google.protobuf.Timestamp updated_at = 5;
+  google.protobuf.Timestamp synced_at = 6;
+  int64 revision_num = 7;
+  string config_hash = 8;
+}
+
+message ListLocalProxyConfigsRequest {
+  // empty
+}
+
+message ListLocalProxyConfigsResponse {
+  repeated LocalProxyConfig proxies = 1;
+}
+
+message GetLocalProxyConfigRequest {
+  string proxy_id = 1; // full ID
+}
+
+message GetLocalProxyConfigResponse {
+  bool success = 1;
+  string error = 2;
+  LocalProxyConfig proxy = 3;
+  string config_yaml = 4; // full content including header/checksum line
+}
+
+message ImportLocalProxyConfigRequest {
+  bytes config_data = 1;  // raw file bytes from user-provided file
+  string source_name = 2; // source filename (for default display name)
+  string name = 3;        // optional override
+}
+
+message ImportLocalProxyConfigResponse {
+  bool success = 1;
+  string error = 2;
+  LocalProxyConfig proxy = 3;
+  string config_yaml = 4; // normalized saved content
+}
+
+message SaveLocalProxyConfigRequest {
+  string proxy_id = 1;
+  string name = 2;
+  string description = 3;
+  string config_yaml = 4; // full content including header/checksum line
+  int64 revision_num = 5; // optional hub revision to record
+  string config_hash = 6; // optional; computed if empty
+  bool mark_synced = 7;   // if true, update synced_at to now
+}
+
+message SaveLocalProxyConfigResponse {
+  bool success = 1;
+  string error = 2;
+  LocalProxyConfig proxy = 3;
+}
+
+message DeleteLocalProxyConfigRequest {
+  string proxy_id = 1;
+}
+
+message DeleteLocalProxyConfigResponse {
+  bool success = 1;
+  string error = 2;
+}
+
+message ValidateLocalProxyConfigRequest {
+  string proxy_id = 1;
+}
+
+message ValidateLocalProxyConfigResponse {
+  bool success = 1;
+  string error = 2;
+  bool checksum_ok = 3;
+  string checksum_error = 4;
+  bool header_ok = 5;
+  string header_error = 6;
+  string header_type = 7;
+  int32 header_version = 8;
+  bool yaml_ok = 9;
+  string yaml_error = 10;
+  bool has_entry_points = 11;
+  bool has_tcp = 12;
+}
+
+// ---------------------------------------------------------------------------
+// Proxy Versioning (Hub sync)
+// ---------------------------------------------------------------------------
+
+message PushProxyRevisionRequest {
+  string proxy_id = 1;
+  string name = 2;
+  string description = 3;
+  string commit_message = 4;
+  string config_yaml = 5;          // The proxy YAML content
+  string config_hash = 6;          // SHA256 of config content
+}
+
+message PushProxyRevisionResponse {
+  bool success = 1;
+  string error = 2;
+  int64 revision_num = 3;
+  int32 revisions_kept = 4;
+  int32 revisions_limit = 5;
+  int32 storage_used_kb = 6;
+  int32 storage_limit_kb = 7;
+}
+
+message PushLocalProxyRevisionRequest {
+  string proxy_id = 1;            // Local proxy ID
+  string commit_message = 2;      // Optional; backend defaults if empty
+  bool ensure_remote = 3;         // Create remote entry if missing (default true)
+}
+
+message PushLocalProxyRevisionResponse {
+  bool success = 1;
+  string error = 2;
+  string proxy_id = 3;
+  int64 revision_num = 4;
+  int32 revisions_kept = 5;
+  int32 revisions_limit = 6;
+  int32 storage_used_kb = 7;
+  int32 storage_limit_kb = 8;
+  LocalProxyConfig local_proxy = 9; // Updated local metadata
+  bool remote_pushed = 10;          // True when Hub revision push succeeded
+  bool local_metadata_updated = 11; // True when local metadata write succeeded
+  string local_metadata_error = 12; // Local metadata persistence failure details
+}
+
+message PullProxyRevisionRequest {
+  string proxy_id = 1;
+  int64 revision_num = 2;          // 0 = latest
+  bool store_local = 3;            // Save pulled revision to local storage (backend-owned metadata)
+}
+
+message PullProxyRevisionResponse {
+  bool success = 1;
+  string error = 2;
+  int64 revision_num = 3;
+  string name = 4;
+  string description = 5;
+  string commit_message = 6;
+  string config_yaml = 7;
+  string config_hash = 8;
+  int32 size_bytes = 9;
+  LocalProxyConfig local_proxy = 10; // Present when store_local=true and save succeeds
+}
+
+message DiffProxyRevisionsRequest {
+  string proxy_id = 1;
+  int64 revision_num_a = 2;       // 0 = latest (or local when local_vs_latest = true)
+  int64 revision_num_b = 3;       // 0 = latest
+  bool local_vs_latest = 4;       // Compare local config to latest remote revision
+}
+
+message DiffProxyRevisionsResponse {
+  bool success = 1;
+  string error = 2;
+  string left_label = 3;
+  string right_label = 4;
+  string unified_diff = 5;
+  bool has_differences = 6;
+}
+
+message ListProxyRevisionsRequest {
+  string proxy_id = 1;
+}
+
+message ListProxyRevisionsResponse {
+  repeated ProxyRevisionMeta revisions = 1;
+}
+
+message ProxyRevisionMeta {
+  int64 revision_num = 1;
+  int32 size_bytes = 2;
+  google.protobuf.Timestamp created_at = 3;
+}
+
+message FlushProxyRevisionsRequest {
+  string proxy_id = 1;
+  int32 keep_count = 2;            // Number of recent revisions to keep
+}
+
+message FlushProxyRevisionsResponse {
+  bool success = 1;
+  string error = 2;
+  int32 deleted_count = 3;
+  int32 remaining_count = 4;
+}
+
+message ListProxyConfigsRequest {
+  // empty - lists all proxy configs for the user
+}
+
+message ListProxyConfigsResponse {
+  repeated ProxyConfigInfo proxies = 1;
+}
+
+message ProxyConfigInfo {
+  string proxy_id = 1;
+  int64 latest_revision = 2;
+  int32 total_size_bytes = 3;
+  google.protobuf.Timestamp updated_at = 4;
+}
+
+message CreateProxyConfigRequest {
+  string proxy_id = 1;
+}
+
+message CreateProxyConfigResponse {
+  bool success = 1;
+  string error = 2;
+}
+
+message DeleteProxyConfigRequest {
+  string proxy_id = 1;
+}
+
+message DeleteProxyConfigResponse {
+  bool success = 1;
+  string error = 2;
+}
+
+// ---------------------------------------------------------------------------
+// Proxy Deployment (to nodes)
+// ---------------------------------------------------------------------------
+
+message ApplyProxyToNodeRequest {
+  string proxy_id = 1;
+  string node_id = 2;
+  int64 revision_num = 3;          // 0 = use config_yaml directly
+  string config_yaml = 4;          // Direct YAML content (if revision_num = 0)
+  string config_hash = 5;
+}
+
+message ApplyProxyToNodeResponse {
+  bool success = 1;
+  string error = 2;
+}
+
+message UnapplyProxyFromNodeRequest {
+  string proxy_id = 1;
+  string node_id = 2;
+}
+
+message UnapplyProxyFromNodeResponse {
+  bool success = 1;
+  string error = 2;
+}
+
+message GetAppliedProxiesRequest {
+  string node_id = 1;
+}
+
+message GetAppliedProxiesResponse {
+  repeated AppliedProxy proxies = 1;
+}
+
+message AppliedProxy {
+  string proxy_id = 1;
+  int64 revision_num = 2;
+  string applied_at = 3;
+  string status = 4;
+}
+
+// ---------------------------------------------------------------------------
+// Allow IP
+// ---------------------------------------------------------------------------
+
+message AllowIPRequest {
+  string node_id = 1;
+  string proxy_id = 2;
+  string ip = 3;
+  bool apply_to_all_nodes = 4;
+}
+
+message AllowIPResponse {
+  bool success = 1;
+  string error = 2;
+  int32 rules_created = 3;
+}
+
+// ---------------------------------------------------------------------------
+// Metrics Streaming
+// ---------------------------------------------------------------------------
+
+message StreamMetricsRequest {
+  string node_id = 1;
+  int32 interval_seconds = 2;
+}
+
+message GetDebugRuntimeStatsRequest {
+  // empty
+}
+
+message DebugRuntimeStats {
+  int64 rss_bytes = 1;                 // Process RSS (Linux: /proc/self/stat), 0 if unavailable
+  int64 go_heap_alloc_bytes = 2;       // runtime.MemStats.HeapAlloc
+  int64 go_heap_sys_bytes = 3;         // runtime.MemStats.HeapSys
+  int64 go_sys_bytes = 4;              // runtime.MemStats.Sys
+  int64 go_total_alloc_bytes = 5;      // runtime.MemStats.TotalAlloc
+  int64 go_gc_count = 6;               // runtime.MemStats.NumGC
+  int64 go_goroutines = 7;             // runtime.NumGoroutine()
+  int64 go_cgo_calls = 8;              // runtime.NumCgoCall()
+  int64 go_heap_objects = 9;           // runtime.MemStats.HeapObjects
+  int64 go_heap_inuse_bytes = 10;      // runtime.MemStats.HeapInuse
+  int64 go_stack_inuse_bytes = 11;     // runtime.MemStats.StackInuse
+  int64 uptime_seconds = 12;           // MobileLogicService process uptime
+  bool hub_connected = 13;             // Current Hub connection flag
+  string hub_grpc_state = 14;          // grpc connectivity state string
+  int32 total_nodes = 15;              // Total nodes tracked in backend
+  int32 online_nodes = 16;             // Online nodes tracked in backend
+  int32 direct_grpc_connections = 17;  // Active direct-node gRPC conns
+  repeated DebugGrpcConnection grpc_connections = 18; // Hub + direct-node gRPC states
+  int32 approval_stream_subscribers = 19; // Active approval stream subscribers
+  int32 connection_stream_subscribers = 20; // Active connection stream subscribers
+  int32 p2p_stream_subscribers = 21; // Active p2p status stream subscribers
+  bool goroutine_diff_has_baseline = 22; // False on first call before baseline exists
+  int64 goroutine_diff_prev_total = 23; // Previous goroutine total at baseline snapshot
+  int64 goroutine_diff_curr_total = 24; // Current goroutine total at this snapshot
+  int64 goroutine_diff_delta = 25; // Current - Previous
+  repeated DebugGoroutineDiffEntry goroutine_diff_entries = 26; // Top changed goroutine groups by first frame
+  google.protobuf.Timestamp goroutine_diff_prev_at = 27; // Previous snapshot timestamp
+  google.protobuf.Timestamp goroutine_diff_curr_at = 28; // Current snapshot timestamp
+  int32 goroutine_diff_truncated = 29; // Number of omitted entries after top-N truncation
+}
+
+message DebugGrpcConnection {
+  string scope = 1;                   // "hub" or "direct"
+  string node_id = 2;                 // direct node id (empty for hub)
+  string address = 3;                 // remote address
+  string state = 4;                   // gRPC connectivity state
+  bool connected = 5;                 // backend connection flag
+}
+
+message DebugGoroutineDiffEntry {
+  string signature = 1;               // Group key (first frame)
+  int32 prev_count = 2;               // Previous count
+  int32 curr_count = 3;               // Current count
+  int32 delta = 4;                    // Current - Previous
+}
+
+// ---------------------------------------------------------------------------
+// Log Management (Admin)
+// ---------------------------------------------------------------------------
+
+message GetLogsStatsRequest {
+  // empty
+}
+
+message GetLogsStatsResponse {
+  int64 total_logs = 1;
+  int64 total_storage_bytes = 2;
+  google.protobuf.Timestamp oldest_log = 3;
+  google.protobuf.Timestamp newest_log = 4;
+  map<string, int64> logs_by_routing_token = 5;
+  map<string, int64> storage_by_routing_token = 6;
+}
+
+message ListLogsRequest {
+  string routing_token = 1;
+  string node_id = 2;
+  int32 page_size = 3;
+  string page_token = 4;
+}
+
+message ListLogsResponse {
+  repeated LogEntry logs = 1;
+  int64 total_count = 2;
+  string next_page_token = 3;
+}
+
+message LogEntry {
+  int64 id = 1;
+  string node_id = 2;
+  string routing_token = 3;
+  google.protobuf.Timestamp timestamp = 4;
+  int32 encrypted_size_bytes = 5;
+}
+
+message DeleteLogsRequest {
+  string routing_token = 1;
+  string node_id = 2;
+  bool delete_all = 3;
+  google.protobuf.Timestamp before = 4;
+}
+
+message DeleteLogsResponse {
+  int64 deleted_count = 1;
+  int64 freed_bytes = 2;
+}
+
+message CleanupOldLogsRequest {
+  int32 older_than_days = 1;
+  bool dry_run = 2;
+}
+
+message CleanupOldLogsResponse {
+  int64 deleted_count = 1;
+  int64 freed_bytes = 2;
+  map<string, int64> deleted_by_routing_token = 3;
+}
+
+// ---------------------------------------------------------------------------
+// Node Info from Hub
+// ---------------------------------------------------------------------------
+
+message GetNodeFromHubRequest {
+  string node_id = 1;
+}
+
+message GetNodeFromHubResponse {
+  string node_id = 1;
+  string status = 2;               // "ONLINE", "OFFLINE", etc.
+  google.protobuf.Timestamp last_seen = 3;
+  string public_ip = 4;
+  string version = 5;
+  bool geoip_enabled = 6;
+}
+
+message RegisterNodeWithHubRequest {
+  string node_id = 1;
+  string cert_pem = 2;
+  string routing_token = 3;
+}
+
+message RegisterNodeWithHubResponse {
+  bool success = 1;
+  string error = 2;
+  string routing_token = 3;      // Generated routing token for node
+}

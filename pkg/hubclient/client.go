@@ -9,7 +9,6 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/hex"
-	"encoding/json"
 	"encoding/pem"
 	"fmt"
 	"log"
@@ -248,6 +247,10 @@ func (c *Client) Stop() {
 
 // SendAlert sends an alert to the Hub (or via P2P if connected)
 func (c *Client) SendAlert(alert *common.Alert, info string) error {
+	if alert == nil {
+		return fmt.Errorf("alert is nil")
+	}
+
 	// Try P2P first if enabled and connected
 	if c.useP2P && c.p2pManager != nil && c.p2pManager.HasConnectedSessions() {
 		if c.trySendAlertViaP2P(alert, info) {
@@ -258,24 +261,26 @@ func (c *Client) SendAlert(alert *common.Alert, info string) error {
 		log.Printf("[HubClient] P2P send failed, falling back to Hub for alert %s", alert.Id)
 	}
 
-	// Zero-Trust: Encrypt info with viewer's public key (owner's key)
+	// Zero-Trust: Encrypt and sign alert info with viewer's public key (owner's key)
 	// This ensures Hub cannot decrypt alert details - only the owner can
-	if c.viewerPubKey != nil && alert.Encrypted == nil {
-		encryptKey := c.viewerPubKey
-		payloadData := []byte(info)
-
-		if enc, err := nitellacrypto.Encrypt(payloadData, encryptKey); err == nil {
-			alert.Encrypted = &common.EncryptedPayload{
-				EphemeralPubkey:   enc.EphemeralPubKey,
-				Nonce:             enc.Nonce,
-				Ciphertext:        enc.Ciphertext,
-				SenderFingerprint: enc.SenderFingerprint,
-			}
-		} else {
-			log.Printf("[HubClient] Failed to encrypt alert info: %v", err)
+	// Signing allows CLI to verify which node sent the alert
+	if alert.Encrypted == nil {
+		if c.viewerPubKey == nil || c.privateKey == nil {
+			return fmt.Errorf("viewer key and identity private key are required for encrypted alerts")
 		}
-	} else if alert.Encrypted == nil {
-		log.Printf("[HubClient] WARNING: Viewer public key not set, alert sent without E2E encryption")
+
+		payloadData := []byte(info)
+		enc, err := nitellacrypto.EncryptWithSignature(payloadData, c.viewerPubKey, c.privateKey, c.nodeID)
+		if err != nil {
+			return fmt.Errorf("failed to encrypt alert payload: %w", err)
+		}
+		alert.Encrypted = &common.EncryptedPayload{
+			EphemeralPubkey:   enc.EphemeralPubKey,
+			Nonce:             enc.Nonce,
+			Ciphertext:        enc.Ciphertext,
+			SenderFingerprint: enc.SenderFingerprint,
+			Signature:         enc.Signature,
+		}
 	}
 
 	select {
@@ -288,41 +293,26 @@ func (c *Client) SendAlert(alert *common.Alert, info string) error {
 
 // trySendAlertViaP2P attempts to send an approval request via P2P
 // Returns true if successfully sent to at least one peer
-func (c *Client) trySendAlertViaP2P(alert *common.Alert, info string) bool {
-	// Parse info JSON to extract approval request details
-	var infoMap map[string]interface{}
-	if err := json.Unmarshal([]byte(info), &infoMap); err != nil {
+func (c *Client) trySendAlertViaP2P(alert *common.Alert, infoBytes string) bool {
+	// Parse proto-encoded AlertDetails
+	var details common.AlertDetails
+	if err := proto.Unmarshal([]byte(infoBytes), &details); err != nil {
 		log.Printf("[HubClient] Failed to parse alert info for P2P: %v", err)
 		return false
 	}
 
 	// Build P2P ApprovalRequest
 	req := &p2p.ApprovalRequest{
-		RequestID: alert.Id,
-		NodeID:    alert.NodeId,
-		Severity:  alert.Severity,
-	}
-
-	if v, ok := infoMap["source_ip"].(string); ok {
-		req.SourceIP = v
-	}
-	if v, ok := infoMap["dest"].(string); ok {
-		req.DestAddr = v
-	}
-	if v, ok := infoMap["proxy_id"].(string); ok {
-		req.ProxyID = v
-	}
-	if v, ok := infoMap["rule_id"].(string); ok {
-		req.RuleID = v
-	}
-	if v, ok := infoMap["geo_country"].(string); ok {
-		req.GeoCountry = v
-	}
-	if v, ok := infoMap["geo_city"].(string); ok {
-		req.GeoCity = v
-	}
-	if v, ok := infoMap["geo_isp"].(string); ok {
-		req.GeoISP = v
+		RequestID:  alert.Id,
+		NodeID:     alert.NodeId,
+		Severity:   alert.Severity,
+		SourceIP:   details.SourceIp,
+		DestAddr:   details.Destination,
+		ProxyID:    details.ProxyId,
+		RuleID:     details.RuleId,
+		GeoCountry: details.GeoCountry,
+		GeoCity:    details.GeoCity,
+		GeoISP:     details.GeoIsp,
 	}
 
 	// Send to all connected P2P sessions
@@ -723,6 +713,9 @@ func (c *Client) pushMetricsLoop(ctx context.Context, client pb.NodeServiceClien
 			}
 
 			encMetrics := c.gatherEncryptedMetrics()
+			if encMetrics == nil || encMetrics.Encrypted == nil {
+				continue
+			}
 			encMetrics.NodeId = c.nodeID
 
 			if err := stream.Send(encMetrics); err != nil {
@@ -752,23 +745,32 @@ func (c *Client) gatherEncryptedMetrics() *pb.EncryptedMetrics {
 		BytesOut:          bytesOut,
 	}
 
-	// Zero-Trust: Encrypt with viewer's public key (owner's key)
+	if c.viewerPubKey == nil || c.privateKey == nil {
+		return nil
+	}
+
+	// Zero-Trust: Encrypt and sign with viewer's public key (owner's key)
 	// This ensures Hub cannot decrypt metrics - only the owner can
-	var encrypted *common.EncryptedPayload
-	if c.viewerPubKey != nil {
-		data, _ := proto.Marshal(plainMetrics)
-		if enc, err := nitellacrypto.Encrypt(data, c.viewerPubKey); err == nil {
-			encrypted = &common.EncryptedPayload{
-				EphemeralPubkey:   enc.EphemeralPubKey,
-				Nonce:             enc.Nonce,
-				Ciphertext:        enc.Ciphertext,
-				SenderFingerprint: enc.SenderFingerprint,
-			}
-		}
+	// Signing allows CLI to verify which node sent the metrics
+	data, err := proto.Marshal(plainMetrics)
+	if err != nil {
+		log.Printf("[HubClient] Failed to marshal metrics payload: %v", err)
+		return nil
+	}
+	enc, err := nitellacrypto.EncryptWithSignature(data, c.viewerPubKey, c.privateKey, c.nodeID)
+	if err != nil {
+		log.Printf("[HubClient] Failed to encrypt metrics payload: %v", err)
+		return nil
 	}
 
 	return &pb.EncryptedMetrics{
-		Encrypted: encrypted,
+		Encrypted: &common.EncryptedPayload{
+			EphemeralPubkey:   enc.EphemeralPubKey,
+			Nonce:             enc.Nonce,
+			Ciphertext:        enc.Ciphertext,
+			SenderFingerprint: enc.SenderFingerprint,
+			Signature:         enc.Signature,
+		},
 	}
 }
 
@@ -784,6 +786,8 @@ func (c *Client) pushAlertsLoop(ctx context.Context, client pb.NodeServiceClient
 			_, err := client.PushAlert(ctx, alert)
 			if err != nil {
 				log.Printf("Failed to push alert: %v", err)
+			} else {
+				log.Printf("[HubClient] PushAlert success for alert %s (Node: %s)", alert.Id, alert.NodeId)
 			}
 		}
 	}
@@ -871,6 +875,12 @@ func (c *Client) handleCommand(ctx context.Context, client pb.NodeServiceClient,
 		return
 	}
 
+	// Cannot execute commands if we cannot send encrypted responses.
+	if c.viewerPubKey == nil {
+		log.Println("[SECURITY CRITICAL] Cannot execute command: viewer public key not set (encrypted response impossible)")
+		return
+	}
+
 	// Process command via external handler
 	if c.commandHandler != nil {
 		status, errMsg, data := c.commandHandler.HandleCommand(ctx, innerPayload.Type, innerPayload.Payload)
@@ -929,6 +939,23 @@ func (c *Client) startSignalingLoop(ctx context.Context, client pb.NodeServiceCl
 		c.p2pManager = p2p.NewManager(outCh)
 		if c.stunURL != "" {
 			c.p2pManager.SetSTUNServer(c.stunURL)
+		}
+
+		// Set node identity for P2P authentication and encryption
+		if c.privateKey != nil && c.nodeID != "" {
+			id, _ := c.storage.LoadIdentity()
+			var certPEM []byte
+			if id != nil {
+				certPEM = id.CertPEM
+			}
+			c.p2pManager.SetNodeIdentity(c.nodeID, c.privateKey, certPEM)
+		}
+
+		// Hook up CommandHandler for P2P command processing
+		if c.commandHandler != nil {
+			c.p2pManager.CommandHandler = func(ctx context.Context, cmdType int32, payload []byte) (string, string, []byte) {
+				return c.commandHandler.HandleCommand(ctx, pb.CommandType(cmdType), payload)
+			}
 		}
 
 		// Hook up Metrics Callback
@@ -1080,15 +1107,16 @@ func (c *Client) encryptCommandResult(cmdID, status, errMsg string, payload []by
 		}
 	}
 
-	// Zero-Trust: Encrypt with viewer's public key (owner's key)
+	// Zero-Trust: Encrypt and sign with viewer's public key (owner's key)
 	// This ensures Hub cannot decrypt command responses - only the owner can
-	if c.viewerPubKey != nil {
-		if enc, err := nitellacrypto.Encrypt(resultBytes, c.viewerPubKey); err == nil {
+	if c.viewerPubKey != nil && c.privateKey != nil {
+		if enc, err := nitellacrypto.EncryptWithSignature(resultBytes, c.viewerPubKey, c.privateKey, c.nodeID); err == nil {
 			encryptedData := &common.EncryptedPayload{
 				EphemeralPubkey:   enc.EphemeralPubKey,
 				Nonce:             enc.Nonce,
 				Ciphertext:        enc.Ciphertext,
 				SenderFingerprint: enc.SenderFingerprint,
+				Signature:         enc.Signature,
 			}
 			return &pb.CommandResponse{
 				CommandId:     cmdID,

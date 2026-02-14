@@ -24,13 +24,13 @@ type AlertSender interface {
 type ApprovalManager struct {
 	sender AlertSender
 
-	mu             sync.Mutex
-	requests       map[string]*PendingRequest
-	pendingByIP    map[string]int // Per-IP pending count for DoS protection
-	pendingByProxy map[string]int // Per-proxy pending count for cross-proxy DoS protection
-	maxPending     int            // Maximum concurrent pending requests (DoS protection)
-	maxPendingIP   int            // Maximum pending requests per IP
-	maxPendingProxy int           // Maximum pending requests per proxy
+	mu              sync.Mutex
+	requests        map[string]*PendingRequest
+	pendingByIP     map[string]int // Per-IP pending count for DoS protection
+	pendingByProxy  map[string]int // Per-proxy pending count for cross-proxy DoS protection
+	maxPending      int            // Maximum concurrent pending requests (DoS protection)
+	maxPendingIP    int            // Maximum pending requests per IP
+	maxPendingProxy int            // Maximum pending requests per proxy
 
 	// Cache for time-limited approvals
 	cache *ApprovalCache
@@ -343,10 +343,11 @@ func (c *ApprovalCache) GetEntry(sourceIP, ruleID, tlsSessionID string) *Approva
 
 // ApprovalResult contains the result of an approval request
 type ApprovalResult struct {
-	Allowed  bool
-	Duration time.Duration
-	RuleID   string // Rule that triggered the approval request
-	Reason   string // Optional reason for the decision
+	Allowed       bool
+	RetentionMode common.ApprovalRetentionMode
+	Duration      time.Duration
+	RuleID        string // Rule that triggered the approval request
+	Reason        string // Optional reason for the decision
 }
 
 // ApprovalRequestMeta holds metadata for logging
@@ -364,7 +365,7 @@ type ApprovalRequestMeta struct {
 type PendingRequest struct {
 	ResultCh chan ApprovalResult
 	Meta     ApprovalRequestMeta
-	SourceIP string    // For per-IP tracking
+	SourceIP string        // For per-IP tracking
 	CancelCh chan struct{} // For async cancellation
 }
 
@@ -511,6 +512,11 @@ func (am *ApprovalManager) CancelApprovalRequest(reqID string) {
 
 // Resolve is called when a decision is received from Hub
 func (am *ApprovalManager) Resolve(reqID string, allowed bool, durationSeconds int64, reason string) *ApprovalRequestMeta {
+	return am.ResolveWithRetention(reqID, allowed, durationSeconds, reason, common.ApprovalRetentionMode_APPROVAL_RETENTION_MODE_CACHE)
+}
+
+// ResolveWithRetention is called when a decision is received from Hub/Admin.
+func (am *ApprovalManager) ResolveWithRetention(reqID string, allowed bool, durationSeconds int64, reason string, retentionMode common.ApprovalRetentionMode) *ApprovalRequestMeta {
 	am.mu.Lock()
 	req, ok := am.requests[reqID]
 	am.mu.Unlock()
@@ -519,12 +525,18 @@ func (am *ApprovalManager) Resolve(reqID string, allowed bool, durationSeconds i
 		return nil
 	}
 
+	mode := retentionMode
+	if mode == common.ApprovalRetentionMode_APPROVAL_RETENTION_MODE_UNSPECIFIED {
+		mode = common.ApprovalRetentionMode_APPROVAL_RETENTION_MODE_CACHE
+	}
+
 	select {
 	case req.ResultCh <- ApprovalResult{
-		Allowed:  allowed,
-		Duration: time.Duration(durationSeconds) * time.Second,
-		RuleID:   req.Meta.RuleID,
-		Reason:   reason,
+		Allowed:       allowed,
+		RetentionMode: mode,
+		Duration:      time.Duration(durationSeconds) * time.Second,
+		RuleID:        req.Meta.RuleID,
+		Reason:        reason,
 	}:
 	default:
 	}

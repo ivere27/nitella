@@ -12,6 +12,8 @@ type EntryPoint struct {
 	DefaultAction  string     `yaml:"defaultAction"` // "allow", "block", or "mock"
 	DefaultBackend string     `yaml:"defaultBackend,omitempty"`
 	DefaultMock    string     `yaml:"defaultMock,omitempty"` // Mock preset for defaultAction=mock
+	FallbackAction string     `yaml:"fallbackAction,omitempty"` // "close" or "mock"
+	FallbackMock   string     `yaml:"fallbackMock,omitempty"`   // Mock preset for fallbackAction=mock
 	TLS            *TLSConfig `yaml:"tls,omitempty"`
 }
 
@@ -41,8 +43,20 @@ type Router struct {
 
 // Service defines a backend
 type Service struct {
-	Address     string       `yaml:"address"`
-	HealthCheck *HealthCheck `yaml:"healthCheck,omitempty"`
+	Address      string              `yaml:"address"`
+	LoadBalancer *LoadBalancerConfig `yaml:"loadBalancer,omitempty"`
+	HealthCheck  *HealthCheck        `yaml:"healthCheck,omitempty"`
+}
+
+// LoadBalancerConfig for Traefik-style configuration
+type LoadBalancerConfig struct {
+	Servers []Server `yaml:"servers"`
+}
+
+// Server defines a backend server
+type Server struct {
+	Address string `yaml:"address"` // "url" in Traefik, but we stick to "address" for TCP consistency
+	URL     string `yaml:"url,omitempty"` // For HTTP/Traefik compatibility
 }
 
 // HealthCheck defines upstream monitoring

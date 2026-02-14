@@ -455,6 +455,44 @@ func TestApprovalManager_ResolveBlock(t *testing.T) {
 	}
 }
 
+func TestApprovalManager_ResolveConnectionOnly(t *testing.T) {
+	sender := &MockAlertSender{}
+	am := NewApprovalManager(sender)
+
+	var result ApprovalResult
+	done := make(chan struct{})
+
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		meta := ApprovalRequestMeta{ProxyID: "proxy-1", SourceIP: "1.2.3.4"}
+		result, _ = am.RequestApproval(ctx, "req-conn-only", "node-1", "test", meta)
+		close(done)
+	}()
+
+	time.Sleep(50 * time.Millisecond)
+
+	am.ResolveWithRetention(
+		"req-conn-only",
+		true,
+		60,
+		"",
+		common.ApprovalRetentionMode_APPROVAL_RETENTION_MODE_CONNECTION_ONLY,
+	)
+
+	<-done
+
+	if !result.Allowed {
+		t.Error("Result should be allowed")
+	}
+	if result.RetentionMode != common.ApprovalRetentionMode_APPROVAL_RETENTION_MODE_CONNECTION_ONLY {
+		t.Fatalf("Expected CONNECTION_ONLY mode, got %v", result.RetentionMode)
+	}
+	if result.Duration != 60*time.Second {
+		t.Fatalf("Expected duration 60s, got %v", result.Duration)
+	}
+}
+
 func TestApprovalManager_ResolveMissingRequest(t *testing.T) {
 	sender := &MockAlertSender{}
 	am := NewApprovalManager(sender)

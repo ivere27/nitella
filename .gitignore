@@ -1,3 +1,6 @@
+# Firebase
+google-services.json
+
 # Binaries
 bin/
 *.exe
@@ -55,3 +58,12 @@ Thumbs.db
 # Config with secrets
 config_prod.yaml
 provider_prod.yaml
+
+# Local development key/cert artifacts (root)
+/hub.key
+/hub_ca.key
+/jwt.key
+/hub.crt
+/hub_ca.crt
+/*.key
+/*.crt

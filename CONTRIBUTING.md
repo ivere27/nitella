@@ -82,13 +82,25 @@ make test
 
 ```
 nitella/
-├── api/           # Protobuf definitions
-├── cmd/           # Command binaries
+├── api/           # Protobuf definitions (common, proxy, hub, local, geoip, process)
+├── app/           # Flutter mobile app
+├── cmd/           # Command binaries (nitellad, nitella, hub, geoip, mock)
 ├── docs/          # Documentation
-└── pkg/
-    ├── api/       # Generated protobuf code
-    ├── geoip/     # Core GeoIP library
-    └── log/       # Logging utility
+├── pkg/
+│   ├── api/       # Generated protobuf code
+│   ├── node/      # Proxy engine (listener, rules, stats)
+│   ├── server/    # gRPC server implementations
+│   ├── service/   # Mobile backend logic
+│   ├── hub/       # Hub server implementation
+│   ├── identity/  # BIP-39 identity management
+│   ├── pairing/   # PAKE and QR code pairing
+│   ├── p2p/       # WebRTC P2P connections
+│   ├── crypto/    # E2E encryption
+│   ├── geoip/     # GeoIP library
+│   ├── mockproto/ # Mock protocol handlers
+│   └── ...
+└── test/
+    └── integration/ # Integration tests
 ```
 
 ## Testing

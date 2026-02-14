@@ -1,25 +1,25 @@
-use tonic::{Request, Response, Status};
-use tokio::sync::{RwLock, broadcast, mpsc};
-use tokio_stream::wrappers::ReceiverStream;
-use std::sync::Arc;
 use crate::proto::proxy::HealthStatus;
-use tracing::{info, error};
+use std::sync::Arc;
+use tokio::sync::{broadcast, mpsc, RwLock};
+use tokio_stream::wrappers::ReceiverStream;
+use tonic::{Request, Response, Status};
+use tracing::{error, info};
 
+use crate::approval::ApprovalManager;
+use crate::geoip::GeoIPService;
+use crate::proto::common::{ActionType, MockPreset};
 use crate::proto::process::process_control_server::ProcessControl;
 use crate::proto::process::*;
 use crate::proto::proxy::ProxyStatus;
 use crate::proxy::EmbeddedListener;
 use crate::rules::RuleEngine;
-use crate::geoip::GeoIPService;
 use crate::stats::StatsService;
-use crate::approval::ApprovalManager;
-use crate::proto::common::{ActionType, MockPreset};
 
 pub struct NitellaProcessServer {
     rule_engine: Arc<RwLock<RuleEngine>>,
     geoip: Arc<GeoIPService>,
     stats: Arc<StatsService>,
-    
+
     proxy_listener: Arc<RwLock<Option<Arc<EmbeddedListener>>>>,
     shutdown_tx: broadcast::Sender<()>,
     event_tx: broadcast::Sender<Event>,
@@ -27,13 +27,13 @@ pub struct NitellaProcessServer {
 
 impl NitellaProcessServer {
     pub fn new(
-        rule_engine: Arc<RwLock<RuleEngine>>, 
+        rule_engine: Arc<RwLock<RuleEngine>>,
         geoip: Arc<GeoIPService>,
         stats: Arc<StatsService>,
-        event_tx: broadcast::Sender<Event>
+        event_tx: broadcast::Sender<Event>,
     ) -> Self {
         let (shutdown_tx, _) = broadcast::channel(1);
-        
+
         Self {
             rule_engine,
             geoip,
@@ -47,7 +47,10 @@ impl NitellaProcessServer {
 
 #[tonic::async_trait]
 impl ProcessControl for NitellaProcessServer {
-    async fn start_listener(&self, request: Request<StartListenerRequest>) -> Result<Response<StartListenerResponse>, Status> {
+    async fn start_listener(
+        &self,
+        request: Request<StartListenerRequest>,
+    ) -> Result<Response<StartListenerResponse>, Status> {
         let req = request.into_inner();
         info!("Starting listener '{}' on {}", req.name, req.listen_addr);
 
@@ -64,14 +67,15 @@ impl ProcessControl for NitellaProcessServer {
             req.id,
             req.name,
             req.listen_addr,
-
             backend,
             self.geoip.clone(),
-            self.rule_engine.clone(), // local
+            self.rule_engine.clone(),                       // local
             Arc::new(RwLock::new(RuleEngine::new(vec![]))), // global (empty in child)
             self.stats.clone(),
             Arc::new(ApprovalManager::new()),
-            Arc::new(std::sync::atomic::AtomicI32::new(HealthStatus::Unknown as i32)),
+            Arc::new(std::sync::atomic::AtomicI32::new(
+                HealthStatus::Unknown as i32,
+            )),
             req.default_action,
             req.default_mock.map(|m| m.preset).unwrap_or(0),
             req.fallback_action,
@@ -80,7 +84,7 @@ impl ProcessControl for NitellaProcessServer {
 
         let listener_clone = listener.clone();
         let mut rx = self.shutdown_tx.subscribe();
-        
+
         tokio::spawn(async move {
             tokio::select! {
                 res = listener_clone.run() => {
@@ -102,7 +106,10 @@ impl ProcessControl for NitellaProcessServer {
         }))
     }
 
-    async fn stop_listener(&self, _request: Request<StopListenerRequest>) -> Result<Response<StopListenerResponse>, Status> {
+    async fn stop_listener(
+        &self,
+        _request: Request<StopListenerRequest>,
+    ) -> Result<Response<StopListenerResponse>, Status> {
         info!("Stopping listener");
         let mut lock = self.proxy_listener.write().await;
         if lock.is_some() {
@@ -112,9 +119,12 @@ impl ProcessControl for NitellaProcessServer {
         Ok(Response::new(StopListenerResponse { success: true }))
     }
 
-    async fn get_metrics(&self, _request: Request<GetMetricsRequest>) -> Result<Response<GetMetricsResponse>, Status> {
+    async fn get_metrics(
+        &self,
+        _request: Request<GetMetricsRequest>,
+    ) -> Result<Response<GetMetricsResponse>, Status> {
         let (active, total, b_in, b_out) = self.stats.get_summary(None);
-        
+
         let lock = self.proxy_listener.read().await;
         let running = lock.is_some();
         let listen_addr = if let Some(l) = lock.as_ref() {
@@ -136,7 +146,10 @@ impl ProcessControl for NitellaProcessServer {
         }))
     }
 
-    async fn add_rule(&self, request: Request<AddRuleRequest>) -> Result<Response<AddRuleResponse>, Status> {
+    async fn add_rule(
+        &self,
+        request: Request<AddRuleRequest>,
+    ) -> Result<Response<AddRuleResponse>, Status> {
         let req = request.into_inner();
         if let Some(rule) = req.rule {
             let mut engine = self.rule_engine.write().await;
@@ -145,10 +158,16 @@ impl ProcessControl for NitellaProcessServer {
             current.push(rule);
             engine.update_rules(current);
         }
-        Ok(Response::new(AddRuleResponse { success: true, error_message: "".to_string() }))
+        Ok(Response::new(AddRuleResponse {
+            success: true,
+            error_message: "".to_string(),
+        }))
     }
 
-    async fn remove_rule(&self, request: Request<RemoveRuleRequest>) -> Result<Response<RemoveRuleResponse>, Status> {
+    async fn remove_rule(
+        &self,
+        request: Request<RemoveRuleRequest>,
+    ) -> Result<Response<RemoveRuleResponse>, Status> {
         let req = request.into_inner();
         let mut engine = self.rule_engine.write().await;
         let mut current = engine.get_rules();
@@ -157,38 +176,69 @@ impl ProcessControl for NitellaProcessServer {
         Ok(Response::new(RemoveRuleResponse { success: true }))
     }
 
-    async fn list_rules(&self, _request: Request<ListRulesRequest>) -> Result<Response<ListRulesResponse>, Status> {
+    async fn list_rules(
+        &self,
+        _request: Request<ListRulesRequest>,
+    ) -> Result<Response<ListRulesResponse>, Status> {
         let engine = self.rule_engine.read().await;
-        Ok(Response::new(ListRulesResponse { rules: engine.get_rules() }))
+        Ok(Response::new(ListRulesResponse {
+            rules: engine.get_rules(),
+        }))
     }
 
-    async fn get_active_connections(&self, _request: Request<GetActiveConnectionsRequest>) -> Result<Response<GetActiveConnectionsResponse>, Status> {
+    async fn get_active_connections(
+        &self,
+        _request: Request<GetActiveConnectionsRequest>,
+    ) -> Result<Response<GetActiveConnectionsResponse>, Status> {
         let conns = self.stats.get_active_connections(None);
-        Ok(Response::new(GetActiveConnectionsResponse { connections: conns }))
+        Ok(Response::new(GetActiveConnectionsResponse {
+            connections: conns,
+        }))
     }
 
-    async fn close_connection(&self, request: Request<CloseConnectionRequest>) -> Result<Response<CloseConnectionResponse>, Status> {
+    async fn close_connection(
+        &self,
+        request: Request<CloseConnectionRequest>,
+    ) -> Result<Response<CloseConnectionResponse>, Status> {
         let req = request.into_inner();
         let lock = self.proxy_listener.read().await;
         if let Some(l) = lock.as_ref() {
             l.close_connection(&req.conn_id);
-            Ok(Response::new(CloseConnectionResponse { success: true, error_message: "".to_string() }))
+            Ok(Response::new(CloseConnectionResponse {
+                success: true,
+                error_message: "".to_string(),
+            }))
         } else {
-            Ok(Response::new(CloseConnectionResponse { success: false, error_message: "No active listener".to_string() }))
+            Ok(Response::new(CloseConnectionResponse {
+                success: false,
+                error_message: "No active listener".to_string(),
+            }))
         }
     }
 
-    async fn close_all_connections(&self, _request: Request<CloseAllConnectionsRequest>) -> Result<Response<CloseAllConnectionsResponse>, Status> {
+    async fn close_all_connections(
+        &self,
+        _request: Request<CloseAllConnectionsRequest>,
+    ) -> Result<Response<CloseAllConnectionsResponse>, Status> {
         let lock = self.proxy_listener.read().await;
         if let Some(l) = lock.as_ref() {
             l.close_all_connections();
-            Ok(Response::new(CloseAllConnectionsResponse { success: true, error_message: "".to_string() }))
-         } else {
-            Ok(Response::new(CloseAllConnectionsResponse { success: false, error_message: "No active listener".to_string() }))
+            Ok(Response::new(CloseAllConnectionsResponse {
+                success: true,
+                error_message: "".to_string(),
+            }))
+        } else {
+            Ok(Response::new(CloseAllConnectionsResponse {
+                success: false,
+                error_message: "No active listener".to_string(),
+            }))
         }
     }
 
-    async fn health_check(&self, _request: Request<HealthCheckRequest>) -> Result<Response<HealthCheckResponse>, Status> {
+    async fn health_check(
+        &self,
+        _request: Request<HealthCheckRequest>,
+    ) -> Result<Response<HealthCheckResponse>, Status> {
         let (active, _, _, _) = self.stats.get_summary(None);
         Ok(Response::new(HealthCheckResponse {
             status: "ok".to_string(),
@@ -198,7 +248,10 @@ impl ProcessControl for NitellaProcessServer {
 
     type StreamEventsStream = ReceiverStream<Result<Event, Status>>;
 
-    async fn stream_events(&self, _request: Request<StreamEventsRequest>) -> Result<Response<Self::StreamEventsStream>, Status> {
+    async fn stream_events(
+        &self,
+        _request: Request<StreamEventsRequest>,
+    ) -> Result<Response<Self::StreamEventsStream>, Status> {
         let (tx, rx) = mpsc::channel(100);
         let mut broadcast_rx = self.event_tx.subscribe();
 

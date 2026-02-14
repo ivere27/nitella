@@ -13,15 +13,8 @@ import (
 
 // TestCLI_DynamicProxyManagement tests using the CLI to dynamically manage proxies
 func TestCLI_DynamicProxyManagement(t *testing.T) {
-	// Check binaries exist
-	nitellaBin := "../../bin/nitella"
-	nitellad := "../../bin/nitellad"
-	if _, err := os.Stat(nitellaBin); os.IsNotExist(err) {
-		t.Skip("nitella binary not found, run 'make nitella_build' first")
-	}
-	if _, err := os.Stat(nitellad); os.IsNotExist(err) {
-		t.Skip("nitellad binary not found, run 'make nitellad_build' first")
-	}
+	nitellaBin := findMobileBinary(t, "nitella")
+	_ = findMobileBinary(t, "nitellad")
 
 	// Start backend
 	backend := startEchoBackend(t, "CLI_BACKEND_RESPONSE")
@@ -36,14 +29,7 @@ func TestCLI_DynamicProxyManagement(t *testing.T) {
 
 	// Helper to run CLI command
 	runCLI := func(args ...string) (string, error) {
-		allArgs := append([]string{"--local", "--addr", fmt.Sprintf("localhost:%d", adminPort), "--token", token, "--tls-ca", caPath}, args...)
-		cmd := exec.Command(nitellaBin, allArgs...)
-		var stdout, stderr bytes.Buffer
-		cmd.Stdout = &stdout
-		cmd.Stderr = &stderr
-		err := cmd.Run()
-		output := stdout.String() + stderr.String()
-		return output, err
+		return runLocalCLICommand(t, nitellaBin, adminPort, token, caPath, args...)
 	}
 
 	// --- Test: List proxies (should be empty or just default) ---
@@ -96,10 +82,20 @@ func TestCLI_DynamicProxyManagement(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CLI rule add failed: %v, output: %s", err, output)
 	}
-	if !strings.Contains(output, "Rule added:") {
-		t.Fatalf("Expected 'Rule added:', got: %s", output)
+	if !strings.Contains(output, "Rule added:") && !strings.Contains(output, "rule created") {
+		t.Fatalf("Expected rule creation output, got: %s", output)
 	}
 	ruleID := extractRuleID(output)
+	if ruleID == "" {
+		listOutput, listErr := runCLI("rule", "list", proxyID)
+		if listErr != nil {
+			t.Fatalf("CLI rule list failed while resolving rule ID: %v, output: %s", listErr, listOutput)
+		}
+		ruleID = extractFirstRuleIDFromList(listOutput)
+	}
+	if ruleID == "" {
+		t.Fatalf("Failed to resolve rule ID from CLI output:\n%s", output)
+	}
 	t.Logf("Added block rule: %s", ruleID)
 
 	// --- Test: Connection should be blocked ---
@@ -195,14 +191,8 @@ func TestCLI_DynamicProxyManagement(t *testing.T) {
 
 // TestCLI_QuickBlockAllow tests quick block/allow IP commands
 func TestCLI_QuickBlockAllow(t *testing.T) {
-	nitellaBin := "../../bin/nitella"
-	nitellad := "../../bin/nitellad"
-	if _, err := os.Stat(nitellaBin); os.IsNotExist(err) {
-		t.Skip("nitella binary not found")
-	}
-	if _, err := os.Stat(nitellad); os.IsNotExist(err) {
-		t.Skip("nitellad binary not found")
-	}
+	nitellaBin := findMobileBinary(t, "nitella")
+	_ = findMobileBinary(t, "nitellad")
 
 	backend := startEchoBackend(t, "QUICK_CLI_BACKEND")
 	defer backend.Close()
@@ -214,19 +204,17 @@ func TestCLI_QuickBlockAllow(t *testing.T) {
 	time.Sleep(200 * time.Millisecond)
 
 	runCLI := func(args ...string) (string, error) {
-		allArgs := append([]string{"--local", "--addr", fmt.Sprintf("localhost:%d", adminPort), "--token", token, "--tls-ca", caPath}, args...)
-		cmd := exec.Command(nitellaBin, allArgs...)
-		var stdout, stderr bytes.Buffer
-		cmd.Stdout = &stdout
-		cmd.Stderr = &stderr
-		err := cmd.Run()
-		return stdout.String() + stderr.String(), err
+		return runLocalCLICommand(t, nitellaBin, adminPort, token, caPath, args...)
 	}
 
 	// Create a proxy
 	proxyPort := getFreePort(t)
 	output, _ := runCLI("proxy", "create", fmt.Sprintf("127.0.0.1:%d", proxyPort), backend.Addr().String(), "quick-proxy")
 	t.Logf("Created proxy: %s", strings.TrimSpace(output))
+	proxyID := extractProxyID(output)
+	if proxyID == "" {
+		t.Fatalf("Failed to parse proxy ID from output: %s", output)
+	}
 	time.Sleep(100 * time.Millisecond)
 
 	listenAddr := fmt.Sprintf("127.0.0.1:%d", proxyPort)
@@ -238,7 +226,7 @@ func TestCLI_QuickBlockAllow(t *testing.T) {
 
 	// Block IP via CLI
 	t.Log("=== CLI: Block IP ===")
-	output, err := runCLI("block", "127.0.0.1")
+	output, err := runCLI("rule", "add", proxyID, "block", "127.0.0.1")
 	if err != nil {
 		t.Fatalf("CLI block failed: %v, output: %s", err, output)
 	}
@@ -252,7 +240,7 @@ func TestCLI_QuickBlockAllow(t *testing.T) {
 
 	// Allow IP via CLI (higher priority)
 	t.Log("=== CLI: Allow IP ===")
-	output, err = runCLI("allow", "127.0.0.1")
+	output, err = runCLI("rule", "add", proxyID, "allow", "127.0.0.1")
 	if err != nil {
 		t.Fatalf("CLI allow failed: %v, output: %s", err, output)
 	}
@@ -266,14 +254,8 @@ func TestCLI_QuickBlockAllow(t *testing.T) {
 
 // TestCLI_UpdateProxy tests the proxy update command
 func TestCLI_UpdateProxy(t *testing.T) {
-	nitellaBin := "../../bin/nitella"
-	nitellad := "../../bin/nitellad"
-	if _, err := os.Stat(nitellaBin); os.IsNotExist(err) {
-		t.Skip("nitella binary not found")
-	}
-	if _, err := os.Stat(nitellad); os.IsNotExist(err) {
-		t.Skip("nitellad binary not found")
-	}
+	nitellaBin := findMobileBinary(t, "nitella")
+	_ = findMobileBinary(t, "nitellad")
 
 	backend1 := startEchoBackend(t, "BACKEND_1_RESPONSE")
 	defer backend1.Close()
@@ -287,13 +269,7 @@ func TestCLI_UpdateProxy(t *testing.T) {
 	time.Sleep(200 * time.Millisecond)
 
 	runCLI := func(args ...string) (string, error) {
-		allArgs := append([]string{"--local", "--addr", fmt.Sprintf("localhost:%d", adminPort), "--token", token, "--tls-ca", caPath}, args...)
-		cmd := exec.Command(nitellaBin, allArgs...)
-		var stdout, stderr bytes.Buffer
-		cmd.Stdout = &stdout
-		cmd.Stderr = &stderr
-		err := cmd.Run()
-		return stdout.String() + stderr.String(), err
+		return runLocalCLICommand(t, nitellaBin, adminPort, token, caPath, args...)
 	}
 
 	// Create proxy pointing to backend1
@@ -343,14 +319,8 @@ func TestCLI_UpdateProxy(t *testing.T) {
 
 // TestCLI_GeoIPLookup tests the GeoIP lookup command
 func TestCLI_GeoIPLookup(t *testing.T) {
-	nitellaBin := "../../bin/nitella"
-	nitellad := "../../bin/nitellad"
-	if _, err := os.Stat(nitellaBin); os.IsNotExist(err) {
-		t.Skip("nitella binary not found")
-	}
-	if _, err := os.Stat(nitellad); os.IsNotExist(err) {
-		t.Skip("nitellad binary not found")
-	}
+	nitellaBin := findMobileBinary(t, "nitella")
+	_ = findMobileBinary(t, "nitellad")
 
 	adminPort := getFreePort(t)
 	token := "geoip-cli-token"
@@ -359,13 +329,7 @@ func TestCLI_GeoIPLookup(t *testing.T) {
 	time.Sleep(200 * time.Millisecond)
 
 	runCLI := func(args ...string) (string, error) {
-		allArgs := append([]string{"--local", "--addr", fmt.Sprintf("localhost:%d", adminPort), "--token", token, "--tls-ca", caPath}, args...)
-		cmd := exec.Command(nitellaBin, allArgs...)
-		var stdout, stderr bytes.Buffer
-		cmd.Stdout = &stdout
-		cmd.Stderr = &stderr
-		err := cmd.Run()
-		return stdout.String() + stderr.String(), err
+		return runLocalCLICommand(t, nitellaBin, adminPort, token, caPath, args...)
 	}
 
 	// Test GeoIP status
@@ -392,14 +356,8 @@ func TestCLI_GeoIPLookup(t *testing.T) {
 
 // TestCLI_Connections tests connection listing and closing via CLI
 func TestCLI_Connections(t *testing.T) {
-	nitellaBin := "../../bin/nitella"
-	nitellad := "../../bin/nitellad"
-	if _, err := os.Stat(nitellaBin); os.IsNotExist(err) {
-		t.Skip("nitella binary not found")
-	}
-	if _, err := os.Stat(nitellad); os.IsNotExist(err) {
-		t.Skip("nitellad binary not found")
-	}
+	nitellaBin := findMobileBinary(t, "nitella")
+	_ = findMobileBinary(t, "nitellad")
 
 	// Backend that holds connections
 	backendLn, _ := net.Listen("tcp", "127.0.0.1:0")
@@ -429,13 +387,7 @@ func TestCLI_Connections(t *testing.T) {
 	time.Sleep(200 * time.Millisecond)
 
 	runCLI := func(args ...string) (string, error) {
-		allArgs := append([]string{"--local", "--addr", fmt.Sprintf("localhost:%d", adminPort), "--token", token, "--tls-ca", caPath}, args...)
-		cmd := exec.Command(nitellaBin, allArgs...)
-		var stdout, stderr bytes.Buffer
-		cmd.Stdout = &stdout
-		cmd.Stderr = &stderr
-		err := cmd.Run()
-		return stdout.String() + stderr.String(), err
+		return runLocalCLICommand(t, nitellaBin, adminPort, token, caPath, args...)
 	}
 
 	// Create proxy
@@ -483,14 +435,8 @@ func TestCLI_Connections(t *testing.T) {
 
 // TestCLI_RestartListeners tests the restart command
 func TestCLI_RestartListeners(t *testing.T) {
-	nitellaBin := "../../bin/nitella"
-	nitellad := "../../bin/nitellad"
-	if _, err := os.Stat(nitellaBin); os.IsNotExist(err) {
-		t.Skip("nitella binary not found")
-	}
-	if _, err := os.Stat(nitellad); os.IsNotExist(err) {
-		t.Skip("nitellad binary not found")
-	}
+	nitellaBin := findMobileBinary(t, "nitella")
+	_ = findMobileBinary(t, "nitellad")
 
 	backend := startEchoBackend(t, "RESTART_BACKEND")
 	defer backend.Close()
@@ -502,13 +448,7 @@ func TestCLI_RestartListeners(t *testing.T) {
 	time.Sleep(200 * time.Millisecond)
 
 	runCLI := func(args ...string) (string, error) {
-		allArgs := append([]string{"--local", "--addr", fmt.Sprintf("localhost:%d", adminPort), "--token", token, "--tls-ca", caPath}, args...)
-		cmd := exec.Command(nitellaBin, allArgs...)
-		var stdout, stderr bytes.Buffer
-		cmd.Stdout = &stdout
-		cmd.Stderr = &stderr
-		err := cmd.Run()
-		return stdout.String() + stderr.String(), err
+		return runLocalCLICommand(t, nitellaBin, adminPort, token, caPath, args...)
 	}
 
 	// Create proxy
@@ -547,6 +487,28 @@ func TestCLI_RestartListeners(t *testing.T) {
 // Helper Functions
 // ============================================================================
 
+func runLocalCLICommand(t *testing.T, nitellaBin string, adminPort int, token, caPath string, args ...string) (string, error) {
+	t.Helper()
+
+	// Use a fresh data dir per invocation so non-interactive local-mode commands
+	// can bootstrap independently without stale direct-node registration state.
+	dataDir := t.TempDir()
+	allArgs := append([]string{
+		"--data-dir", dataDir,
+		"--local",
+		"--addr", fmt.Sprintf("localhost:%d", adminPort),
+		"--token", token,
+		"--tls-ca", caPath,
+	}, args...)
+
+	cmd := exec.Command(nitellaBin, allArgs...)
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	err := cmd.Run()
+	return stdout.String() + stderr.String(), err
+}
+
 // extractProxyID extracts proxy ID from "Proxy created: <id>" output
 func extractProxyID(output string) string {
 	lines := strings.Split(output, "\n")
@@ -573,6 +535,39 @@ func extractRuleID(output string) string {
 		}
 	}
 	return ""
+}
+
+func extractFirstRuleIDFromList(output string) string {
+	lines := strings.Split(output, "\n")
+	for _, line := range lines {
+		fields := strings.Fields(line)
+		if len(fields) == 0 {
+			continue
+		}
+		if isUUIDLike(fields[0]) {
+			return fields[0]
+		}
+	}
+	return ""
+}
+
+func isUUIDLike(s string) bool {
+	if len(s) != 36 {
+		return false
+	}
+	for i, ch := range s {
+		switch i {
+		case 8, 13, 18, 23:
+			if ch != '-' {
+				return false
+			}
+		default:
+			if !(ch >= '0' && ch <= '9') && !(ch >= 'a' && ch <= 'f') && !(ch >= 'A' && ch <= 'F') {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 // ============================================================================

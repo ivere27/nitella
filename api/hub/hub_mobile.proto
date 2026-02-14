@@ -16,6 +16,8 @@ import "common/common.proto";
 service MobileService {
   // Node registration via CSR (Courier mode)
   rpc RegisterNodeViaCSR(RegisterNodeViaCSRRequest) returns (google.protobuf.Empty);
+  // Node registration with existing Cert (PAKE mode)
+  rpc RegisterNodeWithCert(RegisterNodeWithCertRequest) returns (google.protobuf.Empty);
 
   // Node Management (owner's nodes only)
   rpc ListNodes(ListNodesRequest) returns (ListNodesResponse);
@@ -88,6 +90,14 @@ message RegisterNodeViaCSRRequest {
   string node_id = 3; // Optional (extracted if empty)
 }
 
+message RegisterNodeWithCertRequest {
+  string node_id = 1;
+  string cert_pem = 2;
+  string routing_token = 3;
+  bytes encrypted_metadata = 4;
+  string ca_pem = 5;
+}
+
 message ListNodesRequest {
   string filter = 1;  // "online", "offline", "all"
   repeated string routing_tokens = 2;  // Zero-Trust: Client provides tokens for nodes they own
@@ -154,6 +164,7 @@ message GetMetricsHistoryResponse {
 // Alerts
 message StreamAlertsRequest {
   string node_id = 1;
+  repeated string routing_tokens = 2;
 }
 
 // QR-based pairing (for offline/air-gapped mode)
@@ -163,6 +174,7 @@ message SubmitSignedCertRequest {
   string cert_pem = 2;       // Signed certificate
   string ca_pem = 3;         // CLI's Root CA certificate
   string fingerprint = 4;    // Emoji fingerprint for audit
+  string routing_token = 5;  // Zero-trust routing token: HMAC(node_id, user_secret)
 }
 
 // PAKE (Password-Authenticated Key Exchange) Messages
@@ -322,4 +334,15 @@ message FlushRevisionsResponse {
   int32 deleted_count = 2;
   int32 remaining_count = 3;
   string error = 4;
+}
+
+// ProxyRevisionPayload is the encrypted payload stored in Hub revisions.
+// This replaces JSON-encoded payload for type safety.
+message ProxyRevisionPayload {
+  string name = 1;
+  string description = 2;
+  string commit_message = 3;
+  string protocol_version = 4;
+  string config_yaml = 5;
+  string config_hash = 6;
 }

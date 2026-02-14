@@ -21,24 +21,25 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	MobileService_RegisterNodeViaCSR_FullMethodName = "/nitella.hub.MobileService/RegisterNodeViaCSR"
-	MobileService_ListNodes_FullMethodName          = "/nitella.hub.MobileService/ListNodes"
-	MobileService_GetNode_FullMethodName            = "/nitella.hub.MobileService/GetNode"
-	MobileService_RegisterNode_FullMethodName       = "/nitella.hub.MobileService/RegisterNode"
-	MobileService_ApproveNode_FullMethodName        = "/nitella.hub.MobileService/ApproveNode"
-	MobileService_DeleteNode_FullMethodName         = "/nitella.hub.MobileService/DeleteNode"
-	MobileService_SendCommand_FullMethodName        = "/nitella.hub.MobileService/SendCommand"
-	MobileService_StreamMetrics_FullMethodName      = "/nitella.hub.MobileService/StreamMetrics"
-	MobileService_GetMetricsHistory_FullMethodName  = "/nitella.hub.MobileService/GetMetricsHistory"
-	MobileService_StreamAlerts_FullMethodName       = "/nitella.hub.MobileService/StreamAlerts"
-	MobileService_StreamSignaling_FullMethodName    = "/nitella.hub.MobileService/StreamSignaling"
-	MobileService_CreateProxyConfig_FullMethodName  = "/nitella.hub.MobileService/CreateProxyConfig"
-	MobileService_ListProxyConfigs_FullMethodName   = "/nitella.hub.MobileService/ListProxyConfigs"
-	MobileService_DeleteProxyConfig_FullMethodName  = "/nitella.hub.MobileService/DeleteProxyConfig"
-	MobileService_PushRevision_FullMethodName       = "/nitella.hub.MobileService/PushRevision"
-	MobileService_GetRevision_FullMethodName        = "/nitella.hub.MobileService/GetRevision"
-	MobileService_ListRevisions_FullMethodName      = "/nitella.hub.MobileService/ListRevisions"
-	MobileService_FlushRevisions_FullMethodName     = "/nitella.hub.MobileService/FlushRevisions"
+	MobileService_RegisterNodeViaCSR_FullMethodName   = "/nitella.hub.MobileService/RegisterNodeViaCSR"
+	MobileService_RegisterNodeWithCert_FullMethodName = "/nitella.hub.MobileService/RegisterNodeWithCert"
+	MobileService_ListNodes_FullMethodName            = "/nitella.hub.MobileService/ListNodes"
+	MobileService_GetNode_FullMethodName              = "/nitella.hub.MobileService/GetNode"
+	MobileService_RegisterNode_FullMethodName         = "/nitella.hub.MobileService/RegisterNode"
+	MobileService_ApproveNode_FullMethodName          = "/nitella.hub.MobileService/ApproveNode"
+	MobileService_DeleteNode_FullMethodName           = "/nitella.hub.MobileService/DeleteNode"
+	MobileService_SendCommand_FullMethodName          = "/nitella.hub.MobileService/SendCommand"
+	MobileService_StreamMetrics_FullMethodName        = "/nitella.hub.MobileService/StreamMetrics"
+	MobileService_GetMetricsHistory_FullMethodName    = "/nitella.hub.MobileService/GetMetricsHistory"
+	MobileService_StreamAlerts_FullMethodName         = "/nitella.hub.MobileService/StreamAlerts"
+	MobileService_StreamSignaling_FullMethodName      = "/nitella.hub.MobileService/StreamSignaling"
+	MobileService_CreateProxyConfig_FullMethodName    = "/nitella.hub.MobileService/CreateProxyConfig"
+	MobileService_ListProxyConfigs_FullMethodName     = "/nitella.hub.MobileService/ListProxyConfigs"
+	MobileService_DeleteProxyConfig_FullMethodName    = "/nitella.hub.MobileService/DeleteProxyConfig"
+	MobileService_PushRevision_FullMethodName         = "/nitella.hub.MobileService/PushRevision"
+	MobileService_GetRevision_FullMethodName          = "/nitella.hub.MobileService/GetRevision"
+	MobileService_ListRevisions_FullMethodName        = "/nitella.hub.MobileService/ListRevisions"
+	MobileService_FlushRevisions_FullMethodName       = "/nitella.hub.MobileService/FlushRevisions"
 )
 
 // MobileServiceClient is the client API for MobileService service.
@@ -47,6 +48,8 @@ const (
 type MobileServiceClient interface {
 	// Node registration via CSR (Courier mode)
 	RegisterNodeViaCSR(ctx context.Context, in *RegisterNodeViaCSRRequest, opts ...grpc.CallOption) (*empty.Empty, error)
+	// Node registration with existing Cert (PAKE mode)
+	RegisterNodeWithCert(ctx context.Context, in *RegisterNodeWithCertRequest, opts ...grpc.CallOption) (*empty.Empty, error)
 	// Node Management (owner's nodes only)
 	ListNodes(ctx context.Context, in *ListNodesRequest, opts ...grpc.CallOption) (*ListNodesResponse, error)
 	GetNode(ctx context.Context, in *GetNodeRequest, opts ...grpc.CallOption) (*Node, error)
@@ -83,6 +86,16 @@ func (c *mobileServiceClient) RegisterNodeViaCSR(ctx context.Context, in *Regist
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(empty.Empty)
 	err := c.cc.Invoke(ctx, MobileService_RegisterNodeViaCSR_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *mobileServiceClient) RegisterNodeWithCert(ctx context.Context, in *RegisterNodeWithCertRequest, opts ...grpc.CallOption) (*empty.Empty, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(empty.Empty)
+	err := c.cc.Invoke(ctx, MobileService_RegisterNodeWithCert_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -286,6 +299,8 @@ func (c *mobileServiceClient) FlushRevisions(ctx context.Context, in *FlushRevis
 type MobileServiceServer interface {
 	// Node registration via CSR (Courier mode)
 	RegisterNodeViaCSR(context.Context, *RegisterNodeViaCSRRequest) (*empty.Empty, error)
+	// Node registration with existing Cert (PAKE mode)
+	RegisterNodeWithCert(context.Context, *RegisterNodeWithCertRequest) (*empty.Empty, error)
 	// Node Management (owner's nodes only)
 	ListNodes(context.Context, *ListNodesRequest) (*ListNodesResponse, error)
 	GetNode(context.Context, *GetNodeRequest) (*Node, error)
@@ -320,6 +335,9 @@ type UnimplementedMobileServiceServer struct{}
 
 func (UnimplementedMobileServiceServer) RegisterNodeViaCSR(context.Context, *RegisterNodeViaCSRRequest) (*empty.Empty, error) {
 	return nil, status.Error(codes.Unimplemented, "method RegisterNodeViaCSR not implemented")
+}
+func (UnimplementedMobileServiceServer) RegisterNodeWithCert(context.Context, *RegisterNodeWithCertRequest) (*empty.Empty, error) {
+	return nil, status.Error(codes.Unimplemented, "method RegisterNodeWithCert not implemented")
 }
 func (UnimplementedMobileServiceServer) ListNodes(context.Context, *ListNodesRequest) (*ListNodesResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ListNodes not implemented")
@@ -407,6 +425,24 @@ func _MobileService_RegisterNodeViaCSR_Handler(srv interface{}, ctx context.Cont
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(MobileServiceServer).RegisterNodeViaCSR(ctx, req.(*RegisterNodeViaCSRRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _MobileService_RegisterNodeWithCert_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RegisterNodeWithCertRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(MobileServiceServer).RegisterNodeWithCert(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: MobileService_RegisterNodeWithCert_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(MobileServiceServer).RegisterNodeWithCert(ctx, req.(*RegisterNodeWithCertRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -702,6 +738,10 @@ var MobileService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "RegisterNodeViaCSR",
 			Handler:    _MobileService_RegisterNodeViaCSR_Handler,
+		},
+		{
+			MethodName: "RegisterNodeWithCert",
+			Handler:    _MobileService_RegisterNodeWithCert_Handler,
 		},
 		{
 			MethodName: "ListNodes",

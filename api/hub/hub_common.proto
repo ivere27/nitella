@@ -112,7 +112,7 @@ message Command {
 
 enum CommandType {
   COMMAND_TYPE_UNSPECIFIED = 0;
-  COMMAND_TYPE_EXECUTE = 1;
+  reserved 1; // was COMMAND_TYPE_EXECUTE (removed — use specific types)
   COMMAND_TYPE_ADD_RULE = 2;
   COMMAND_TYPE_REMOVE_RULE = 3;
   COMMAND_TYPE_GET_ACTIVE_CONNECTIONS = 4;
@@ -120,6 +120,9 @@ enum CommandType {
   COMMAND_TYPE_CLOSE_ALL_CONNECTIONS = 6;
   COMMAND_TYPE_STATS_CONTROL = 7;
   COMMAND_TYPE_LIST_PROXIES = 8;
+  COMMAND_TYPE_LIST_RULES = 9;
+  COMMAND_TYPE_STATUS = 10;          // Get node status
+  COMMAND_TYPE_GET_METRICS = 11;     // Get node metrics
 
   // Proxy Template Management
   COMMAND_TYPE_APPLY_PROXY = 20;     // Apply proxy config to node
@@ -129,6 +132,30 @@ enum CommandType {
 
   // Approval Workflow
   COMMAND_TYPE_RESOLVE_APPROVAL = 30; // Resolve a pending approval request
+
+  // Proxy Lifecycle (Direct gRPC SecureCommand)
+  COMMAND_TYPE_CREATE_PROXY = 40;
+  COMMAND_TYPE_DELETE_PROXY = 41;
+  COMMAND_TYPE_ENABLE_PROXY = 42;
+  COMMAND_TYPE_DISABLE_PROXY = 43;
+  COMMAND_TYPE_UPDATE_PROXY = 44;
+  COMMAND_TYPE_RESTART_LISTENERS = 45;
+  COMMAND_TYPE_RELOAD_RULES = 46;
+
+  // Quick Actions (Direct gRPC SecureCommand)
+  COMMAND_TYPE_BLOCK_IP = 50;
+  COMMAND_TYPE_ALLOW_IP = 51;
+  COMMAND_TYPE_LIST_GLOBAL_RULES = 52;
+  COMMAND_TYPE_REMOVE_GLOBAL_RULE = 53;
+
+  // GeoIP (Direct gRPC SecureCommand)
+  COMMAND_TYPE_CONFIGURE_GEOIP = 60;
+  COMMAND_TYPE_GET_GEOIP_STATUS = 61;
+  COMMAND_TYPE_LOOKUP_IP = 62;
+
+  // Approval Management (Direct gRPC SecureCommand)
+  COMMAND_TYPE_LIST_ACTIVE_APPROVALS = 70;
+  COMMAND_TYPE_CANCEL_APPROVAL = 71;
 }
 
 message EncryptedCommandPayload {

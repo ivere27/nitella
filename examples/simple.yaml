@@ -1,0 +1,20 @@
+# nitella/proxy: v1
+meta:
+  name: "Simple Proxy"
+  description: "Standard configuration"
+
+entryPoints:
+  web:
+    address: ":8080"
+
+tcp:
+  routers:
+    to-backend:
+      entryPoints: ["web"]
+      service: backend
+
+  services:
+    backend:
+      loadBalancer:
+        servers:
+          - address: "127.0.0.1:3000"

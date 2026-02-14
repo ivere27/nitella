@@ -17,6 +17,7 @@ import (
 	pb "github.com/ivere27/nitella/pkg/api/geoip"
 	"github.com/ivere27/nitella/pkg/geoip"
 	"github.com/ivere27/nitella/pkg/node/admincert"
+	nitellaPprof "github.com/ivere27/nitella/pkg/pprof"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 )
@@ -41,7 +42,11 @@ func main() {
 	// TLS flags
 	certDataDir := flag.String("cert-data-dir", "", "Directory for auto-generated TLS certificates (required)")
 
+	// Profiling (only effective with -tags pprof)
+	pprofPort := flag.Int("pprof-port", 0, "Port for pprof HTTP server (0 = disabled, requires -tags pprof build)")
+
 	flag.Parse()
+	nitellaPprof.Start(*pprofPort)
 
 	var manager *geoip.Manager
 

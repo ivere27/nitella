@@ -16,7 +16,7 @@
 | `make hub_test_quick` | Quick smoke tests |
 | `make hub_test_e2e_docker` | Full Docker-based E2E tests |
 
-## Test Results (2026-02-04)
+## Test Results
 
 ### Unit Tests - ALL PASSED
 
@@ -42,6 +42,28 @@
 |--------|-------------|
 | `make hub_test_e2e_docker` | Full Docker-based E2E tests with Hub, nodes, and mock backends |
 | `make hub_test_clean` | Clean up test artifacts and docker volumes |
+
+### Mobile Backend Tests
+
+| Target | Description |
+|--------|-------------|
+| `make mobile_test` | Mobile backend integration tests (direct node) |
+
+Mobile test functions:
+
+| Test | Description |
+|------|-------------|
+| `TestMobileIdentityCreation` | BIP-39 identity creation |
+| `TestMobileIdentityRestore` | Identity restore from mnemonic |
+| `TestMobileHubConnection` | Hub connection and registration |
+| `TestMobileDirectConnect` | Direct node connection (no Hub) |
+| `TestMobileRuleCRUD` | Per-proxy rule add/update/remove |
+| `TestMobileGlobalRuleCRUD` | Global rule add/list/remove via mobile backend |
+| `TestMobileTemplateCRUD` | Template create/apply/delete |
+| `TestMobileSettings` | Settings persistence |
+| `TestMobileGeoIPLookup` | GeoIP lookup via mobile backend |
+| `TestMobileFullFlow` | Full pairing + proxy + rules flow |
+| `TestMobileErrorPaths` | Error handling validation |
 
 #### E2E Test Functions
 

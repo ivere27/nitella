@@ -1,14 +1,14 @@
+use crate::cert_utils;
 use anyhow::Result;
-use qrcodegen::{QrCode, QrCodeEcc};
-use hyper::{Body, Request, Response, Server};
 use hyper::service::{make_service_fn, service_fn};
+use hyper::{Body, Request, Response, Server};
+use qrcodegen::{QrCode, QrCodeEcc};
 use std::convert::Infallible;
 use std::net::SocketAddr;
-use std::sync::{Arc, Mutex};
-use tokio::sync::oneshot;
-use crate::cert_utils;
 use std::path::Path;
+use std::sync::{Arc, Mutex};
 use tokio::fs;
+use tokio::sync::oneshot;
 
 pub struct OfflinePairing {
     data_dir: String,
@@ -17,7 +17,10 @@ pub struct OfflinePairing {
 
 impl OfflinePairing {
     pub fn new(data_dir: String, node_name: String) -> Self {
-        Self { data_dir, node_name }
+        Self {
+            data_dir,
+            node_name,
+        }
     }
 
     pub async fn run(&self, port: Option<u16>) -> Result<()> {
@@ -27,7 +30,7 @@ impl OfflinePairing {
         println!("Generating Identity...");
         let (key_pem, key_pair) = cert_utils::generate_node_key()?;
         let csr_pem = cert_utils::generate_csr(key_pair, &self.node_name)?;
-        
+
         fs::write(Path::new(&self.data_dir).join("node.key"), &key_pem).await?;
 
         // 2. Generate QR Code Payload
@@ -48,15 +51,18 @@ impl OfflinePairing {
 
     async fn run_terminal(&self, payload_str: &str) -> Result<()> {
         self.print_qr(payload_str);
-        println!("
+        println!(
+            "
 Or copy this JSON:
-{}", payload_str);
-    
+{}",
+            payload_str
+        );
+
         println!("\nPaste the response JSON below:");
-        
+
         let mut input = String::new();
         std::io::stdin().read_line(&mut input)?;
-        
+
         // Process received cert
         self.save_cert(&input).await?;
         Ok(())
@@ -64,14 +70,20 @@ Or copy this JSON:
 
     async fn run_web(&self, port: u16, payload_str: &str, csr_pem: &str) -> Result<()> {
         self.print_qr(payload_str);
-        println!("
+        println!(
+            "
 Or copy this JSON:
-{}", payload_str);
+{}",
+            payload_str
+        );
 
         // 3. Start Web Server
         let addr = SocketAddr::from(([0, 0, 0, 0], port));
-        println!("
-Starting Pairing Web UI at http://{}", addr);
+        println!(
+            "
+Starting Pairing Web UI at http://{}",
+            addr
+        );
 
         let (tx, rx) = oneshot::channel::<String>(); // Channel to receive cert from web handler
         let tx = Arc::new(Mutex::new(Some(tx)));
@@ -89,7 +101,7 @@ Starting Pairing Web UI at http://{}", addr);
         });
 
         let server = Server::bind(&addr).serve(make_svc);
-        
+
         // Race server and completion channel
         tokio::select! {
             _ = server => {},
@@ -130,21 +142,28 @@ Starting Pairing Web UI at http://{}", addr);
     }
 }
 
-async fn handle_request(req: Request<Body>, tx: Arc<Mutex<Option<oneshot::Sender<String>>>>, csr: String) -> Result<Response<Body>, Infallible> {
+async fn handle_request(
+    req: Request<Body>,
+    tx: Arc<Mutex<Option<oneshot::Sender<String>>>>,
+    csr: String,
+) -> Result<Response<Body>, Infallible> {
     if req.method() == hyper::Method::POST && req.uri().path() == "/submit" {
         let full_body = hyper::body::to_bytes(req.into_body()).await.unwrap();
         let body_str = String::from_utf8(full_body.to_vec()).unwrap();
-        
+
         if let Ok(mut lock) = tx.lock() {
             if let Some(sender) = lock.take() {
                 let _ = sender.send(body_str);
             }
         }
-        return Ok(Response::new(Body::from("Pairing Complete. You can close this window.")));
+        return Ok(Response::new(Body::from(
+            "Pairing Complete. You can close this window.",
+        )));
     }
 
     // Serve simple UI
-    let html = format!(r#"
+    let html = format!(
+        r#"
     <html><body>
     <h1>Nitella Pairing</h1>
     <p>Scan this QR with Mobile App or CLI</p>
@@ -154,7 +173,9 @@ async fn handle_request(req: Request<Body>, tx: Arc<Mutex<Option<oneshot::Sender
         <button type="submit">Submit</button>
     </form>
     </body></html>
-    "#, csr); // Simplified UI, real one would show QR image
+    "#,
+        csr
+    ); // Simplified UI, real one would show QR image
 
     Ok(Response::new(Body::from(html)))
 }

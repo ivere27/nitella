@@ -1,7 +1,7 @@
-use crate::proto::proxy::{Rule, Condition};
-use crate::proto::common::{GeoInfo, ConditionType};
-use std::net::IpAddr;
+use crate::proto::common::{ConditionType, GeoInfo};
+use crate::proto::proxy::{Condition, Rule};
 use ipnet::IpNet;
+use std::net::IpAddr;
 
 #[derive(Debug, Clone)]
 pub struct RuleMatcher {
@@ -21,11 +21,8 @@ impl RuleMatcher {
                 }
             }
         }
-        
-        Self {
-            rule,
-            source_cidrs,
-        }
+
+        Self { rule, source_cidrs }
     }
 
     pub fn matches(&self, ip: IpAddr, geo: &Option<GeoInfo>) -> bool {
@@ -47,28 +44,32 @@ impl RuleMatcher {
     }
 
     fn check_condition(&self, cond: &Condition, ip: IpAddr, geo: &Option<GeoInfo>) -> bool {
-        let result = match ConditionType::try_from(cond.r#type).unwrap_or(ConditionType::Unspecified) {
-            ConditionType::SourceIp => {
-                self.source_cidrs.iter().any(|net| net.contains(&ip))
-            },
-            ConditionType::GeoCountry => {
-                if let Some(g) = geo {
-                    g.country_code.eq_ignore_ascii_case(&cond.value) || g.country.eq_ignore_ascii_case(&cond.value)
-                } else {
-                    false
+        let result =
+            match ConditionType::try_from(cond.r#type).unwrap_or(ConditionType::Unspecified) {
+                ConditionType::SourceIp => self.source_cidrs.iter().any(|net| net.contains(&ip)),
+                ConditionType::GeoCountry => {
+                    if let Some(g) = geo {
+                        g.country_code.eq_ignore_ascii_case(&cond.value)
+                            || g.country.eq_ignore_ascii_case(&cond.value)
+                    } else {
+                        false
+                    }
                 }
-            },
-            ConditionType::GeoIsp => {
-                if let Some(g) = geo {
-                    g.isp.to_lowercase().contains(&cond.value.to_lowercase())
-                } else {
-                    false
+                ConditionType::GeoIsp => {
+                    if let Some(g) = geo {
+                        g.isp.to_lowercase().contains(&cond.value.to_lowercase())
+                    } else {
+                        false
+                    }
                 }
-            },
-            _ => false,
-        };
+                _ => false,
+            };
 
-        if cond.negate { !result } else { result }
+        if cond.negate {
+            !result
+        } else {
+            result
+        }
     }
 }
 
@@ -91,9 +92,9 @@ impl RuleEngine {
         }
         None
     }
-    
+
     pub fn update_rules(&mut self, rules: Vec<Rule>) {
-         let mut matchers: Vec<RuleMatcher> = rules.into_iter().map(RuleMatcher::new).collect();
+        let mut matchers: Vec<RuleMatcher> = rules.into_iter().map(RuleMatcher::new).collect();
         matchers.sort_by(|a, b| b.rule.priority.cmp(&a.rule.priority));
         self.matchers = matchers;
     }

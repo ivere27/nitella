@@ -1,8 +1,8 @@
-use anyhow::{Result, Context, bail};
-use sha2::{Sha256, Digest};
+use aes_gcm::{aead::Aead, Aes256Gcm, KeyInit, Nonce};
+use anyhow::{bail, Context, Result};
 use hkdf::Hkdf;
-use aes_gcm::{Aes256Gcm, KeyInit, aead::Aead, Nonce};
-use rand::{RngCore};
+use rand::RngCore;
+use sha2::{Digest, Sha256};
 use x25519_dalek::{PublicKey, StaticSecret};
 
 pub const ROLE_CLI: &str = "cli";
@@ -102,7 +102,8 @@ impl CPaceSession {
         // = HKDF(IKM=sharedSecret, salt=nil, info=transcript)
         let hkdf = Hkdf::<Sha256>::new(None, shared_secret);
         let mut okm = [0u8; 32];
-        hkdf.expand(&transcript, &mut okm).expect("HKDF expand failed");
+        hkdf.expand(&transcript, &mut okm)
+            .expect("HKDF expand failed");
         okm.to_vec()
     }
 
@@ -116,13 +117,10 @@ impl CPaceSession {
 
         // Must match Go's cpace.go emoji list exactly
         const EMOJIS: &[&str] = &[
-            "🐶", "🐱", "🐭", "🐹", "🐰", "🦊", "🐻", "🐼",
-            "🐨", "🐯", "🦁", "🐮", "🐷", "🐸", "🐵", "🐔",
-            "🐧", "🐦", "🐤", "🦆", "🦅", "🦉", "🦇", "🐺",
-            "🐗", "🐴", "🦄", "🐝", "🐛", "🦋", "🐌", "🐞",
-            "🌸", "🌺", "🌻", "🌹", "🌷", "🌼", "🌿", "🍀",
-            "🍎", "🍊", "🍋", "🍇", "🍓", "🍒", "🍑", "🥝",
-            "🌙", "⭐", "🌟", "✨", "⚡", "🔥", "🌈", "☀️",
+            "🐶", "🐱", "🐭", "🐹", "🐰", "🦊", "🐻", "🐼", "🐨", "🐯", "🦁", "🐮", "🐷", "🐸",
+            "🐵", "🐔", "🐧", "🐦", "🐤", "🦆", "🦅", "🦉", "🦇", "🐺", "🐗", "🐴", "🦄", "🐝",
+            "🐛", "🦋", "🐌", "🐞", "🌸", "🌺", "🌻", "🌹", "🌷", "🌼", "🌿", "🍀", "🍎", "🍊",
+            "🍋", "🍇", "🍓", "🍒", "🍑", "🥝", "🌙", "⭐", "🌟", "✨", "⚡", "🔥", "🌈", "☀️",
             "🎸", "🎹", "🎺", "🎷", "🥁", "🎻", "🎤", "🎧",
         ];
 
@@ -138,12 +136,14 @@ impl CPaceSession {
         let key_bytes = self.shared_key.as_ref().context("Handshake not complete")?;
         let key = aes_gcm::Key::<Aes256Gcm>::from_slice(key_bytes);
         let cipher = Aes256Gcm::new(key);
-        
+
         let mut nonce_bytes = [0u8; 12];
         rand::thread_rng().fill_bytes(&mut nonce_bytes);
         let nonce = Nonce::from_slice(&nonce_bytes);
 
-        let ciphertext = cipher.encrypt(nonce, plaintext).map_err(|e| anyhow::anyhow!("Encryption failed: {}", e))?;
+        let ciphertext = cipher
+            .encrypt(nonce, plaintext)
+            .map_err(|e| anyhow::anyhow!("Encryption failed: {}", e))?;
         Ok((ciphertext, nonce_bytes.to_vec()))
     }
 
@@ -153,7 +153,9 @@ impl CPaceSession {
         let cipher = Aes256Gcm::new(key);
         let nonce = Nonce::from_slice(nonce_bytes);
 
-        let plaintext = cipher.decrypt(nonce, ciphertext).map_err(|e| anyhow::anyhow!("Decryption failed: {}", e))?;
+        let plaintext = cipher
+            .decrypt(nonce, ciphertext)
+            .map_err(|e| anyhow::anyhow!("Decryption failed: {}", e))?;
         Ok(plaintext)
     }
 }
@@ -169,11 +171,11 @@ fn derive_generator(password: &[u8], session_id: &[u8]) -> PublicKey {
     // In x25519, we don't have a direct "scalar * basepoint" where basepoint is arbitrary point in PublicKey form?
     // Wait, standard X25519 is "Scalar * Basepoint(9)".
     // To implement "Scalar * G'", we treat G' as a "Public Key" (Point) and Scalar as "Private Key".
-    // 
+    //
     // Go logic:
     // clamp(digest) -> scalar
     // G' = scalar * Basepoint
-    
+
     let mut scalar_bytes = [0u8; 32];
     scalar_bytes.copy_from_slice(&digest);
     // Clamp

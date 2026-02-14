@@ -71,6 +71,13 @@ func (m *AdminCertManager) GetCACertPath() string {
 	return m.caPath
 }
 
+// GetCAPrivateKey returns the CA's Ed25519 private key for E2E encryption.
+func (m *AdminCertManager) GetCAPrivateKey() ed25519.PrivateKey {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.caKey
+}
+
 // GetTLSConfig returns TLS config for the admin gRPC server.
 func (m *AdminCertManager) GetTLSConfig() *tls.Config {
 	m.mu.RLock()

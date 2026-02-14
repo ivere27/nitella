@@ -1,44 +1,45 @@
 use clap::Parser;
-use tracing::{info, error, warn, Level};
-use tracing_subscriber::FmtSubscriber;
-use std::sync::Arc;
-use tokio::sync::{RwLock, broadcast};
-use tonic::transport::{Server, Identity, ServerTlsConfig};
-use tonic::{Request, Status};
-use std::fs as std_fs;
+use ed25519_dalek::{
+    pkcs8::{DecodePrivateKey, EncodePrivateKey},
+    SigningKey, VerifyingKey,
+};
 use rand::RngCore;
-use ed25519_dalek::{SigningKey, VerifyingKey, pkcs8::{DecodePrivateKey, EncodePrivateKey}};
+use std::fs as std_fs;
+use std::sync::Arc;
+use tokio::sync::{broadcast, RwLock};
+use tonic::transport::{Identity, Server, ServerTlsConfig};
+use tonic::{Request, Status};
+use tracing::{error, info, warn, Level};
+use tracing_subscriber::FmtSubscriber;
 
 // Use library crate's proto and modules
 use nitella::proto;
 use nitella::{
-    geoip, rules, server, hub, admin, manager, 
-    stats, health, pairing_offline, db, config, 
-    admin_security, synurang
+    admin, admin_security, config, db, geoip, health, hub, manager, pairing_offline, rules, server,
+    stats, synurang,
 };
 
-use geoip::GeoIPService;
-use rules::RuleEngine;
-use server::NitellaProcessServer;
-use hub::HubClient;
 use admin::AdminServer;
-use manager::ProxyManager;
-use stats::StatsService;
-use health::HealthChecker;
-use pairing_offline::OfflinePairing;
 use db::Database;
+use geoip::GeoIPService;
+use health::HealthChecker;
+use hub::HubClient;
+use manager::ProxyManager;
 use nitella::approval::ApprovalManager;
+use pairing_offline::OfflinePairing;
+use proto::common::{ActionType, FallbackAction, MockPreset};
 use proto::process::process_control_server::ProcessControlServer;
 use proto::proxy::proxy_control_service_server::ProxyControlServiceServer;
 use proto::proxy::CreateProxyRequest;
-use proto::common::{ActionType, MockPreset, FallbackAction};
+use rules::RuleEngine;
+use server::NitellaProcessServer;
+use stats::StatsService;
 
 /// Nitella Proxy Daemon (Rust Implementation)
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
 struct Args {
     // --- Proxy Options ---
-
     /// Listen address for proxy
     #[arg(long, default_value = "0.0.0.0:8080")]
     listen: String,
@@ -54,7 +55,7 @@ struct Args {
     /// Path to SQLite database (default "nitella.db")
     #[arg(long, default_value = "nitella.db")]
     db_path: String,
-    
+
     /// Path to statistics database
     #[arg(long)]
     stats_db: Option<String>,
@@ -62,11 +63,11 @@ struct Args {
     /// Run each proxy as a separate child process (for isolation)
     #[arg(long)]
     process_mode: bool,
-    
+
     /// Data directory for admin API certificates
     #[arg(long)]
     admin_data_dir: Option<String>,
-    
+
     // Support "child" subcommand args
     #[arg(long)]
     id: Option<String>,
@@ -74,7 +75,6 @@ struct Args {
     name: Option<String>,
 
     // --- Admin API Options ---
-
     /// Port for Admin gRPC API (0 = disabled)
     #[arg(long, default_value_t = 0)]
     admin_port: u16,
@@ -88,7 +88,6 @@ struct Args {
     pprof_port: u16,
 
     // --- Hub Mode Options ---
-
     /// Hub server address
     #[arg(long, env = "NITELLA_HUB")]
     hub: Option<String>,
@@ -100,19 +99,19 @@ struct Args {
     /// Node name for Hub (default: hostname)
     #[arg(long)]
     hub_node_name: Option<String>,
-    
+
     /// Hub Data Directory (default: ~/.nitella/nitellad)
     #[arg(long)]
     hub_data_dir: Option<String>,
-    
+
     /// Enable P2P connections via Hub
     #[arg(long, default_value_t = true)]
     hub_p2p: bool,
-    
+
     /// Use QR code pairing mode
     #[arg(long)]
     hub_qr_mode: bool,
-    
+
     /// Path to Hub CA certificate
     #[arg(long)]
     hub_ca: Option<String>,
@@ -120,25 +119,24 @@ struct Args {
     /// STUN server address
     #[arg(long)]
     stun: Option<String>,
-    
+
     /// Pairing Code
     #[arg(long)]
     pair: Option<String>,
-    
+
     /// Offline pairing mode
     #[arg(long)]
     pair_offline: bool,
-    
+
     /// Port for pairing web UI
     #[arg(long)]
     pair_port: Option<String>,
-    
+
     /// Pairing timeout duration
     #[arg(long)]
     pair_timeout: Option<String>,
 
     // --- TLS Options ---
-
     /// Path to TLS Certificate
     #[arg(long)]
     tls_cert: Option<String>,
@@ -156,7 +154,6 @@ struct Args {
     mtls: bool,
 
     // --- GeoIP Options ---
-
     /// Path to GeoIP2 City DB
     #[arg(long)]
     geoip_city: Option<String>,
@@ -164,15 +161,15 @@ struct Args {
     /// Path to GeoIP2 ISP DB
     #[arg(long)]
     geoip_isp: Option<String>,
-    
+
     /// Path to GeoIP L2 Cache
     #[arg(long)]
     geoip_cache: Option<String>,
-    
+
     /// GeoIP L2 Cache TTL in hours
     #[arg(long)]
     geoip_cache_ttl: Option<i32>,
-    
+
     /// Lookup strategy order
     #[arg(long)]
     geoip_strategy: Option<String>,
@@ -180,7 +177,7 @@ struct Args {
     /// Remote provider timeout in ms
     #[arg(long, default_value_t = 3000)]
     geoip_timeout: u64,
-    
+
     /// Address of external GeoIP service
     #[arg(long)]
     geoip_addr: Option<String>,
@@ -198,7 +195,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let is_child = args_raw.len() > 1 && args_raw[1] == "child";
 
     // Remove "child" from position 1 so clap doesn't complain
-    let args_clean: Vec<String> = args_raw.into_iter().enumerate()
+    let args_clean: Vec<String> = args_raw
+        .into_iter()
+        .enumerate()
         .filter(|(i, a)| !(*i == 1 && a == "child"))
         .map(|(_, a)| a)
         .collect();
@@ -219,18 +218,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 0. Handle Offline Pairing
     if args.pair_offline {
         let node_name = args.hub_node_name.clone().unwrap_or_else(|| {
-                gethostname::gethostname()
-                    .into_string()
-                    .unwrap_or_else(|_| "nitellad-node".to_string())
-            });
+            gethostname::gethostname()
+                .into_string()
+                .unwrap_or_else(|_| "nitellad-node".to_string())
+        });
         let pairing = OfflinePairing::new(args.hub_data_dir.clone().unwrap(), node_name);
-        
+
         let port = if let Some(p_str) = args.pair_port.as_deref() {
             Some(p_str.parse::<u16>()?)
         } else {
             None
         };
-        
+
         match pairing.run(port).await {
             Ok(_) => info!("Offline pairing completed successfully."),
             Err(e) => error!("Offline pairing failed: {}", e),
@@ -242,37 +241,44 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let db = match Database::new(&args.db_path).await {
         Ok(d) => Some(d),
         Err(e) => {
-            warn!("Failed to init DB persistence: {}. Running in-memory only.", e);
+            warn!(
+                "Failed to init DB persistence: {}. Running in-memory only.",
+                e
+            );
             None
         }
     };
 
     // 2. Initialize Shared Services
-    let geoip = Arc::new(GeoIPService::new(
-        args.geoip_city.clone(),
-        args.geoip_isp.clone(),
-        if let Some(addr) = args.geoip_addr {
-            Some(format!("{}/%s", addr))
-        } else {
-            Some("https://ip-api.com/json/%s".to_string())
-        },
-        args.geoip_cache.clone().or(Some("geoip_cache.db".to_string())),
-        args.geoip_cache_ttl.unwrap_or(24),
-        args.geoip_strategy.clone(),
-    ).await?);
+    let geoip = Arc::new(
+        GeoIPService::new(
+            args.geoip_city.clone(),
+            args.geoip_isp.clone(),
+            args.geoip_addr
+                .clone()
+                .or_else(|| Some("https://ip-api.com/json".to_string())),
+            args.geoip_cache
+                .clone()
+                .or(Some("geoip_cache.db".to_string())),
+            args.geoip_cache_ttl.unwrap_or(24),
+            args.geoip_strategy.clone(),
+            args.geoip_timeout,
+        )
+        .await?,
+    );
 
     let global_rules = Arc::new(RwLock::new(RuleEngine::new(vec![])));
     let approval_manager = Arc::new(ApprovalManager::new());
-    
+
     // 3. Event Bus & Stats
     let (event_tx, _) = broadcast::channel(100);
     let stats = Arc::new(StatsService::new(event_tx.clone()));
-    
+
     // 7. Run Logic
     if is_child {
         // --- CHILD MODE ---
         info!("Mode: Child Process (IPC)");
-        
+
         // In child mode, we use a dedicated local rule engine for the single proxy
         let rule_engine = Arc::new(RwLock::new(RuleEngine::new(vec![])));
 
@@ -280,7 +286,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             rule_engine.clone(),
             geoip.clone(),
             stats.clone(),
-            event_tx.clone()
+            event_tx.clone(),
         );
 
         #[cfg(unix)]
@@ -292,7 +298,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 if let Err(e) = tx.send(Ok::<_, std::io::Error>(unix_stream)).await {
                     error!("Failed to send stream to channel: {}", e);
                 }
-                
+
                 // Spawn a task to hold the sender open indefinitely so the stream doesn't close
                 tokio::spawn(async move {
                     let _tx = tx;
@@ -301,17 +307,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                 let stream = tokio_stream::wrappers::ReceiverStream::new(rx);
                 info!("Synurang IPC: Serving gRPC process control... awaiting server");
-                
+
                 let serve_result = Server::builder()
                     .add_service(ProcessControlServer::new(process_server))
                     .serve_with_incoming(stream)
                     .await;
-                
+
                 match serve_result {
-                    Ok(_) => info!("Server finished successfully (but it should have run forever?)"),
+                    Ok(_) => {
+                        info!("Server finished successfully (but it should have run forever?)")
+                    }
                     Err(e) => error!("Server exited with error: {}", e),
                 }
-                
+
                 // IMPORTANT: In child mode, we must exit after server finishes.
                 return Ok(());
             } else {
@@ -325,12 +333,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         // 4. Initialize Proxy Manager
         let manager = Arc::new(ProxyManager::new(
-            geoip.clone(), 
-            global_rules.clone(), 
+            geoip.clone(),
+            global_rules.clone(),
             stats.clone(),
             db.clone(),
             args.process_mode,
-            approval_manager.clone()
+            approval_manager.clone(),
         ));
 
         // Restore state from DB
@@ -346,21 +354,27 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     if let Some(eps) = yaml.entry_points {
                         for (name, ep) in eps {
                             let mut default_backend = ep.default_backend.clone();
-                            
+
                             // Try to resolve backend from TCP routers if not specified
                             if default_backend.is_empty() {
                                 if let Some(tcp) = &yaml.tcp {
                                     if let Some(routers) = &tcp.routers {
                                         for (_, router) in routers {
-                                            if router.entry_points.contains(&name) && !router.service.is_empty() {
+                                            if router.entry_points.contains(&name)
+                                                && !router.service.is_empty()
+                                            {
                                                 if let Some(services) = &tcp.services {
-                                                    if let Some(svc) = services.get(&router.service) {
+                                                    if let Some(svc) = services.get(&router.service)
+                                                    {
                                                         if let Some(lb) = &svc.load_balancer {
-                                                            if let Some(server) = lb.servers.first() {
+                                                            if let Some(server) = lb.servers.first()
+                                                            {
                                                                 if !server.address.is_empty() {
-                                                                    default_backend = server.address.clone();
+                                                                    default_backend =
+                                                                        server.address.clone();
                                                                 } else {
-                                                                    default_backend = server.url.clone();
+                                                                    default_backend =
+                                                                        server.url.clone();
                                                                 }
                                                                 if lb.servers.len() > 1 {
                                                                     warn!("[Config] Service '{}' defines multiple servers, but load balancing is not supported yet. Using first server: {}", router.service, default_backend);
@@ -398,8 +412,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                             let fallback_mock = string_to_mock_preset(&ep.fallback_mock);
 
-                            info!("[Config] CreateProxy {}: Addr={}, Action={} (from YAML: {})", name, ep.address, action_type, ep.default_action);
-                            
+                            info!(
+                                "[Config] CreateProxy {}: Addr={}, Action={} (from YAML: {})",
+                                name, ep.address, action_type, ep.default_action
+                            );
+
                             let req = CreateProxyRequest {
                                 name: name.clone(),
                                 listen_addr: ep.address,
@@ -415,7 +432,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             }
                         }
                     }
-                },
+                }
                 Err(e) => {
                     error!("Failed to load config file: {}", e);
                     std::process::exit(1);
@@ -428,7 +445,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         tokio::spawn(async move {
             health_checker.run().await;
         });
-        
+
         // A. Start Hub Client
         if let Some(ref hub_addr) = args.hub {
             info!("Initializing Hub Client: {}", hub_addr);
@@ -437,23 +454,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     .into_string()
                     .unwrap_or_else(|_| "nitellad-node".to_string())
             });
-            
+
             // Subscribe to events for Alerts
             let event_rx = event_tx.subscribe();
-            
+
             let mut hub_client = HubClient::new(
-                hub_addr.clone(), 
-                args.hub_data_dir.clone().unwrap(), 
-                node_name, 
+                hub_addr.clone(),
+                args.hub_data_dir.clone().unwrap(),
+                node_name,
                 manager.clone(),
                 args.stun.clone(),
                 args.hub_ca.clone(),
-                Some(event_rx)
+                Some(event_rx),
             )
             .with_user_id(args.hub_user_id.clone())
             .with_p2p(args.hub_p2p);
             let pair_code = args.pair.clone();
-            
+
             tokio::spawn(async move {
                 // First run: use pairing code if provided
                 if let Err(e) = hub_client.run(pair_code).await {
@@ -473,7 +490,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         // B. Start Admin Server with TLS & Auth
         if args.admin_port > 0 {
             let addr = format!("0.0.0.0:{}", args.admin_port).parse()?;
-            
+
             let admin_dir = if let Some(dir) = args.admin_data_dir {
                 dir
             } else {
@@ -484,7 +501,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     None => ".".to_string(),
                 }
             };
-            
+
             info!("Admin Data Directory: {}", admin_dir);
 
             // Check for admin token (required for security)
@@ -500,7 +517,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             match admin_security::ensure_admin_certs(&admin_dir).await {
                 Ok((cert_path, key_path)) => {
                     info!("Admin API listening on {} (TLS)", addr);
-                    
+
                     let cert = std_fs::read(&cert_path)?;
                     let key = std_fs::read(&key_path)?;
                     let identity = Identity::from_pem(cert, key);
@@ -508,49 +525,62 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     // Load Admin Identity Keys from CA key (admin_ca.key) - Client uses CA Cert Key for E2E!
                     let ca_key_path = std::path::Path::new(&admin_dir).join("admin_ca.key");
                     let key_pem_str = std_fs::read_to_string(&ca_key_path)?;
-                    let signing_key = SigningKey::from_pkcs8_pem(&key_pem_str)
-                        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, format!("Failed to parse admin_ca.key as Ed25519: {}", e)))?;
+                    let signing_key = SigningKey::from_pkcs8_pem(&key_pem_str).map_err(|e| {
+                        std::io::Error::new(
+                            std::io::ErrorKind::InvalidData,
+                            format!("Failed to parse admin_ca.key as Ed25519: {}", e),
+                        )
+                    })?;
                     let verifying_key = signing_key.verifying_key();
-                    
-                    let admin_server = AdminServer::new(manager.clone(), global_rules.clone(), signing_key, verifying_key, event_tx.clone());
+
+                    let admin_server = AdminServer::new(
+                        manager.clone(),
+                        global_rules.clone(),
+                        signing_key,
+                        verifying_key,
+                        event_tx.clone(),
+                    );
                     let token_clone = token.clone();
 
-                    let service = ProxyControlServiceServer::with_interceptor(admin_server, move |req: Request<()>| {
-                        // Check "Authorization: Bearer <token>" header
-                        if let Some(val) = req.metadata().get("authorization") {
-                            if let Ok(s) = val.to_str() {
-                                if let Some(bearer_token) = s.strip_prefix("Bearer ") {
-                                    if bearer_token == token_clone {
+                    let service = ProxyControlServiceServer::with_interceptor(
+                        admin_server,
+                        move |req: Request<()>| {
+                            // Check "Authorization: Bearer <token>" header
+                            if let Some(val) = req.metadata().get("authorization") {
+                                if let Ok(s) = val.to_str() {
+                                    if let Some(bearer_token) = s.strip_prefix("Bearer ") {
+                                        if bearer_token == token_clone {
+                                            return Ok(req);
+                                        }
+                                    }
+                                    // Also accept raw token for backwards compatibility
+                                    if s == token_clone {
                                         return Ok(req);
                                     }
                                 }
-                                // Also accept raw token for backwards compatibility
-                                if s == token_clone {
+                            }
+                            // Check custom header (mobile app)
+                            if let Some(val) = req.metadata().get("x-nitella-token") {
+                                if val == &token_clone {
                                     return Ok(req);
                                 }
                             }
-                        }
-                        // Check custom header (mobile app)
-                        if let Some(val) = req.metadata().get("x-nitella-token") {
-                            if val == &token_clone {
-                                return Ok(req);
-                            }
-                        }
-                        Err(Status::unauthenticated("Invalid token"))
-                    });
-                    
+                            Err(Status::unauthenticated("Invalid token"))
+                        },
+                    );
+
                     tokio::spawn(async move {
                         if let Err(e) = Server::builder()
                             .tls_config(ServerTlsConfig::new().identity(identity))
                             .expect("Failed to config TLS")
                             .add_service(service)
                             .serve(addr)
-                            .await 
+                            .await
                         {
                             error!("Admin server error: {}", e);
                         }
                     });
-                },
+                }
                 Err(e) => error!("Failed to setup Admin TLS: {}", e),
             }
         }
@@ -566,21 +596,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 ca_pem: args.tls_ca.unwrap_or_default(),
                 ..Default::default()
             };
-            
+
             if let Err(e) = manager.create_proxy(req).await {
                 error!("Failed to start initial proxy: {}", e);
                 std::process::exit(1);
             }
         } else if args.hub.is_none() && args.config.is_none() && args.admin_port == 0 {
-             eprintln!("Error: No backend, config, conn-hub or admin-port specified.");
-             std::process::exit(1);
+            eprintln!("Error: No backend, config, conn-hub or admin-port specified.");
+            std::process::exit(1);
         }
 
-    
         use tokio::signal::unix::{signal, SignalKind};
-        
+
         let mut term = signal(SignalKind::terminate())?;
-        
+
         tokio::select! {
             _ = tokio::signal::ctrl_c() => {
                 info!("Received Ctrl-C, shutting down...");

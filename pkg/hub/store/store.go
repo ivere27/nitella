@@ -3,12 +3,13 @@ package store
 import (
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	_ "github.com/go-sql-driver/mysql" // MySQL driver
 	"github.com/ivere27/nitella/pkg/hub/model"
-	_ "github.com/lib/pq"              // PostgreSQL driver
-	_ "github.com/mattn/go-sqlite3"    // SQLite driver
+	_ "github.com/lib/pq"           // PostgreSQL driver
+	_ "github.com/mattn/go-sqlite3" // SQLite driver
 
 	"xorm.io/xorm"
 )
@@ -44,6 +45,8 @@ type Store interface {
 	ApproveNodeAtomic(code, certPEM, caPEM, routingToken string, node *model.Node, info *model.RoutingTokenInfo) (*model.RegistrationRequest, error)
 	// GetApprovedCLICAs returns all unique CLI CA PEMs from approved registrations
 	GetApprovedCLICAs() ([]string, error)
+	// GetRoutingTokenByCA looks up the routing token associated with a CA PEM
+	GetRoutingTokenByCA(caPEM string) (string, error)
 
 	// Nodes (Zero-Trust: no owner lookups)
 	SaveNode(node *model.Node) error
@@ -132,7 +135,7 @@ type Store interface {
 	CountProxyRevisions(proxyID string) (int64, error)
 	DeleteProxyRevision(id int64) error
 	DeleteOldestProxyRevisions(proxyID string, keepCount int) (int64, error) // Returns deleted count
-	GetTotalProxyStorageByRoutingToken(routingToken string) (int64, error)    // Total bytes across all proxies
+	GetTotalProxyStorageByRoutingToken(routingToken string) (int64, error)   // Total bytes across all proxies
 
 	// Approval Requests (Zero-Trust: by RoutingToken)
 	SaveApprovalRequest(req *model.ApprovalRequest) error
@@ -188,7 +191,90 @@ func NewStore(driver, dsn string) (Store, error) {
 		return nil, fmt.Errorf("db sync failed: %w", err)
 	}
 
+	if err := migrateProxyRevisionIndexes(engine, driver); err != nil {
+		return nil, fmt.Errorf("proxy revision index migration failed: %w", err)
+	}
+
 	return &XORMStore{engine: engine}, nil
+}
+
+func migrateProxyRevisionIndexes(engine *xorm.Engine, driver string) error {
+	// Legacy schema accidentally enforced unique(revision_num) globally.
+	// Current schema requires unique(proxy_id, revision_num).
+	if driver != "sqlite3" {
+		return nil
+	}
+
+	indexRows, err := engine.Query("PRAGMA index_list('proxy_revision')")
+	if err != nil {
+		return err
+	}
+
+	hasCompositeUnique := false
+	for _, row := range indexRows {
+		name := strings.TrimSpace(string(row["name"]))
+		if name == "" {
+			continue
+		}
+		if string(row["unique"]) != "1" {
+			continue
+		}
+
+		cols, err := sqliteIndexColumns(engine, name)
+		if err != nil {
+			return err
+		}
+
+		if isProxyRevisionCompositeUnique(cols) {
+			hasCompositeUnique = true
+			continue
+		}
+
+		if len(cols) == 1 && cols[0] == "revision_num" {
+			if _, err := engine.Exec(fmt.Sprintf("DROP INDEX IF EXISTS %s", quoteSQLiteIdent(name))); err != nil {
+				return fmt.Errorf("drop legacy index %q: %w", name, err)
+			}
+		}
+	}
+
+	if hasCompositeUnique {
+		return nil
+	}
+
+	_, err = engine.Exec("CREATE UNIQUE INDEX IF NOT EXISTS UQE_proxy_revision_proxy_rev_pair ON proxy_revision (proxy_id, revision_num)")
+	return err
+}
+
+func sqliteIndexColumns(engine *xorm.Engine, indexName string) ([]string, error) {
+	rows, err := engine.Query(fmt.Sprintf("PRAGMA index_info(%s)", quoteSQLiteString(indexName)))
+	if err != nil {
+		return nil, err
+	}
+	cols := make([]string, 0, len(rows))
+	for _, row := range rows {
+		col := strings.ToLower(strings.TrimSpace(string(row["name"])))
+		if col == "" {
+			continue
+		}
+		cols = append(cols, col)
+	}
+	return cols, nil
+}
+
+func isProxyRevisionCompositeUnique(cols []string) bool {
+	if len(cols) != 2 {
+		return false
+	}
+	return (cols[0] == "proxy_id" && cols[1] == "revision_num") ||
+		(cols[0] == "revision_num" && cols[1] == "proxy_id")
+}
+
+func quoteSQLiteIdent(name string) string {
+	return `"` + strings.ReplaceAll(name, `"`, `""`) + `"`
+}
+
+func quoteSQLiteString(value string) string {
+	return `'` + strings.ReplaceAll(value, `'`, `''`) + `'`
 }
 
 // NewSQLiteStore creates a new SQLite-backed store
@@ -350,6 +436,19 @@ func (s *XORMStore) GetApprovedCLICAs() ([]string, error) {
 		}
 	}
 	return cas, nil
+}
+
+// GetRoutingTokenByCA looks up the routing token associated with a CA PEM
+func (s *XORMStore) GetRoutingTokenByCA(caPEM string) (string, error) {
+	req := &model.RegistrationRequest{}
+	has, err := s.engine.Where("ca_pem = ? AND status = ?", caPEM, "APPROVED").Get(req)
+	if err != nil {
+		return "", err
+	}
+	if !has {
+		return "", errors.New("routing token not found for CA")
+	}
+	return req.RoutingToken, nil
 }
 
 // Node methods

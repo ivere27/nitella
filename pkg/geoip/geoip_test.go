@@ -3,6 +3,7 @@ package geoip
 import (
 	"context"
 	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -35,6 +36,18 @@ func (m *MockProvider) Lookup(ip string) (*common.GeoInfo, error) {
 // createTestClient creates manager and embedded client for testing
 func createTestClient(m *Manager) GeoIPClient {
 	return NewEmbeddedClient(m)
+}
+
+func newIPv4TestServer(t *testing.T, handler http.Handler) *httptest.Server {
+	t.Helper()
+	ts := httptest.NewUnstartedServer(handler)
+	ln, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("failed to create IPv4 test listener: %v", err)
+	}
+	ts.Listener = ln
+	ts.Start()
+	return ts
 }
 
 func TestManager_FallbackAndCache(t *testing.T) {
@@ -168,6 +181,9 @@ func TestManager_MultipleIPs(t *testing.T) {
 func TestRemoteProvider_Real(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping real network test in short mode")
+	}
+	if os.Getenv("NITELLA_GEOIP_REAL_TEST") != "1" {
+		t.Skip("Set NITELLA_GEOIP_REAL_TEST=1 to run real network GeoIP test")
 	}
 
 	// Test with ipwhois.app (more reliable, no strict rate limits)
@@ -414,7 +430,7 @@ func TestProvider_Parsing_Variations(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			ts := newIPv4TestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				w.Header().Set("Content-Type", "application/json")
 				fmt.Fprintln(w, tt.response)
 			}))
@@ -508,7 +524,7 @@ func TestProvider_Consistency(t *testing.T) {
 
 	for _, s := range scenarios {
 		t.Run(s.name, func(t *testing.T) {
-			ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			ts := newIPv4TestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				w.Header().Set("Content-Type", "application/json")
 				fmt.Fprintln(w, s.response)
 			}))
@@ -539,7 +555,7 @@ func TestManager_Redundancy(t *testing.T) {
 
 	// 1. Mock IP-API (Fails)
 	mockMsg1 := "api returned fail"
-	ts1 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	ts1 := newIPv4TestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		fmt.Fprintf(w, `{"status": "fail", "message": "%s"}`, mockMsg1)
 	}))
@@ -547,7 +563,7 @@ func TestManager_Redundancy(t *testing.T) {
 	m.AddRemoteProvider("mock-ip-api", ts1.URL+"/%s")
 
 	// 2. Mock FreeIPAPI (Succeeds)
-	ts2 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	ts2 := newIPv4TestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		fmt.Fprintln(w, `{
 			"ipVersion": 4,
@@ -563,7 +579,7 @@ func TestManager_Redundancy(t *testing.T) {
 	m.AddRemoteProvider("mock-free-ip-api", ts2.URL+"/%s")
 
 	// 3. Mock IPWhois (Not reached)
-	ts3 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	ts3 := newIPv4TestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
 	defer ts3.Close()
@@ -592,7 +608,7 @@ func TestManager_Redundancy(t *testing.T) {
 }
 
 func TestProvider_VariedIPs(t *testing.T) {
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	ts := newIPv4TestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 
 		switch {

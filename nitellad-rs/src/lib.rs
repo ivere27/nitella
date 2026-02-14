@@ -22,26 +22,26 @@ pub mod proto {
     }
 }
 
-pub mod geoip;
-pub mod rules;
-pub mod proxy;
-pub mod server;
-pub mod hub;
 pub mod admin;
-pub mod cpace;
-pub mod manager;
-pub mod cert_utils;
-pub mod stats;
-pub mod health;
-pub mod pairing_offline;
-pub mod db;
-pub mod config;
 pub mod admin_security;
-pub mod synurang;
-pub mod process_proxy;
 pub mod approval;
+pub mod cert_utils;
+pub mod config;
+pub mod cpace;
 pub mod crypto; // Added
+pub mod db;
+pub mod geoip;
+pub mod health;
+pub mod hub;
 pub mod hubca;
+pub mod manager;
+pub mod pairing_offline;
+pub mod process_proxy;
+pub mod proxy;
+pub mod rules;
+pub mod server;
+pub mod stats;
+pub mod synurang;
 
 pub mod mobile;
 pub mod mobile_service;

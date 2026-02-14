@@ -8,8 +8,10 @@ import (
 	"crypto/x509"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"log"
+	"strings"
 	"sync"
 	"time"
 
@@ -66,6 +68,10 @@ type Transport struct {
 	nodePublicKeys map[string]ed25519.PublicKey
 	nodeKeysMu     sync.RWMutex
 
+	// Pending request-response tracking (for SendCommandAndWait)
+	pendingRequests map[string]chan *P2PMessage
+	pendingMu       sync.Mutex
+
 	// Replay protection
 	nonceTracker *NonceTracker
 }
@@ -87,13 +93,14 @@ func NewTransport(userID string, client SignalingClient) *Transport {
 	api := webrtc.NewAPI(webrtc.WithSettingEngine(settingEngine))
 
 	return &Transport{
-		myUserID:       userID,
-		signaling:      client,
-		peers:          make(map[string]*PeerConnection),
-		api:            api,
-		nodePublicKeys: make(map[string]ed25519.PublicKey),
-		stunURL:        DefaultSTUNServer,
-		nonceTracker:   NewNonceTracker(5 * time.Minute), // 5 min replay window
+		myUserID:        userID,
+		signaling:       client,
+		peers:           make(map[string]*PeerConnection),
+		api:             api,
+		nodePublicKeys:  make(map[string]ed25519.PublicKey),
+		pendingRequests: make(map[string]chan *P2PMessage),
+		stunURL:         DefaultSTUNServer,
+		nonceTracker:    NewNonceTracker(5 * time.Minute), // 5 min replay window
 	}
 }
 
@@ -145,9 +152,11 @@ func (t *Transport) GetNodeKey(nodeID string) (ed25519.PublicKey, bool) {
 
 // StartSignaling connects to the Hub signaling stream
 func (t *Transport) StartSignaling(ctx context.Context) error {
-	// Add user_id to metadata for routing
-	md := metadata.Pairs("user_id", t.myUserID)
-	ctx = metadata.NewOutgoingContext(ctx, md)
+	// Add user_id to metadata for routing, preserving existing metadata
+	md, _ := metadata.FromOutgoingContext(ctx)
+	newMD := md.Copy()
+	newMD.Set("user_id", t.myUserID)
+	ctx = metadata.NewOutgoingContext(ctx, newMD)
 
 	stream, err := t.signaling.StreamSignaling(ctx)
 	if err != nil {
@@ -595,20 +604,32 @@ func (t *Transport) IsConnected(peerID string) bool {
 	return peer.dataChannel.ReadyState() == webrtc.DataChannelStateOpen
 }
 
-// Close closes all connections
-func (t *Transport) Close() {
+// Close closes all connections and returns any errors encountered.
+func (t *Transport) Close() error {
 	// Stop nonce tracker goroutine
 	if t.nonceTracker != nil {
 		t.nonceTracker.Stop()
 	}
 
+	// Cancel all pending requests
+	t.pendingMu.Lock()
+	for id, ch := range t.pendingRequests {
+		close(ch)
+		delete(t.pendingRequests, id)
+	}
+	t.pendingMu.Unlock()
+
 	t.peersMu.Lock()
 	defer t.peersMu.Unlock()
 
+	var errs []error
 	for _, peer := range t.peers {
-		peer.pc.Close()
+		if err := peer.pc.Close(); err != nil {
+			errs = append(errs, err)
+		}
 	}
 	t.peers = make(map[string]*PeerConnection)
+	return errors.Join(errs...)
 }
 
 // --- Internal ---
@@ -617,7 +638,11 @@ func (t *Transport) receiveLoop() {
 	for {
 		msg, err := t.stream.Recv()
 		if err != nil {
-			log.Printf("[P2P] Signaling stream ended: %v", err)
+			// Suppress logs for expected shutdown errors
+			errStr := err.Error()
+			if !strings.Contains(errStr, "Canceled") && !strings.Contains(errStr, "client connection is closing") {
+				log.Printf("[P2P] Signaling stream ended: %v", err)
+			}
 			return
 		}
 
@@ -664,7 +689,11 @@ func (t *Transport) handleOffer(senderID string, payload []byte) {
 			{URLs: []string{t.stunURL}},
 		},
 	}
-	pc, _ := t.api.NewPeerConnection(config)
+	pc, err := t.api.NewPeerConnection(config)
+	if err != nil {
+		log.Printf("[P2P] Failed to create PeerConnection for %s: %v", senderID, err)
+		return
+	}
 
 	peer := &PeerConnection{
 		pc:       pc,
@@ -776,6 +805,76 @@ func (t *Transport) SendApprovalDecision(nodeID string, decision *ApprovalDecisi
 	return t.Send(nodeID, data)
 }
 
+// SendCommandAndWait sends a command message to a node and waits for the correlated response.
+// The msg must have a RequestID set for correlation. Returns the response message or error on timeout.
+func (t *Transport) SendCommandAndWait(nodeID string, msg *P2PMessage, timeout time.Duration) (*P2PMessage, error) {
+	if msg.RequestID == "" {
+		return nil, fmt.Errorf("message must have RequestID for request-response correlation")
+	}
+
+	// Register pending request channel
+	ch := make(chan *P2PMessage, 1)
+	t.pendingMu.Lock()
+	t.pendingRequests[msg.RequestID] = ch
+	t.pendingMu.Unlock()
+
+	// Clean up on exit
+	defer func() {
+		t.pendingMu.Lock()
+		delete(t.pendingRequests, msg.RequestID)
+		t.pendingMu.Unlock()
+	}()
+
+	// Get node's public key for encryption
+	t.nodeKeysMu.RLock()
+	nodePubKey := t.nodePublicKeys[nodeID]
+	t.nodeKeysMu.RUnlock()
+
+	if nodePubKey == nil {
+		return nil, fmt.Errorf("no public key for node %s", nodeID)
+	}
+
+	// Encrypt and send
+	encData, err := EncryptP2PMessage(msg, nodePubKey)
+	if err != nil {
+		return nil, fmt.Errorf("failed to encrypt command: %w", err)
+	}
+
+	if err := t.Send(nodeID, encData); err != nil {
+		return nil, fmt.Errorf("failed to send command: %w", err)
+	}
+
+	// Wait for response with timeout
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+
+	select {
+	case resp := <-ch:
+		return resp, nil
+	case <-timer.C:
+		return nil, fmt.Errorf("command timed out after %v", timeout)
+	}
+}
+
+// deliverResponse delivers a response message to a pending request channel.
+// Returns true if a pending request was found and delivered to.
+func (t *Transport) deliverResponse(requestID string, msg *P2PMessage) bool {
+	t.pendingMu.Lock()
+	ch, ok := t.pendingRequests[requestID]
+	t.pendingMu.Unlock()
+
+	if !ok {
+		return false
+	}
+
+	select {
+	case ch <- msg:
+		return true
+	default:
+		return false
+	}
+}
+
 // handleP2PMessage parses and routes incoming P2P protocol messages
 // SECURITY: Only called for authenticated peers, all messages must be encrypted
 func (t *Transport) handleP2PMessage(senderID string, data []byte) bool {
@@ -810,7 +909,19 @@ func (t *Transport) handleP2PMessage(senderID string, data []byte) bool {
 			}
 		}
 		return true
-	case MessageTypeMetrics, MessageTypeCommand, MessageTypeCommandResponse:
+	case MessageTypeCommandResponse:
+		// Route to pending request if we have a matching RequestID
+		if resp, err := msg.ParseCommandResponse(); err == nil && resp.RequestID != "" {
+			if t.deliverResponse(resp.RequestID, msg) {
+				return true
+			}
+		}
+		// No pending request found, forward to generic handler
+		if t.onMessage != nil {
+			t.onMessage(senderID, msg.Payload)
+		}
+		return true
+	case MessageTypeMetrics, MessageTypeCommand:
 		// Forward to generic handler
 		if t.onMessage != nil {
 			t.onMessage(senderID, msg.Payload)

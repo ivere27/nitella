@@ -1,9 +1,9 @@
-use sqlx::{sqlite::SqlitePoolOptions, Pool, Sqlite, Row};
+use crate::proto::common::MockPreset;
+use crate::proto::proxy::{Condition, CreateProxyRequest, HealthCheckConfig, MockConfig, Rule};
 use anyhow::Result;
+use sqlx::{sqlite::SqlitePoolOptions, Pool, Row, Sqlite};
 use std::path::Path;
 use tokio::fs;
-use crate::proto::proxy::{CreateProxyRequest, Rule, MockConfig, Condition, HealthCheckConfig};
-use crate::proto::common::{MockPreset};
 
 #[derive(Clone)]
 pub struct Database {
@@ -25,7 +25,8 @@ fn mock_preset_to_string(p: i32) -> String {
         MockPreset::TelnetSecure => "telnet-secure",
         MockPreset::RawTarpit => "raw-tarpit",
         _ => "",
-    }.to_string()
+    }
+    .to_string()
 }
 
 fn string_to_mock_preset(s: &str) -> MockPreset {
@@ -58,9 +59,7 @@ impl Database {
         }
 
         let conn_str = format!("sqlite://{}", db_path);
-        let pool = SqlitePoolOptions::new()
-            .connect(&conn_str)
-            .await?;
+        let pool = SqlitePoolOptions::new().connect(&conn_str).await?;
 
         let db = Self { pool };
         db.init().await?;
@@ -87,8 +86,10 @@ impl Database {
                 health_check_json TEXT,
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                 updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
-            );"
-        ).execute(&self.pool).await?;
+            );",
+        )
+        .execute(&self.pool)
+        .await?;
 
         // Go Schema: rule_model
         sqlx::query(
@@ -106,12 +107,15 @@ impl Database {
                 expression TEXT,
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                 updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
-            );"
-        ).execute(&self.pool).await?;
+            );",
+        )
+        .execute(&self.pool)
+        .await?;
 
         // Create index for rule_model.proxy_id if not exists
         sqlx::query("CREATE INDEX IF NOT EXISTS idx_rule_model_proxy_id ON rule_model (proxy_id)")
-            .execute(&self.pool).await?;
+            .execute(&self.pool)
+            .await?;
 
         Ok(())
     }
@@ -119,10 +123,10 @@ impl Database {
     pub async fn save_proxy(&self, id: &str, req: &CreateProxyRequest) -> Result<()> {
         let default_mock_str = mock_preset_to_string(req.default_mock);
         let fallback_mock_str = mock_preset_to_string(req.fallback_mock);
-        
+
         // Serialize HealthCheck
         let hc_json = if let Some(hc) = &req.health_check {
-             serde_json::to_string(hc).unwrap_or_default()
+            serde_json::to_string(hc).unwrap_or_default()
         } else {
             String::new()
         };
@@ -132,7 +136,7 @@ impl Database {
                 id, name, listen_addr, default_backend, default_action, default_mock, 
                 fallback_action, fallback_mock, enabled, cert_pem, key_pem, ca_pem, 
                 client_auth_type, health_check_json, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)"
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)",
         )
         .bind(id)
         .bind(&req.name)
@@ -226,7 +230,7 @@ impl Database {
             "INSERT OR REPLACE INTO rule_model (
                 id, proxy_id, name, priority, enabled, action, target_backend, 
                 conditions_json, mock_config_json, expression, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)"
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)",
         )
         .bind(&rule.id)
         .bind(proxy_id)
@@ -252,10 +256,11 @@ impl Database {
     }
 
     pub async fn load_rules(&self, proxy_id: &str) -> Result<Vec<Rule>> {
-        let rows = sqlx::query("SELECT * FROM rule_model WHERE proxy_id = ? ORDER BY priority DESC")
-            .bind(proxy_id)
-            .fetch_all(&self.pool)
-            .await?;
+        let rows =
+            sqlx::query("SELECT * FROM rule_model WHERE proxy_id = ? ORDER BY priority DESC")
+                .bind(proxy_id)
+                .fetch_all(&self.pool)
+                .await?;
 
         let mut result = Vec::new();
         for row in rows {

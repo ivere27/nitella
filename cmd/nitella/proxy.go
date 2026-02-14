@@ -3,26 +3,17 @@ package main
 import (
 	"bufio"
 	"context"
-	"crypto/ed25519"
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"sort"
 	"strings"
 	"time"
 
-	"github.com/google/uuid"
-	"github.com/ivere27/nitella/pkg/api/common"
-	pb "github.com/ivere27/nitella/pkg/api/hub"
+	pb "github.com/ivere27/nitella/pkg/api/local"
 	"github.com/ivere27/nitella/pkg/cli"
-	"github.com/ivere27/nitella/pkg/config"
-	nitellacrypto "github.com/ivere27/nitella/pkg/crypto"
-	"github.com/ivere27/nitella/pkg/hub/routing"
-	"gopkg.in/yaml.v3"
 )
 
 // ProxyMeta stores metadata for a local proxy config
@@ -37,61 +28,80 @@ type ProxyMeta struct {
 	ConfigHash  string    `yaml:"config_hash,omitempty" json:"config_hash,omitempty"`
 }
 
-// ProxyRevisionPayload is encrypted and stored on Hub
-type ProxyRevisionPayload struct {
-	Name            string `json:"name"`
-	Description     string `json:"description"`
-	CommitMessage   string `json:"commit_message"`
-	ProtocolVersion string `json:"protocol_version"`
-	ConfigYAML      string `json:"config_yaml"`
-	ConfigHash      string `json:"config_hash"`
+func fromLocalProxy(pbMeta *pb.LocalProxyConfig) *ProxyMeta {
+	if pbMeta == nil {
+		return nil
+	}
+	meta := &ProxyMeta{
+		ID:          pbMeta.ProxyId,
+		Name:        pbMeta.Name,
+		Description: pbMeta.Description,
+		RevisionNum: pbMeta.RevisionNum,
+		ConfigHash:  pbMeta.ConfigHash,
+	}
+	if pbMeta.CreatedAt != nil {
+		meta.CreatedAt = pbMeta.CreatedAt.AsTime()
+	}
+	if pbMeta.UpdatedAt != nil {
+		meta.UpdatedAt = pbMeta.UpdatedAt.AsTime()
+	}
+	if pbMeta.SyncedAt != nil {
+		meta.SyncedAt = pbMeta.SyncedAt.AsTime()
+	}
+	return meta
 }
 
-// getProxiesDir returns the directory for local proxy configs
-func getProxiesDir() string {
-	return filepath.Join(dataDir, "proxies")
-}
-
-// getProxyIndex returns the path to the proxy index file
-func getProxyIndexPath() string {
-	return filepath.Join(getProxiesDir(), "index.json")
-}
-
-// loadProxyIndex loads the proxy metadata index
+// loadProxyIndex loads local proxy metadata from MobileLogicService.
 func loadProxyIndex() (map[string]*ProxyMeta, error) {
-	indexPath := getProxyIndexPath()
-	data, err := os.ReadFile(indexPath)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	resp, err := client.ListLocalProxyConfigs(ctx, &pb.ListLocalProxyConfigsRequest{})
 	if err != nil {
-		if os.IsNotExist(err) {
-			return make(map[string]*ProxyMeta), nil
-		}
 		return nil, err
 	}
 
-	var index map[string]*ProxyMeta
-	if err := json.Unmarshal(data, &index); err != nil {
-		return nil, err
+	index := make(map[string]*ProxyMeta, len(resp.Proxies))
+	for _, p := range resp.Proxies {
+		meta := fromLocalProxy(p)
+		if meta != nil {
+			index[meta.ID] = meta
+		}
 	}
 	return index, nil
 }
 
-// saveProxyIndex saves the proxy metadata index
-func saveProxyIndex(index map[string]*ProxyMeta) error {
-	if err := os.MkdirAll(getProxiesDir(), 0700); err != nil {
-		return err
-	}
+func getLocalProxy(proxyID string) (*ProxyMeta, string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
 
-	data, err := json.MarshalIndent(index, "", "  ")
+	resp, err := client.GetLocalProxyConfig(ctx, &pb.GetLocalProxyConfigRequest{ProxyId: proxyID})
 	if err != nil {
-		return err
+		return nil, "", err
 	}
-
-	return os.WriteFile(getProxyIndexPath(), data, 0600)
+	if !resp.Success {
+		return nil, "", fmt.Errorf("%s", resp.Error)
+	}
+	return fromLocalProxy(resp.Proxy), resp.ConfigYaml, nil
 }
 
-// getProxyPath returns the path to a proxy config file
-func getProxyPath(proxyID string) string {
-	return filepath.Join(getProxiesDir(), proxyID+".yaml")
+func saveLocalProxy(proxyID, name, description, content string) (*ProxyMeta, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	resp, err := client.SaveLocalProxyConfig(ctx, &pb.SaveLocalProxyConfigRequest{
+		ProxyId:     proxyID,
+		Name:        name,
+		Description: description,
+		ConfigYaml:  content,
+	})
+	if err != nil {
+		return nil, err
+	}
+	if !resp.Success {
+		return nil, fmt.Errorf("%s", resp.Error)
+	}
+	return fromLocalProxy(resp.Proxy), nil
 }
 
 // findProxyByPrefix finds a proxy by ID prefix (convenience)
@@ -116,6 +126,19 @@ func findProxyByPrefix(prefix string) (*ProxyMeta, error) {
 	}
 
 	return matches[0], nil
+}
+
+// resolveProxyID resolves a local prefix to full proxy ID.
+// If no local match exists, it falls back to the provided value directly.
+func resolveProxyID(idOrPrefix string) (string, error) {
+	meta, err := findProxyByPrefix(idOrPrefix)
+	if err == nil {
+		return meta.ID, nil
+	}
+	if strings.Contains(err.Error(), "ambiguous") {
+		return "", err
+	}
+	return idOrPrefix, nil
 }
 
 // hashConfig computes SHA256 of config content
@@ -192,6 +215,13 @@ Apply to Node:
   proxy apply <proxy-id> <node-id>           Apply proxy to node
   proxy status <node-id>                     Show applied proxies
   proxy unapply <proxy-id> <node-id>         Remove proxy from node
+
+EXAMPLES:
+  # Create a new proxy from a YAML file
+  nitella proxy import ./config/proxy.yaml --name "My Web Proxy"
+
+  # Push changes to the Hub
+  nitella proxy push <proxy-id> -m "Updated firewall rules"
 `)
 }
 
@@ -212,116 +242,36 @@ func cmdProxyImport(args []string) {
 		}
 	}
 
-	// Read file
 	content, err := os.ReadFile(filePath)
 	if err != nil {
 		fmt.Printf("Error reading file: %v\n", err)
 		return
 	}
 
-	// Check for existing header
-	lines := strings.SplitN(string(content), "\n", 2)
-	if len(lines) == 0 {
-		fmt.Println("Error: Empty file")
-		return
-	}
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
 
-	var header *config.Header
-	var configContent []byte
-
-	// Try to parse header
-	header, err = config.ParseHeader(lines[0])
-	if err != nil {
-		// No header - wrap with header
-		fmt.Println("No nitella header found, adding proxy v1 header...")
-		configContent = content
-	} else {
-		if header.Type != config.TypeProxy {
-			fmt.Printf("Warning: File has type '%s', expected 'proxy'\n", header.Type)
-		}
-		if len(lines) > 1 {
-			configContent = []byte(lines[1])
-		}
-	}
-
-	// Parse YAML to extract meta if present
-	var yamlData map[string]interface{}
-	if err := yaml.Unmarshal(configContent, &yamlData); err != nil {
-		fmt.Printf("Error parsing YAML: %v\n", err)
-		return
-	}
-
-	// Generate proxy ID
-	proxyID := uuid.New().String()
-
-	// Extract name from meta if not provided
-	if name == "" {
-		if meta, ok := yamlData["meta"].(map[string]interface{}); ok {
-			if n, ok := meta["name"].(string); ok {
-				name = n
-			}
-			// Use existing ID if present
-			if id, ok := meta["id"].(string); ok && id != "" {
-				proxyID = id
-			}
-		}
-	}
-
-	if name == "" {
-		name = filepath.Base(filePath)
-		name = strings.TrimSuffix(name, filepath.Ext(name))
-	}
-
-	// Update or add meta section
-	if yamlData["meta"] == nil {
-		yamlData["meta"] = make(map[string]interface{})
-	}
-	meta := yamlData["meta"].(map[string]interface{})
-	meta["id"] = proxyID
-	meta["name"] = name
-	meta["created_at"] = time.Now().Format(time.RFC3339)
-	meta["updated_at"] = time.Now().Format(time.RFC3339)
-
-	// Serialize back to YAML
-	newContent, err := yaml.Marshal(yamlData)
-	if err != nil {
-		fmt.Printf("Error serializing YAML: %v\n", err)
-		return
-	}
-
-	// Add header
-	fullContent := config.WriteWithHeader(config.TypeProxy, config.VersionProxy, newContent, false)
-
-	// Save to proxies directory
-	if err := os.MkdirAll(getProxiesDir(), 0700); err != nil {
-		fmt.Printf("Error creating proxies directory: %v\n", err)
-		return
-	}
-
-	proxyPath := getProxyPath(proxyID)
-	if err := os.WriteFile(proxyPath, fullContent, 0600); err != nil {
-		fmt.Printf("Error saving proxy: %v\n", err)
-		return
-	}
-
-	// Update index
-	index, _ := loadProxyIndex()
-	index[proxyID] = &ProxyMeta{
-		ID:         proxyID,
+	resp, err := client.ImportLocalProxyConfig(ctx, &pb.ImportLocalProxyConfigRequest{
+		ConfigData: content,
+		SourceName: filePath,
 		Name:       name,
-		CreatedAt:  time.Now(),
-		UpdatedAt:  time.Now(),
-		ConfigHash: hashConfig(newContent),
+	})
+	if err != nil {
+		fmt.Printf("Error importing proxy: %v\n", err)
+		return
 	}
-
-	if err := saveProxyIndex(index); err != nil {
-		fmt.Printf("Error saving index: %v\n", err)
+	if !resp.Success || resp.Proxy == nil {
+		errMsg := resp.Error
+		if errMsg == "" {
+			errMsg = "unknown error"
+		}
+		fmt.Printf("Error importing proxy: %s\n", errMsg)
 		return
 	}
 
-	fmt.Printf("Created proxy %s\n", proxyID)
-	fmt.Printf("  Name: %s\n", name)
-	fmt.Printf("  File: %s\n", proxyPath)
+	fmt.Printf("Created proxy %s\n", resp.Proxy.ProxyId)
+	fmt.Printf("  Name: %s\n", resp.Proxy.Name)
+	fmt.Println("  Stored in MobileLogicService local storage")
 }
 
 func cmdProxyList(args []string) {
@@ -353,7 +303,7 @@ func cmdProxyList(args []string) {
 			fmt.Println("No local proxies. Use 'proxy import' to add one.")
 		} else {
 			tbl := cli.NewTable(
-				cli.Column{Header: "ID", Width: 12},
+				cli.Column{Header: "ID", Width: 36},
 				cli.Column{Header: "NAME", Width: 30},
 				cli.Column{Header: "STATUS", Width: 10},
 				cli.Column{Header: "REV", Width: 6},
@@ -380,26 +330,21 @@ func cmdProxyList(args []string) {
 					rev = fmt.Sprintf("%d", p.RevisionNum)
 				}
 				modified := p.UpdatedAt.Format("2006-01-02 15:04")
-				tbl.PrintRow(truncate(p.ID, 12), truncate(p.Name, 30), status, rev, modified)
+				tbl.PrintRow(p.ID, truncate(p.Name, 30), status, rev, modified)
 			}
 			tbl.PrintFooter()
 		}
 	}
 
 	if showRemote {
-		if ensureHubConnected() == nil {
+		if hubCLI.ensureHubConnected() == nil {
 			return
 		}
-
-		// Generate routing token
-		routingToken := routing.GenerateRoutingToken(cliIdentity.Fingerprint, cliIdentity.RootKey)
 
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 
-		resp, err := mobileClient.ListProxyConfigs(ctx, &pb.ListProxyConfigsRequest{
-			RoutingToken: routingToken,
-		})
+		resp, err := client.ListProxyConfigs(ctx, &pb.ListProxyConfigsRequest{})
 		if err != nil {
 			fmt.Printf("Error listing remote proxies: %v\n", err)
 			return
@@ -409,16 +354,16 @@ func cmdProxyList(args []string) {
 			fmt.Println("\nNo remote proxies on Hub.")
 		} else {
 			fmt.Printf("\nRemote Proxies on Hub:\n")
-			fmt.Printf("%-12s  %-6s  %-10s  %s\n", "ID", "REV", "SIZE", "LAST UPDATED")
-			fmt.Println(strings.Repeat("-", 50))
+			fmt.Printf("%-36s  %-6s  %-10s  %s\n", "ID", "REV", "SIZE", "LAST UPDATED")
+			fmt.Println(strings.Repeat("-", 75))
 
 			for _, p := range resp.Proxies {
 				updated := "-"
 				if p.UpdatedAt != nil {
 					updated = p.UpdatedAt.AsTime().Format("2006-01-02 15:04")
 				}
-				fmt.Printf("%-12s  %-6d  %-10s  %s\n",
-					truncate(p.ProxyId, 12), p.LatestRevision,
+				fmt.Printf("%-36s  %-6d  %-10s  %s\n",
+					p.ProxyId, p.LatestRevision,
 					formatSize(int64(p.TotalSizeBytes)), updated)
 			}
 			fmt.Println()
@@ -432,16 +377,13 @@ func cmdProxyShow(args []string) {
 		return
 	}
 
-	meta, err := findProxyByPrefix(args[0])
-	if err != nil {
-		fmt.Printf("Error: %v\n", err)
-		return
-	}
-
-	// Read the proxy file
-	content, err := os.ReadFile(getProxyPath(meta.ID))
+	meta, content, err := getLocalProxy(args[0])
 	if err != nil {
 		fmt.Printf("Error reading proxy: %v\n", err)
+		return
+	}
+	if meta == nil {
+		fmt.Println("Error reading proxy: missing metadata")
 		return
 	}
 
@@ -457,7 +399,7 @@ func cmdProxyShow(args []string) {
 		fmt.Printf("  Last Synced: %s\n", meta.SyncedAt.Format(time.RFC3339))
 	}
 	fmt.Println("\n--- Content ---")
-	fmt.Println(string(content))
+	fmt.Println(content)
 }
 
 func cmdProxyEdit(args []string) {
@@ -465,14 +407,6 @@ func cmdProxyEdit(args []string) {
 		fmt.Println("Usage: proxy edit <proxy-id>")
 		return
 	}
-
-	meta, err := findProxyByPrefix(args[0])
-	if err != nil {
-		fmt.Printf("Error: %v\n", err)
-		return
-	}
-
-	proxyPath := getProxyPath(meta.ID)
 
 	// Get editor
 	editor := os.Getenv("EDITOR")
@@ -494,12 +428,34 @@ func cmdProxyEdit(args []string) {
 		return
 	}
 
-	// Get file hash before edit
-	beforeContent, _ := os.ReadFile(proxyPath)
-	beforeHash := hashConfig(beforeContent)
+	meta, currentContent, err := getLocalProxy(args[0])
+	if err != nil {
+		fmt.Printf("Error reading proxy: %v\n", err)
+		return
+	}
+	if meta == nil {
+		fmt.Println("Error reading proxy: missing metadata")
+		return
+	}
+
+	tmpFile, err := os.CreateTemp("", "nitella-proxy-*.yaml")
+	if err != nil {
+		fmt.Printf("Error creating temp file: %v\n", err)
+		return
+	}
+	tmpPath := tmpFile.Name()
+	_ = tmpFile.Close()
+	defer os.Remove(tmpPath)
+
+	if err := os.WriteFile(tmpPath, []byte(currentContent), 0600); err != nil {
+		fmt.Printf("Error writing temp file: %v\n", err)
+		return
+	}
+
+	beforeHash := hashConfig([]byte(currentContent))
 
 	// Open editor
-	cmd := exec.Command(editor, proxyPath)
+	cmd := exec.Command(editor, tmpPath)
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
@@ -510,7 +466,7 @@ func cmdProxyEdit(args []string) {
 	}
 
 	// Check if file changed
-	afterContent, err := os.ReadFile(proxyPath)
+	afterContent, err := os.ReadFile(tmpPath)
 	if err != nil {
 		fmt.Printf("Error reading file: %v\n", err)
 		return
@@ -522,18 +478,10 @@ func cmdProxyEdit(args []string) {
 		return
 	}
 
-	// Validate new content
-	if err := config.VerifyChecksum(afterContent); err != nil {
-		fmt.Printf("Warning: %v\n", err)
+	if _, err := saveLocalProxy(meta.ID, meta.Name, meta.Description, string(afterContent)); err != nil {
+		fmt.Printf("Error saving proxy: %v\n", err)
+		return
 	}
-
-	// Update index
-	index, _ := loadProxyIndex()
-	if m, ok := index[meta.ID]; ok {
-		m.UpdatedAt = time.Now()
-		m.ConfigHash = afterHash
-	}
-	saveProxyIndex(index)
 
 	fmt.Println("Proxy updated.")
 }
@@ -541,12 +489,6 @@ func cmdProxyEdit(args []string) {
 func cmdProxyExport(args []string) {
 	if len(args) < 1 {
 		fmt.Println("Usage: proxy export <proxy-id> [--output file.yaml]")
-		return
-	}
-
-	meta, err := findProxyByPrefix(args[0])
-	if err != nil {
-		fmt.Printf("Error: %v\n", err)
 		return
 	}
 
@@ -559,7 +501,7 @@ func cmdProxyExport(args []string) {
 		}
 	}
 
-	content, err := os.ReadFile(getProxyPath(meta.ID))
+	_, content, err := getLocalProxy(args[0])
 	if err != nil {
 		fmt.Printf("Error reading proxy: %v\n", err)
 		return
@@ -567,9 +509,9 @@ func cmdProxyExport(args []string) {
 
 	if outputPath == "" {
 		// Print to stdout
-		fmt.Println(string(content))
+		fmt.Println(content)
 	} else {
-		if err := os.WriteFile(outputPath, content, 0644); err != nil {
+		if err := os.WriteFile(outputPath, []byte(content), 0644); err != nil {
 			fmt.Printf("Error writing file: %v\n", err)
 			return
 		}
@@ -583,9 +525,13 @@ func cmdProxyDelete(args []string) {
 		return
 	}
 
-	meta, err := findProxyByPrefix(args[0])
+	meta, _, err := getLocalProxy(args[0])
 	if err != nil {
-		fmt.Printf("Error: %v\n", err)
+		fmt.Printf("Error reading proxy: %v\n", err)
+		return
+	}
+	if meta == nil {
+		fmt.Println("Error reading proxy: missing metadata")
 		return
 	}
 
@@ -612,35 +558,30 @@ func cmdProxyDelete(args []string) {
 		}
 	}
 
-	// Delete local file
-	proxyPath := getProxyPath(meta.ID)
-	if err := os.Remove(proxyPath); err != nil && !os.IsNotExist(err) {
-		fmt.Printf("Error deleting file: %v\n", err)
+	ctxLocal, cancelLocal := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancelLocal()
+	localResp, err := client.DeleteLocalProxyConfig(ctxLocal, &pb.DeleteLocalProxyConfigRequest{ProxyId: meta.ID})
+	if err != nil {
+		fmt.Printf("Error deleting local proxy: %v\n", err)
 		return
 	}
-
-	// Update index
-	index, _ := loadProxyIndex()
-	delete(index, meta.ID)
-	saveProxyIndex(index)
+	if !localResp.Success {
+		fmt.Printf("Error deleting local proxy: %s\n", localResp.Error)
+		return
+	}
 
 	fmt.Printf("Deleted local proxy: %s\n", meta.ID)
 
 	// Delete from Hub if requested
 	if deleteRemote && meta.RevisionNum > 0 {
-		if ensureHubConnected() == nil {
+		if hubCLI.ensureHubConnected() == nil {
 			return
 		}
-
-		routingToken := routing.GenerateRoutingToken(cliIdentity.Fingerprint, cliIdentity.RootKey)
 
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 
-		_, err := mobileClient.DeleteProxyConfig(ctx, &pb.DeleteProxyConfigRequest{
-			ProxyId:      meta.ID,
-			RoutingToken: routingToken,
-		})
+		_, err := client.DeleteProxyConfig(ctx, &pb.DeleteProxyConfigRequest{ProxyId: meta.ID})
 		if err != nil {
 			fmt.Printf("Error deleting from Hub: %v\n", err)
 			return
@@ -656,52 +597,63 @@ func cmdProxyValidate(args []string) {
 		return
 	}
 
-	meta, err := findProxyByPrefix(args[0])
-	if err != nil {
-		fmt.Printf("Error: %v\n", err)
-		return
-	}
-
-	content, err := os.ReadFile(getProxyPath(meta.ID))
+	meta, _, err := getLocalProxy(args[0])
 	if err != nil {
 		fmt.Printf("Error reading proxy: %v\n", err)
 		return
 	}
-
-	// Verify checksum
-	if err := config.VerifyChecksum(content); err != nil {
-		fmt.Printf("Checksum: FAILED - %v\n", err)
-	} else {
-		fmt.Println("Checksum: OK")
-	}
-
-	// Extract and parse content
-	body, header, err := config.ExtractContent(content)
-	if err != nil {
-		fmt.Printf("Header: FAILED - %v\n", err)
+	if meta == nil {
+		fmt.Println("Error reading proxy: missing metadata")
 		return
 	}
-	fmt.Printf("Header: OK (type=%s, version=v%d)\n", header.Type, header.Version)
 
-	// Validate YAML
-	var yamlData map[string]interface{}
-	if err := yaml.Unmarshal(body, &yamlData); err != nil {
-		fmt.Printf("YAML: FAILED - %v\n", err)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	resp, err := client.ValidateLocalProxyConfig(ctx, &pb.ValidateLocalProxyConfigRequest{
+		ProxyId: meta.ID,
+	})
+	if err != nil {
+		fmt.Printf("Error validating proxy: %v\n", err)
+		return
+	}
+	if !resp.Success {
+		fmt.Printf("Error validating proxy: %s\n", resp.Error)
+		return
+	}
+
+	// Verify checksum
+	if resp.ChecksumOk {
+		fmt.Println("Checksum: OK")
+	} else {
+		fmt.Printf("Checksum: FAILED - %s\n", resp.ChecksumError)
+	}
+
+	if !resp.HeaderOk {
+		fmt.Printf("Header: FAILED - %s\n", resp.HeaderError)
+		return
+	}
+	fmt.Printf("Header: OK (type=%s, version=v%d)\n", resp.HeaderType, resp.HeaderVersion)
+
+	if !resp.YamlOk {
+		fmt.Printf("YAML: FAILED - %s\n", resp.YamlError)
 		return
 	}
 	fmt.Println("YAML: OK")
 
 	// Check required sections
-	required := []string{"entryPoints", "tcp"}
-	for _, section := range required {
-		if _, ok := yamlData[section]; ok {
-			fmt.Printf("Section '%s': OK\n", section)
-		} else {
-			fmt.Printf("Section '%s': MISSING\n", section)
-		}
-	}
+	printSectionResult("entryPoints", resp.HasEntryPoints)
+	printSectionResult("tcp", resp.HasTcp)
 
 	fmt.Println("\nValidation complete.")
+}
+
+func printSectionResult(section string, present bool) {
+	if present {
+		fmt.Printf("Section '%s': OK\n", section)
+	} else {
+		fmt.Printf("Section '%s': MISSING\n", section)
+	}
 }
 
 func cmdProxyPush(args []string) {
@@ -710,9 +662,13 @@ func cmdProxyPush(args []string) {
 		return
 	}
 
-	meta, err := findProxyByPrefix(args[0])
+	meta, _, err := getLocalProxy(args[0])
 	if err != nil {
-		fmt.Printf("Error: %v\n", err)
+		fmt.Printf("Error reading proxy: %v\n", err)
+		return
+	}
+	if meta == nil {
+		fmt.Println("Error reading proxy: missing metadata")
 		return
 	}
 
@@ -729,102 +685,61 @@ func cmdProxyPush(args []string) {
 		message = fmt.Sprintf("Updated %s", time.Now().Format("2006-01-02 15:04"))
 	}
 
-	// Read proxy content
-	content, err := os.ReadFile(getProxyPath(meta.ID))
-	if err != nil {
-		fmt.Printf("Error reading proxy: %v\n", err)
+	if hubCLI.ensureHubConnected() == nil {
 		return
 	}
 
-	// Connect to Hub
-	if ensureHubConnected() == nil {
-		return
-	}
-
-	routingToken := routing.GenerateRoutingToken(cliIdentity.Fingerprint, cliIdentity.RootKey)
-	ctx := context.Background()
-
-	// Create proxy on Hub if first push
-	if meta.RevisionNum == 0 {
-		ctxCreate, cancel := context.WithTimeout(ctx, 10*time.Second)
-		resp, err := mobileClient.CreateProxyConfig(ctxCreate, &pb.CreateProxyConfigRequest{
-			ProxyId:      meta.ID,
-			RoutingToken: routingToken,
-		})
-		cancel()
-
-		if err != nil {
-			fmt.Printf("Error creating proxy on Hub: %v\n", err)
-			return
-		}
-		if !resp.Success {
-			// May already exist
-			if !strings.Contains(resp.Error, "already exists") {
-				fmt.Printf("Error: %s\n", resp.Error)
-				return
-			}
-		}
-	}
-
-	// Create payload
-	payload := &ProxyRevisionPayload{
-		Name:            meta.Name,
-		Description:     meta.Description,
-		CommitMessage:   message,
-		ProtocolVersion: "v1",
-		ConfigYAML:      string(content),
-		ConfigHash:      hashConfig(content),
-	}
-
-	payloadBytes, err := json.Marshal(payload)
-	if err != nil {
-		fmt.Printf("Error serializing payload: %v\n", err)
-		return
-	}
-
-	// Encrypt payload
-	fmt.Println("Encrypting configuration...")
-	pubKey := cliIdentity.RootKey.Public().(ed25519.PublicKey)
-	encrypted, err := nitellacrypto.Encrypt(payloadBytes, pubKey)
-	if err != nil {
-		fmt.Printf("Error encrypting: %v\n", err)
-		return
-	}
-
-	encryptedBlob := encrypted.Marshal()
-
-	// Push revision
-	ctxPush, cancel := context.WithTimeout(ctx, 30*time.Second)
+	// Backend orchestrates local read + encryption + push + local metadata update.
+	ctxPush, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	resp, err := mobileClient.PushRevision(ctxPush, &pb.PushRevisionRequest{
+	result, err := client.PushLocalProxyRevision(ctxPush, &pb.PushLocalProxyRevisionRequest{
 		ProxyId:       meta.ID,
-		RoutingToken:  routingToken,
-		EncryptedBlob: encryptedBlob,
-		SizeBytes:     int32(len(encryptedBlob)),
+		CommitMessage: message,
 	})
 	if err != nil {
 		fmt.Printf("Error pushing revision: %v\n", err)
 		return
 	}
-
-	if !resp.Success {
-		fmt.Printf("Error: %s\n", resp.Error)
+	if !result.Success {
+		fmt.Printf("Error pushing revision: %s\n", result.Error)
 		return
 	}
 
-	// Update local metadata
-	index, _ := loadProxyIndex()
-	if m, ok := index[meta.ID]; ok {
-		m.RevisionNum = resp.RevisionNum
-		m.SyncedAt = time.Now()
+	explicitPushState := result.GetRemotePushed() ||
+		result.GetLocalMetadataUpdated() ||
+		strings.TrimSpace(result.GetLocalMetadataError()) != ""
+	remotePushed := result.GetRemotePushed()
+	if !explicitPushState {
+		// Backward compatibility: older backends only had Success=true for a real push.
+		remotePushed = true
 	}
-	saveProxyIndex(index)
 
-	fmt.Printf("Pushed revision %d to Hub\n", resp.RevisionNum)
-	fmt.Printf("  Revisions: %d/%d\n", resp.RevisionsKept, resp.RevisionsLimit)
-	if resp.StorageLimitKb > 0 {
-		fmt.Printf("  Storage: %dKB/%dKB\n", resp.StorageUsedKb, resp.StorageLimitKb)
+	if remotePushed {
+		fmt.Printf("Pushed revision %d to Hub\n", result.RevisionNum)
+		fmt.Printf("  Revisions: %d/%d\n", result.RevisionsKept, result.RevisionsLimit)
+		if result.StorageLimitKb > 0 {
+			fmt.Printf("  Storage: %dKB/%dKB\n", result.StorageUsedKb, result.StorageLimitKb)
+		}
+	} else {
+		if result.RevisionNum > 0 {
+			fmt.Printf("No changes to push (already at revision %d)\n", result.RevisionNum)
+		} else {
+			fmt.Println("No changes to push")
+		}
+	}
+	if result.GetRemotePushed() && !result.GetLocalMetadataUpdated() {
+		localErr := strings.TrimSpace(result.GetLocalMetadataError())
+		if localErr == "" {
+			localErr = strings.TrimSpace(result.GetError())
+		}
+		if localErr != "" {
+			fmt.Printf("  Warning: local metadata not updated: %s\n", localErr)
+		} else {
+			fmt.Println("  Warning: local metadata not updated")
+		}
+	} else if strings.TrimSpace(result.Error) != "" {
+		fmt.Printf("  Note: %s\n", result.Error)
 	}
 }
 
@@ -834,7 +749,11 @@ func cmdProxyPull(args []string) {
 		return
 	}
 
-	proxyID := args[0]
+	proxyID := strings.TrimSpace(args[0])
+	if proxyID == "" {
+		fmt.Println("Usage: proxy pull <proxy-id> [--revision N]")
+		return
+	}
 	revisionNum := int64(0) // 0 = latest
 
 	for i := 1; i < len(args); i++ {
@@ -845,73 +764,31 @@ func cmdProxyPull(args []string) {
 	}
 
 	// Connect to Hub
-	if ensureHubConnected() == nil {
+	if hubCLI.ensureHubConnected() == nil {
 		return
 	}
-
-	routingToken := routing.GenerateRoutingToken(cliIdentity.Fingerprint, cliIdentity.RootKey)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	resp, err := mobileClient.GetRevision(ctx, &pb.GetRevisionRequest{
-		ProxyId:      proxyID,
-		RoutingToken: routingToken,
-		RevisionNum:  revisionNum,
+	fmt.Println("Decrypting configuration...")
+	rev, err := client.PullProxyRevision(ctx, &pb.PullProxyRevisionRequest{
+		ProxyId:     proxyID,
+		RevisionNum: revisionNum,
+		StoreLocal:  true,
 	})
 	if err != nil {
 		fmt.Printf("Error getting revision: %v\n", err)
 		return
 	}
-
-	// Decrypt payload
-	fmt.Println("Decrypting configuration...")
-	envelope, err := nitellacrypto.UnmarshalEncryptedPayload(resp.EncryptedBlob)
-	if err != nil {
-		fmt.Printf("Error parsing encrypted blob: %v\n", err)
+	if !rev.Success {
+		fmt.Printf("Error getting revision: %s\n", rev.Error)
 		return
 	}
 
-	decrypted, err := nitellacrypto.Decrypt(envelope, cliIdentity.RootKey)
-	if err != nil {
-		fmt.Printf("Error decrypting: %v\n", err)
-		return
-	}
-
-	var payload ProxyRevisionPayload
-	if err := json.Unmarshal(decrypted, &payload); err != nil {
-		fmt.Printf("Error parsing payload: %v\n", err)
-		return
-	}
-
-	// Save to local
-	if err := os.MkdirAll(getProxiesDir(), 0700); err != nil {
-		fmt.Printf("Error creating directory: %v\n", err)
-		return
-	}
-
-	proxyPath := getProxyPath(proxyID)
-	if err := os.WriteFile(proxyPath, []byte(payload.ConfigYAML), 0600); err != nil {
-		fmt.Printf("Error saving proxy: %v\n", err)
-		return
-	}
-
-	// Update index
-	index, _ := loadProxyIndex()
-	index[proxyID] = &ProxyMeta{
-		ID:          proxyID,
-		Name:        payload.Name,
-		Description: payload.Description,
-		UpdatedAt:   time.Now(),
-		SyncedAt:    time.Now(),
-		RevisionNum: resp.RevisionNum,
-		ConfigHash:  payload.ConfigHash,
-	}
-	saveProxyIndex(index)
-
-	fmt.Printf("Pulled revision %d\n", resp.RevisionNum)
-	fmt.Printf("  Name: %s\n", payload.Name)
-	fmt.Printf("  File: %s\n", proxyPath)
+	fmt.Printf("Pulled revision %d\n", rev.RevisionNum)
+	fmt.Printf("  Name: %s\n", rev.Name)
+	fmt.Println("  Stored in MobileLogicService local storage")
 }
 
 func cmdProxyHistory(args []string) {
@@ -920,25 +797,27 @@ func cmdProxyHistory(args []string) {
 		return
 	}
 
-	meta, err := findProxyByPrefix(args[0])
-	if err != nil {
-		fmt.Printf("Error: %v\n", err)
+	proxyID := strings.TrimSpace(args[0])
+	if proxyID == "" {
+		fmt.Println("Usage: proxy history <proxy-id>")
 		return
 	}
-
-	if ensureHubConnected() == nil {
-		return
+	proxyName := proxyID
+	if meta, _, err := getLocalProxy(proxyID); err == nil && meta != nil {
+		proxyID = meta.ID
+		if meta.Name != "" {
+			proxyName = meta.Name
+		}
 	}
 
-	routingToken := routing.GenerateRoutingToken(cliIdentity.Fingerprint, cliIdentity.RootKey)
+	if hubCLI.ensureHubConnected() == nil {
+		return
+	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	resp, err := mobileClient.ListRevisions(ctx, &pb.ListRevisionsRequest{
-		ProxyId:      meta.ID,
-		RoutingToken: routingToken,
-	})
+	resp, err := client.ListProxyRevisions(ctx, &pb.ListProxyRevisionsRequest{ProxyId: proxyID})
 	if err != nil {
 		fmt.Printf("Error listing revisions: %v\n", err)
 		return
@@ -949,7 +828,7 @@ func cmdProxyHistory(args []string) {
 		return
 	}
 
-	fmt.Printf("\nRevision history for %s:\n", meta.Name)
+	fmt.Printf("\nRevision history for %s:\n", proxyName)
 	fmt.Printf("%-6s  %-10s  %s\n", "REV", "SIZE", "DATE")
 	fmt.Println(strings.Repeat("-", 40))
 
@@ -969,9 +848,9 @@ func cmdProxyDiff(args []string) {
 		return
 	}
 
-	meta, err := findProxyByPrefix(args[0])
-	if err != nil {
-		fmt.Printf("Error: %v\n", err)
+	proxyID := strings.TrimSpace(args[0])
+	if proxyID == "" {
+		fmt.Println("Usage: proxy diff <proxy-id> [--rev1 N --rev2 M]")
 		return
 	}
 
@@ -994,186 +873,40 @@ func cmdProxyDiff(args []string) {
 		}
 	}
 
-	if ensureHubConnected() == nil {
+	if hubCLI.ensureHubConnected() == nil {
 		return
 	}
 
-	routingToken := routing.GenerateRoutingToken(cliIdentity.Fingerprint, cliIdentity.RootKey)
-	ctx := context.Background()
-
-	// If no revisions specified, diff local vs latest remote
+	req := &pb.DiffProxyRevisionsRequest{
+		ProxyId: proxyID,
+	}
 	if rev1 == 0 && rev2 == 0 {
-		// Get latest revision
-		ctxGet, cancel := context.WithTimeout(ctx, 10*time.Second)
-		resp, err := mobileClient.GetRevision(ctxGet, &pb.GetRevisionRequest{
-			ProxyId:      meta.ID,
-			RoutingToken: routingToken,
-			RevisionNum:  0, // latest
-		})
-		cancel()
-		if err != nil {
-			fmt.Printf("Error getting latest revision: %v\n", err)
-			return
-		}
-
-		// Decrypt remote
-		envelope, err := nitellacrypto.UnmarshalEncryptedPayload(resp.EncryptedBlob)
-		if err != nil {
-			fmt.Printf("Error parsing envelope: %v\n", err)
-			return
-		}
-
-		decrypted, err := nitellacrypto.Decrypt(envelope, cliIdentity.RootKey)
-		if err != nil {
-			fmt.Printf("Error decrypting: %v\n", err)
-			return
-		}
-
-		var remotePayload ProxyRevisionPayload
-		if err := json.Unmarshal(decrypted, &remotePayload); err != nil {
-			fmt.Printf("Error parsing payload: %v\n", err)
-			return
-		}
-
-		// Read local
-		localContent, err := os.ReadFile(getProxyPath(meta.ID))
-		if err != nil {
-			fmt.Printf("Error reading local file: %v\n", err)
-			return
-		}
-
-		// Show diff
-		fmt.Printf("--- local (file)\n")
-		fmt.Printf("+++ remote (revision %d)\n", resp.RevisionNum)
-		fmt.Println()
-		showUnifiedDiff(string(localContent), remotePayload.ConfigYAML)
-		return
+		req.LocalVsLatest = true
+	} else {
+		req.RevisionNumA = rev1
+		req.RevisionNumB = rev2
 	}
 
-	// Diff between two specific revisions
-	getRevision := func(revNum int64) (*ProxyRevisionPayload, int64, error) {
-		ctxGet, cancel := context.WithTimeout(ctx, 10*time.Second)
-		defer cancel()
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
 
-		resp, err := mobileClient.GetRevision(ctxGet, &pb.GetRevisionRequest{
-			ProxyId:      meta.ID,
-			RoutingToken: routingToken,
-			RevisionNum:  revNum,
-		})
-		if err != nil {
-			return nil, 0, err
-		}
-
-		envelope, err := nitellacrypto.UnmarshalEncryptedPayload(resp.EncryptedBlob)
-		if err != nil {
-			return nil, 0, err
-		}
-
-		decrypted, err := nitellacrypto.Decrypt(envelope, cliIdentity.RootKey)
-		if err != nil {
-			return nil, 0, err
-		}
-
-		var payload ProxyRevisionPayload
-		if err := json.Unmarshal(decrypted, &payload); err != nil {
-			return nil, 0, err
-		}
-
-		return &payload, resp.RevisionNum, nil
-	}
-
-	payload1, actualRev1, err := getRevision(rev1)
+	resp, err := client.DiffProxyRevisions(ctx, req)
 	if err != nil {
-		fmt.Printf("Error getting revision %d: %v\n", rev1, err)
+		fmt.Printf("Error getting proxy diff: %v\n", err)
 		return
 	}
-
-	payload2, actualRev2, err := getRevision(rev2)
-	if err != nil {
-		fmt.Printf("Error getting revision %d: %v\n", rev2, err)
+	if !resp.Success {
+		fmt.Printf("Error getting proxy diff: %s\n", resp.Error)
 		return
 	}
-
-	fmt.Printf("--- revision %d\n", actualRev1)
-	fmt.Printf("+++ revision %d\n", actualRev2)
-	fmt.Println()
-	showUnifiedDiff(payload1.ConfigYAML, payload2.ConfigYAML)
-}
-
-// showUnifiedDiff displays a simple unified diff between two strings
-func showUnifiedDiff(old, new string) {
-	oldLines := strings.Split(old, "\n")
-	newLines := strings.Split(new, "\n")
-
-	// Simple line-by-line comparison
-	// This is a basic implementation - a proper diff would use LCS algorithm
-	maxLen := len(oldLines)
-	if len(newLines) > maxLen {
-		maxLen = len(newLines)
-	}
-
-	inDiff := false
-	contextLines := 3
-	diffStart := -1
-	var diffBuffer []string
-
-	flushDiff := func() {
-		if len(diffBuffer) > 0 {
-			fmt.Printf("@@ -%d,%d +%d,%d @@\n", diffStart+1, len(diffBuffer), diffStart+1, len(diffBuffer))
-			for _, line := range diffBuffer {
-				fmt.Println(line)
-			}
-			diffBuffer = nil
-		}
-	}
-
-	for i := 0; i < maxLen; i++ {
-		var oldLine, newLine string
-		if i < len(oldLines) {
-			oldLine = oldLines[i]
-		}
-		if i < len(newLines) {
-			newLine = newLines[i]
-		}
-
-		if oldLine != newLine {
-			if !inDiff {
-				inDiff = true
-				diffStart = i
-				// Add context before
-				start := i - contextLines
-				if start < 0 {
-					start = 0
-				}
-				for j := start; j < i; j++ {
-					if j < len(oldLines) {
-						diffBuffer = append(diffBuffer, " "+oldLines[j])
-					}
-				}
-			}
-
-			if i < len(oldLines) && oldLine != "" {
-				diffBuffer = append(diffBuffer, "-"+oldLine)
-			}
-			if i < len(newLines) && newLine != "" {
-				diffBuffer = append(diffBuffer, "+"+newLine)
-			}
-		} else if inDiff {
-			// Add context after
-			diffBuffer = append(diffBuffer, " "+oldLine)
-			contextLines--
-			if contextLines <= 0 {
-				flushDiff()
-				inDiff = false
-				contextLines = 3
-			}
-		}
-	}
-
-	flushDiff()
-
-	if !inDiff && len(diffBuffer) == 0 {
+	if !resp.HasDifferences || strings.TrimSpace(resp.UnifiedDiff) == "" {
 		fmt.Println("No differences found.")
+		return
+	}
+
+	fmt.Print(resp.UnifiedDiff)
+	if !strings.HasSuffix(resp.UnifiedDiff, "\n") {
+		fmt.Println()
 	}
 }
 
@@ -1183,9 +916,9 @@ func cmdProxyFlush(args []string) {
 		return
 	}
 
-	meta, err := findProxyByPrefix(args[0])
-	if err != nil {
-		fmt.Printf("Error: %v\n", err)
+	proxyID := strings.TrimSpace(args[0])
+	if proxyID == "" {
+		fmt.Println("Usage: proxy flush <proxy-id> [--keep N]")
 		return
 	}
 
@@ -1197,31 +930,23 @@ func cmdProxyFlush(args []string) {
 		}
 	}
 
-	if ensureHubConnected() == nil {
+	if hubCLI.ensureHubConnected() == nil {
 		return
 	}
-
-	routingToken := routing.GenerateRoutingToken(cliIdentity.Fingerprint, cliIdentity.RootKey)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	resp, err := mobileClient.FlushRevisions(ctx, &pb.FlushRevisionsRequest{
-		ProxyId:      meta.ID,
-		RoutingToken: routingToken,
-		KeepCount:    keepCount,
+	result, err := client.FlushProxyRevisions(ctx, &pb.FlushProxyRevisionsRequest{
+		ProxyId:   proxyID,
+		KeepCount: keepCount,
 	})
 	if err != nil {
 		fmt.Printf("Error flushing revisions: %v\n", err)
 		return
 	}
 
-	if !resp.Success {
-		fmt.Printf("Error: %s\n", resp.Error)
-		return
-	}
-
-	fmt.Printf("Flushed %d revisions, %d remaining\n", resp.DeletedCount, resp.RemainingCount)
+	fmt.Printf("Flushed %d revisions, %d remaining\n", result.DeletedCount, result.RemainingCount)
 }
 
 func cmdProxyApply(args []string) {
@@ -1230,7 +955,11 @@ func cmdProxyApply(args []string) {
 		return
 	}
 
-	proxyIDPrefix := args[0]
+	proxyID := strings.TrimSpace(args[0])
+	if proxyID == "" {
+		fmt.Println("Usage: proxy apply <proxy-id> <node-id> [--revision N]")
+		return
+	}
 	nodeID := args[1]
 
 	revisionNum := int64(0) // 0 = latest
@@ -1241,140 +970,35 @@ func cmdProxyApply(args []string) {
 		}
 	}
 
-	// Find local proxy
-	meta, err := findProxyByPrefix(proxyIDPrefix)
-	if err != nil {
-		fmt.Printf("Error: %v\n", err)
-		return
-	}
-
 	// Connect to Hub
-	if ensureHubConnected() == nil {
+	if hubCLI.ensureHubConnected() == nil {
 		return
 	}
 
-	routingToken := routing.GenerateRoutingToken(cliIdentity.Fingerprint, cliIdentity.RootKey)
-	ctx := context.Background()
-
-	// If no revision specified, check if we have it locally
-	var configYAML string
-	var actualRevision int64
-
-	if revisionNum == 0 && meta.RevisionNum > 0 {
-		// Use local copy
-		content, err := os.ReadFile(getProxyPath(meta.ID))
-		if err != nil {
-			fmt.Printf("Error reading local proxy: %v\n", err)
-			return
-		}
-		configYAML = string(content)
-		actualRevision = meta.RevisionNum
-	} else {
-		// Fetch from Hub
-		fmt.Println("Fetching proxy from Hub...")
-		ctxGet, cancel := context.WithTimeout(ctx, 30*time.Second)
-		resp, err := mobileClient.GetRevision(ctxGet, &pb.GetRevisionRequest{
-			ProxyId:      meta.ID,
-			RoutingToken: routingToken,
-			RevisionNum:  revisionNum,
-		})
-		cancel()
-		if err != nil {
-			fmt.Printf("Error getting revision: %v\n", err)
-			return
-		}
-
-		// Decrypt
-		fmt.Println("Decrypting configuration...")
-		envelope, err := nitellacrypto.UnmarshalEncryptedPayload(resp.EncryptedBlob)
-		if err != nil {
-			fmt.Printf("Error parsing envelope: %v\n", err)
-			return
-		}
-
-		decrypted, err := nitellacrypto.Decrypt(envelope, cliIdentity.RootKey)
-		if err != nil {
-			fmt.Printf("Error decrypting: %v\n", err)
-			return
-		}
-
-		var payload ProxyRevisionPayload
-		if err := json.Unmarshal(decrypted, &payload); err != nil {
-			fmt.Printf("Error parsing payload: %v\n", err)
-			return
-		}
-
-		configYAML = payload.ConfigYAML
-		actualRevision = resp.RevisionNum
-	}
-
-	// Create apply command payload
-	applyPayload := map[string]interface{}{
-		"proxy_id":     meta.ID,
-		"revision_num": actualRevision,
-		"config_yaml":  configYAML,
-		"config_hash":  hashConfig([]byte(configYAML)),
-	}
-
-	payloadBytes, _ := json.Marshal(applyPayload)
-
-	// Encrypt for node
-	fmt.Println("Sending to node via Hub...")
-	nodeRoutingToken := routing.GenerateRoutingToken(nodeID, cliIdentity.RootKey)
-
-	encrypted, err := nitellacrypto.Encrypt(payloadBytes, cliIdentity.RootKey.Public().(ed25519.PublicKey))
-	if err != nil {
-		fmt.Printf("Error encrypting: %v\n", err)
-		return
-	}
-
-	// Convert crypto EncryptedPayload to protobuf EncryptedPayload
-	pbEncrypted := &common.EncryptedPayload{
-		EphemeralPubkey: encrypted.EphemeralPubKey,
-		Nonce:           encrypted.Nonce,
-		Ciphertext:      encrypted.Ciphertext,
-	}
-
-	// Send command via Hub
-	ctxCmd, cancel := context.WithTimeout(ctx, 30*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	cmdResp, err := mobileClient.SendCommand(ctxCmd, &pb.CommandRequest{
-		NodeId:       nodeID,
-		RoutingToken: nodeRoutingToken,
-		Encrypted:    pbEncrypted,
+	// Apply proxy to node via backend (backend resolves latest/explicit revision).
+	fmt.Println("Sending to node via Hub...")
+	resp, err := client.ApplyProxyToNode(ctx, &pb.ApplyProxyToNodeRequest{
+		ProxyId:     proxyID,
+		NodeId:      nodeID,
+		RevisionNum: revisionNum,
 	})
 	if err != nil {
-		fmt.Printf("Error sending command: %v\n", err)
+		fmt.Printf("Error applying proxy: %v\n", err)
 		return
 	}
 
-	// Check response
-	if cmdResp.EncryptedData != nil && len(cmdResp.EncryptedData.Ciphertext) > 0 {
-		// Convert protobuf EncryptedPayload back to crypto EncryptedPayload
-		respEnvelope := &nitellacrypto.EncryptedPayload{
-			EphemeralPubKey: cmdResp.EncryptedData.EphemeralPubkey,
-			Nonce:           cmdResp.EncryptedData.Nonce,
-			Ciphertext:      cmdResp.EncryptedData.Ciphertext,
+	if resp.Success {
+		if revisionNum > 0 {
+			fmt.Printf("Applied proxy %s (requested rev %d) to node %s\n", proxyID, revisionNum, nodeID)
+		} else {
+			fmt.Printf("Applied proxy %s (latest revision) to node %s\n", proxyID, nodeID)
 		}
-		decrypted, err := nitellacrypto.Decrypt(respEnvelope, cliIdentity.RootKey)
-		if err == nil {
-			var result map[string]interface{}
-			if json.Unmarshal(decrypted, &result) == nil {
-				status, _ := result["status"].(string)
-				if status == "applied" || status == "already_applied" {
-					fmt.Printf("Applied proxy %s (rev %d) to node %s\n", meta.ID, actualRevision, nodeID)
-					return
-				} else if status == "error" {
-					errMsg, _ := result["error"].(string)
-					fmt.Printf("Error: %s\n", errMsg)
-					return
-				}
-			}
-		}
+	} else {
+		fmt.Printf("Error applying proxy: %s\n", resp.Error)
 	}
-
-	fmt.Printf("Applied proxy %s (rev %d) to node %s\n", meta.ID, actualRevision, nodeID)
 }
 
 func cmdProxyStatus(args []string) {
@@ -1386,89 +1010,33 @@ func cmdProxyStatus(args []string) {
 	nodeID := args[0]
 
 	// Connect to Hub
-	if ensureHubConnected() == nil {
+	if hubCLI.ensureHubConnected() == nil {
 		return
 	}
 
-	nodeRoutingToken := routing.GenerateRoutingToken(nodeID, cliIdentity.RootKey)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	// Create get_applied command
-	cmdPayload := map[string]string{}
-	payloadBytes, _ := json.Marshal(cmdPayload)
-
-	encrypted, err := nitellacrypto.Encrypt(payloadBytes, cliIdentity.RootKey.Public().(ed25519.PublicKey))
+	resp, err := client.GetAppliedProxies(ctx, &pb.GetAppliedProxiesRequest{NodeId: nodeID})
 	if err != nil {
-		fmt.Printf("Error encrypting: %v\n", err)
+		fmt.Printf("Error getting applied proxies: %v\n", err)
 		return
 	}
 
-	// Convert crypto EncryptedPayload to protobuf EncryptedPayload
-	pbEncrypted := &common.EncryptedPayload{
-		EphemeralPubkey: encrypted.EphemeralPubKey,
-		Nonce:           encrypted.Nonce,
-		Ciphertext:      encrypted.Ciphertext,
-	}
-
-	cmdResp, err := mobileClient.SendCommand(ctx, &pb.CommandRequest{
-		NodeId:       nodeID,
-		RoutingToken: nodeRoutingToken,
-		Encrypted:    pbEncrypted,
-	})
-	if err != nil {
-		fmt.Printf("Error sending command: %v\n", err)
+	if len(resp.Proxies) == 0 {
+		fmt.Println("No proxies applied to this node.")
 		return
 	}
 
-	// Decrypt and display response
-	if cmdResp.EncryptedData != nil && len(cmdResp.EncryptedData.Ciphertext) > 0 {
-		// Convert protobuf EncryptedPayload back to crypto EncryptedPayload
-		respEnvelope := &nitellacrypto.EncryptedPayload{
-			EphemeralPubKey: cmdResp.EncryptedData.EphemeralPubkey,
-			Nonce:           cmdResp.EncryptedData.Nonce,
-			Ciphertext:      cmdResp.EncryptedData.Ciphertext,
-		}
+	fmt.Printf("\nApplied proxies on node %s:\n", nodeID)
+	fmt.Printf("%-12s  %-6s  %-20s  %s\n", "PROXY ID", "REV", "APPLIED AT", "STATUS")
+	fmt.Println(strings.Repeat("-", 60))
 
-		decrypted, err := nitellacrypto.Decrypt(respEnvelope, cliIdentity.RootKey)
-		if err != nil {
-			fmt.Printf("Error decrypting response: %v\n", err)
-			return
-		}
-
-		var result struct {
-			Proxies []struct {
-				ProxyID     string `json:"proxy_id"`
-				RevisionNum int64  `json:"revision_num"`
-				AppliedAt   string `json:"applied_at"`
-				Status      string `json:"status"`
-			} `json:"proxies"`
-			Count int `json:"count"`
-		}
-
-		if err := json.Unmarshal(decrypted, &result); err != nil {
-			fmt.Printf("Error parsing result: %v\n", err)
-			return
-		}
-
-		if result.Count == 0 {
-			fmt.Println("No proxies applied to this node.")
-			return
-		}
-
-		fmt.Printf("\nApplied proxies on node %s:\n", nodeID)
-		fmt.Printf("%-12s  %-6s  %-20s  %s\n", "PROXY ID", "REV", "APPLIED AT", "STATUS")
-		fmt.Println(strings.Repeat("-", 60))
-
-		for _, p := range result.Proxies {
-			fmt.Printf("%-12s  %-6d  %-20s  %s\n",
-				truncate(p.ProxyID, 12), p.RevisionNum, p.AppliedAt, p.Status)
-		}
-		fmt.Println()
-		return
+	for _, p := range resp.Proxies {
+		fmt.Printf("%-12s  %-6d  %-20s  %s\n",
+			truncate(p.ProxyId, 12), p.RevisionNum, p.AppliedAt, p.Status)
 	}
-
-	fmt.Println("No response from node.")
+	fmt.Println()
 }
 
 func cmdProxyUnapply(args []string) {
@@ -1476,80 +1044,35 @@ func cmdProxyUnapply(args []string) {
 		fmt.Println("Usage: proxy unapply <proxy-id> <node-id>")
 		return
 	}
-
-	proxyIDPrefix := args[0]
+	proxyID := strings.TrimSpace(args[0])
+	if proxyID == "" {
+		fmt.Println("Usage: proxy unapply <proxy-id> <node-id>")
+		return
+	}
 	nodeID := args[1]
 
-	// Find local proxy
-	meta, err := findProxyByPrefix(proxyIDPrefix)
-	if err != nil {
-		fmt.Printf("Error: %v\n", err)
-		return
-	}
-
 	// Connect to Hub
-	if ensureHubConnected() == nil {
+	if hubCLI.ensureHubConnected() == nil {
 		return
 	}
 
-	nodeRoutingToken := routing.GenerateRoutingToken(nodeID, cliIdentity.RootKey)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	// Create unapply command
-	cmdPayload := map[string]string{
-		"proxy_id": meta.ID,
-	}
-	payloadBytes, _ := json.Marshal(cmdPayload)
-
-	encrypted, err := nitellacrypto.Encrypt(payloadBytes, cliIdentity.RootKey.Public().(ed25519.PublicKey))
-	if err != nil {
-		fmt.Printf("Error encrypting: %v\n", err)
-		return
-	}
-
-	// Convert crypto EncryptedPayload to protobuf EncryptedPayload
-	pbEncrypted := &common.EncryptedPayload{
-		EphemeralPubkey: encrypted.EphemeralPubKey,
-		Nonce:           encrypted.Nonce,
-		Ciphertext:      encrypted.Ciphertext,
-	}
-
-	cmdResp, err := mobileClient.SendCommand(ctx, &pb.CommandRequest{
-		NodeId:       nodeID,
-		RoutingToken: nodeRoutingToken,
-		Encrypted:    pbEncrypted,
+	resp, err := client.UnapplyProxyFromNode(ctx, &pb.UnapplyProxyFromNodeRequest{
+		ProxyId: proxyID,
+		NodeId:  nodeID,
 	})
 	if err != nil {
-		fmt.Printf("Error sending command: %v\n", err)
+		fmt.Printf("Error unapplying proxy: %v\n", err)
 		return
 	}
 
-	// Check response
-	if cmdResp.EncryptedData != nil && len(cmdResp.EncryptedData.Ciphertext) > 0 {
-		// Convert protobuf EncryptedPayload back to crypto EncryptedPayload
-		respEnvelope := &nitellacrypto.EncryptedPayload{
-			EphemeralPubKey: cmdResp.EncryptedData.EphemeralPubkey,
-			Nonce:           cmdResp.EncryptedData.Nonce,
-			Ciphertext:      cmdResp.EncryptedData.Ciphertext,
-		}
-		decrypted, err := nitellacrypto.Decrypt(respEnvelope, cliIdentity.RootKey)
-		if err == nil {
-			var result map[string]interface{}
-			if json.Unmarshal(decrypted, &result) == nil {
-				status, _ := result["status"].(string)
-				if status == "unapplied" {
-					fmt.Printf("Removed proxy %s from node %s\n", meta.ID, nodeID)
-					return
-				} else if status == "not_found" {
-					fmt.Printf("Proxy %s was not applied to node %s\n", meta.ID, nodeID)
-					return
-				}
-			}
-		}
+	if resp.Success {
+		fmt.Printf("Removed proxy %s from node %s\n", proxyID, nodeID)
+	} else {
+		fmt.Printf("Error unapplying proxy: %s\n", resp.Error)
 	}
-
-	fmt.Printf("Removed proxy %s from node %s\n", meta.ID, nodeID)
 }
 
 // formatSize formats bytes as human-readable

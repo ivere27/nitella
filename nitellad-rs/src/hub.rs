@@ -1,71 +1,61 @@
-use tonic::transport::{Channel, ClientTlsConfig, Identity};
+use crate::cert_utils;
+use crate::cpace::{CPaceSession, ROLE_NODE};
+use crate::crypto;
+use crate::manager::ProxyManager;
+use crate::proto::common::{Alert, EncryptedPayload, SecureCommandPayload};
 use crate::proto::hub::node_service_client::NodeServiceClient;
 use crate::proto::hub::pairing_service_client::PairingServiceClient;
-use crate::proto::hub::{
-    PakeMessage, CommandResponse, ReceiveCommandsRequest, CommandResult,
-    EncryptedMetrics, EncryptedLogEntry, HeartbeatRequest, NodeStatus,
-    SignalMessage, Metrics,
-};
-use crate::proto::process::{Event, event};
-use crate::proto::common::{SecureCommandPayload, Alert, EncryptedPayload};
-use sha2::Digest;
 use crate::proto::hub::EncryptedCommandPayload;
-use crate::proto::proxy::{
-    CreateProxyRequest, DeleteProxyRequest, EnableProxyRequest, DisableProxyRequest,
-    UpdateProxyRequest, AddRuleRequest, RemoveRuleRequest, ListRulesRequest,
-    GetActiveConnectionsRequest, CloseConnectionRequest, CloseAllConnectionsRequest,
-    ReloadRulesRequest,
-    BlockIpRequest, AllowIpRequest, RemoveGlobalRuleRequest, ResolveApprovalRequest,
-    LookupIpRequest, CancelApprovalRequest,
-    ApplyProxyRequest,
-    ProxyStatus, ListProxiesResponse, StatsSummaryResponse, ListRulesResponse,
-    GetActiveConnectionsResponse, CloseConnectionResponse, CloseAllConnectionsResponse,
-    DeleteProxyResponse,
-    RestartListenersResponse,
-    EnableProxyResponse, DisableProxyResponse,
-    UpdateProxyResponse,
-    ReloadRulesResponse,
-    ActiveApproval,
-    ListActiveApprovalsResponse,
-    ApplyProxyResponse,
-    AppliedProxyStatus, GetAppliedProxiesResponse,
+use crate::proto::hub::{
+    CommandResponse, CommandResult, EncryptedLogEntry, EncryptedMetrics, HeartbeatRequest, Metrics,
+    NodeStatus, PakeMessage, ReceiveCommandsRequest, SignalMessage,
 };
-use crate::cpace::{CPaceSession, ROLE_NODE};
-use crate::manager::ProxyManager;
-use crate::cert_utils;
-use crate::crypto;
-use anyhow::{Result, anyhow};
-use tracing::{info, warn, error, debug};
-use std::path::Path;
-use std::sync::Arc;
+use crate::proto::process::{event, Event};
+use crate::proto::proxy::{
+    ActiveApproval, AddRuleRequest, AllowIpRequest, AppliedProxyStatus, ApplyProxyRequest,
+    ApplyProxyResponse, BlockIpRequest, CancelApprovalRequest, CloseAllConnectionsRequest,
+    CloseAllConnectionsResponse, CloseConnectionRequest, CloseConnectionResponse,
+    CreateProxyRequest, DeleteProxyRequest, DeleteProxyResponse, DisableProxyRequest,
+    DisableProxyResponse, EnableProxyRequest, EnableProxyResponse, GetActiveConnectionsRequest,
+    GetActiveConnectionsResponse, GetAppliedProxiesResponse, ListActiveApprovalsResponse,
+    ListProxiesResponse, ListRulesRequest, ListRulesResponse, LookupIpRequest, ProxyStatus,
+    ReloadRulesRequest, ReloadRulesResponse, RemoveGlobalRuleRequest, RemoveRuleRequest,
+    ResolveApprovalRequest, RestartListenersResponse, StatsSummaryResponse, UpdateProxyRequest,
+    UpdateProxyResponse,
+};
+use anyhow::{anyhow, Result};
+use ed25519_dalek::{SigningKey, VerifyingKey};
+use sha2::Digest;
 use std::collections::HashMap;
+use std::path::Path;
+use std::str::FromStr;
+use std::sync::Arc;
 use std::time::Duration;
 use tokio::fs;
-use tokio::sync::{RwLock, mpsc, broadcast};
-use std::str::FromStr;
+use tokio::sync::{broadcast, mpsc, RwLock};
 use tokio::time;
 use tokio_stream::wrappers::ReceiverStream;
 use tokio_stream::StreamExt;
-use ed25519_dalek::{SigningKey, VerifyingKey};
-use tonic::service::Interceptor;
 use tonic::codegen::InterceptedService;
+use tonic::service::Interceptor;
+use tonic::transport::{Channel, ClientTlsConfig, Identity};
+use tracing::{debug, error, info, warn};
 
 use pkcs8::DecodePrivateKey;
 use prost::Message;
-use serde::{Serialize, Deserialize};
+use serde::{Deserialize, Serialize};
 
 // WebRTC Imports
-use webrtc::api::APIBuilder;
 use webrtc::api::interceptor_registry::register_default_interceptors;
 use webrtc::api::media_engine::MediaEngine;
+use webrtc::api::APIBuilder;
 use webrtc::data_channel::data_channel_message::DataChannelMessage;
+use webrtc::ice_transport::ice_candidate::RTCIceCandidateInit;
+use webrtc::ice_transport::ice_server::RTCIceServer;
 use webrtc::peer_connection::configuration::RTCConfiguration;
 use webrtc::peer_connection::peer_connection_state::RTCPeerConnectionState;
-use webrtc::peer_connection::sdp::session_description::RTCSessionDescription;
-use webrtc::ice_transport::ice_server::RTCIceServer;
 use webrtc::peer_connection::sdp::sdp_type::RTCSdpType;
-use webrtc::ice_transport::ice_candidate::RTCIceCandidateInit;
-
+use webrtc::peer_connection::sdp::session_description::RTCSessionDescription;
 
 #[derive(Clone)]
 pub struct HubInterceptor {
@@ -73,7 +63,10 @@ pub struct HubInterceptor {
 }
 
 impl Interceptor for HubInterceptor {
-    fn call(&mut self, mut request: tonic::Request<()>) -> Result<tonic::Request<()>, tonic::Status> {
+    fn call(
+        &mut self,
+        mut request: tonic::Request<()>,
+    ) -> Result<tonic::Request<()>, tonic::Status> {
         if let Some(uid) = &self.user_id {
             if let Ok(val) = tonic::metadata::MetadataValue::from_str(uid) {
                 request.metadata_mut().insert("user-id", val);
@@ -125,14 +118,11 @@ fn derive_fingerprint(data: &[u8]) -> String {
 
     // Must match Go's qr.go emoji list exactly
     const EMOJIS: &[&str] = &[
-        "🐶", "🐱", "🐭", "🐹", "🐰", "🦊", "🐻", "🐼",
-        "🐨", "🐯", "🦁", "🐮", "🐷", "🐸", "🐵", "🐔",
-        "🐧", "🐦", "🐤", "🦆", "🦅", "🦉", "🦇", "🐺",
-        "🐗", "🐴", "🦄", "🐝", "🐛", "🦋", "🐌", "🐞",
-        "🌸", "🌺", "🌻", "🌹", "🌷", "🌼", "🌿", "🍀",
-        "🍎", "🍊", "🍋", "🍇", "🍓", "🍒", "🍑", "🥝",
-        "🌙", "⭐", "🌟", "✨", "⚡", "🔥", "🌈", "☀️",
-        "🎸", "🎹", "🎺", "🎷", "🥁", "🎻", "🎤", "🎧",
+        "🐶", "🐱", "🐭", "🐹", "🐰", "🦊", "🐻", "🐼", "🐨", "🐯", "🦁", "🐮", "🐷", "🐸", "🐵",
+        "🐔", "🐧", "🐦", "🐤", "🦆", "🦅", "🦉", "🦇", "🐺", "🐗", "🐴", "🦄", "🐝", "🐛", "🦋",
+        "🐌", "🐞", "🌸", "🌺", "🌻", "🌹", "🌷", "🌼", "🌿", "🍀", "🍎", "🍊", "🍋", "🍇", "🍓",
+        "🍒", "🍑", "🥝", "🌙", "⭐", "🌟", "✨", "⚡", "🔥", "🌈", "☀️", "🎸", "🎹", "🎺", "🎷",
+        "🥁", "🎻", "🎤", "🎧",
     ];
 
     let mut result = String::new();
@@ -195,9 +185,9 @@ pub struct HubClient {
 
 impl HubClient {
     pub fn new(
-        hub_addr: String, 
-        data_dir: String, 
-        node_name: String, 
+        hub_addr: String,
+        data_dir: String,
+        node_name: String,
         manager: Arc<ProxyManager>,
         stun_server: Option<String>,
         ca_cert_path: Option<String>,
@@ -250,10 +240,10 @@ impl HubClient {
 
         // Load applied proxies from disk
         self.load_applied_proxies().await;
-        
+
         // Load signing key
         self.signing_key = Some(self.load_private_key().await?);
-        
+
         // Load viewer public key if available
         self.load_viewer_pubkey().await;
 
@@ -277,7 +267,12 @@ impl HubClient {
                     Err(e) => {
                         if attempt < 4 {
                             let delay = Duration::from_secs(1 << attempt);
-                            warn!("[Hub] Auth probe failed (attempt {}): {}. Retrying in {:?}...", attempt + 1, e, delay);
+                            warn!(
+                                "[Hub] Auth probe failed (attempt {}): {}. Retrying in {:?}...",
+                                attempt + 1,
+                                e,
+                                delay
+                            );
                             self.client = None;
                             tokio::time::sleep(delay).await;
                         } else {
@@ -304,17 +299,17 @@ impl HubClient {
                 let p2p_stun = self.stun_server.clone();
                 let p2p_applied = self.applied_proxies.clone();
                 let p2p_data_dir = self.data_dir.clone();
-                
+
                 tokio::spawn(Self::p2p_signaling_loop(
-                    p2p_client, 
-                    p2p_node, 
-                    p2p_manager, 
+                    p2p_client,
+                    p2p_node,
+                    p2p_manager,
                     p2p_stun,
                     p2p_applied,
-                    p2p_data_dir
+                    p2p_data_dir,
                 ));
             }
-            
+
             // Metrics Task
             if let (Some(v_pk), Some(s_key)) = (&self.viewer_pubkey, &self.signing_key) {
                 let m_client = client.clone();
@@ -322,12 +317,20 @@ impl HubClient {
                 let m_node = self.node_name.clone();
                 let m_vpk = v_pk.clone();
                 let m_skey = s_key.clone();
-                
+
                 let fingerprint = self.get_fingerprint();
                 let m_streaming = self.stats_streaming_until.clone();
 
-                tokio::spawn(Self::push_metrics_loop(m_client, m_manager, m_node, m_vpk, m_skey, fingerprint.clone(), m_streaming));
-                
+                tokio::spawn(Self::push_metrics_loop(
+                    m_client,
+                    m_manager,
+                    m_node,
+                    m_vpk,
+                    m_skey,
+                    fingerprint.clone(),
+                    m_streaming,
+                ));
+
                 // Events Task (if receiver exists)
                 if let Some(event_rx) = self.event_rx.take() {
                     let e_client = client.clone();
@@ -335,11 +338,16 @@ impl HubClient {
                     let e_vpk = v_pk.clone();
                     let e_skey = s_key.clone();
                     let e_fingerprint = fingerprint.clone();
-                    
-                    tokio::spawn(Self::push_events_loop(e_client, event_rx, e_node, e_vpk, e_skey, e_fingerprint));
+
+                    tokio::spawn(Self::push_events_loop(
+                        e_client,
+                        event_rx,
+                        e_node,
+                        e_vpk,
+                        e_skey,
+                        e_fingerprint,
+                    ));
                 }
-
-
 
                 // Logs Task (if receiver exists)
                 if let Some(log_rx) = self.log_rx.take() {
@@ -348,8 +356,15 @@ impl HubClient {
                     let l_vpk = v_pk.clone();
                     let l_skey = s_key.clone();
                     let l_fingerprint = fingerprint;
-                    
-                    tokio::spawn(Self::push_logs_loop(l_client, log_rx, l_node, l_vpk, l_skey, l_fingerprint));
+
+                    tokio::spawn(Self::push_logs_loop(
+                        l_client,
+                        log_rx,
+                        l_node,
+                        l_vpk,
+                        l_skey,
+                        l_fingerprint,
+                    ));
                 }
             }
         }
@@ -362,16 +377,25 @@ impl HubClient {
 
     // === Streaming & Background Tasks ===
 
-    pub async fn push_alert(&mut self, severity: &str, title: &str, description: &str, metadata: HashMap<String, String>) {
+    pub async fn push_alert(
+        &mut self,
+        severity: &str,
+        title: &str,
+        description: &str,
+        metadata: HashMap<String, String>,
+    ) {
         // Encrypt alert content if viewer key exists (do this BEFORE borrowing client)
-        let encrypted = if let (Some(viewer_pk), Some(signing_key)) = (&self.viewer_pubkey, &self.signing_key) {
+        let encrypted = if let (Some(viewer_pk), Some(signing_key)) =
+            (&self.viewer_pubkey, &self.signing_key)
+        {
             let fingerprint = self.get_fingerprint();
             // Combine title/desc for encryption (simple JSON)
             let content = serde_json::json!({
                 "title": title,
                 "description": description
-            }).to_string();
-            
+            })
+            .to_string();
+
             match crypto::encrypt(content.as_bytes(), viewer_pk, signing_key, &fingerprint) {
                 Ok(enc) => Some(enc),
                 Err(e) => {
@@ -402,31 +426,35 @@ impl HubClient {
             };
 
             if let Err(e) = client.push_alert(alert).await {
-                 error!("[Hub] Failed to push alert: {}", e);
+                error!("[Hub] Failed to push alert: {}", e);
             }
         }
     }
 
-    async fn heartbeat_loop(mut client: NodeServiceClient<InterceptedService<Channel, HubInterceptor>>, node_name: String, start_time: std::time::Instant) {
+    async fn heartbeat_loop(
+        mut client: NodeServiceClient<InterceptedService<Channel, HubInterceptor>>,
+        node_name: String,
+        start_time: std::time::Instant,
+    ) {
         let mut interval = time::interval(Duration::from_secs(30));
         loop {
             interval.tick().await;
-            
+
             let uptime = start_time.elapsed().as_secs() as i64;
-            
+
             let req = HeartbeatRequest {
                 node_id: node_name.clone(),
                 status: NodeStatus::Online as i32,
                 uptime_seconds: uptime,
             };
-            
+
             match client.heartbeat(req).await {
                 Ok(resp) => {
                     let resp = resp.into_inner();
                     if resp.config_changed {
                         info!("[Hub] Heartbeat: Config changed, requesting update...");
                     }
-                },
+                }
                 Err(e) => error!("[Hub] Heartbeat failed: {}", e),
             }
         }
@@ -501,7 +529,7 @@ impl HubClient {
                         error!("[Hub] Metrics stream closed");
                         break;
                     }
-                },
+                }
                 Err(e) => error!("[Hub] Failed to encrypt metrics: {}", e),
             }
         }
@@ -514,72 +542,84 @@ impl HubClient {
         node_name: String,
         viewer_pk: VerifyingKey,
         signing_key: SigningKey,
-        fingerprint: String
+        fingerprint: String,
     ) {
         loop {
-             match rx.recv().await {
-                 Ok(event) => {
-                     // Check if it is PendingApproval
-                     if let Some(event::Type::Connection(conn_event)) = event.r#type {
-                         if conn_event.event_type == crate::proto::proxy::EventType::PendingApproval as i32 {
-                             // Construct Alert
-                             let req_id = conn_event.conn_id;
-                             let proxy_id = conn_event.target_addr; // Mapped from stats.rs
-                             let rule_id = conn_event.rule_matched;
-                             let source_ip = conn_event.source_ip;
-                             
-                             let title = "Approval Requested";
-                             let description = format!("Connection from {} requires approval.", source_ip);
-                             
-                             let metadata = HashMap::from([
-                                 ("req_id".to_string(), req_id.clone()),
-                                 ("proxy_id".to_string(), proxy_id),
-                                 ("rule_id".to_string(), rule_id),
-                                 ("source_ip".to_string(), source_ip),
-                             ]);
+            match rx.recv().await {
+                Ok(event) => {
+                    // Check if it is PendingApproval
+                    if let Some(event::Type::Connection(conn_event)) = event.r#type {
+                        if conn_event.event_type
+                            == crate::proto::proxy::EventType::PendingApproval as i32
+                        {
+                            // Construct Alert
+                            let req_id = conn_event.conn_id;
+                            let proxy_id = conn_event.target_addr; // Mapped from stats.rs
+                            let rule_id = conn_event.rule_matched;
+                            let source_ip = conn_event.source_ip;
 
-                             let content = serde_json::json!({
-                                "title": title,
-                                "description": description
-                             }).to_string();
+                            let title = "Approval Requested";
+                            let description =
+                                format!("Connection from {} requires approval.", source_ip);
 
-                             let encrypted = match crypto::encrypt(content.as_bytes(), &viewer_pk, &signing_key, &fingerprint) {
-                                 Ok(enc) => Some(enc),
-                                 Err(e) => { error!("[Hub] Encrypt alert failed: {}", e); None }
-                             };
-                             
-                             let alert = Alert {
-                                 id: req_id.clone(),
-                                 node_id: node_name.clone(),
-                                 severity: "info".to_string(),
-                                 timestamp_unix: chrono::Utc::now().timestamp(),
-                                 acknowledged: false,
-                                 encrypted: encrypted.map(|e| EncryptedPayload {
-                                     ephemeral_pubkey: e.ephemeral_pubkey,
-                                     nonce: e.nonce,
-                                     ciphertext: e.ciphertext,
-                                     sender_fingerprint: e.sender_fingerprint,
-                                     signature: e.signature,
-                                     algorithm: e.algorithm,
-                                 }),
-                                 metadata,
-                             };
-                             
-                             if let Err(e) = client.push_alert(alert).await {
-                                 error!("[Hub] Failed to push alert: {}", e);
-                             } else {
-                                 info!("[Hub] Pushed approval alert for {}", req_id);
-                             }
-                         }
-                     }
-                 },
-                 Err(broadcast::error::RecvError::Lagged(_)) => {
-                     warn!("[Hub] Event loop lagged, missed messages");
-                 },
-                 Err(broadcast::error::RecvError::Closed) => {
-                     break;
-                 }
-             }
+                            let metadata = HashMap::from([
+                                ("req_id".to_string(), req_id.clone()),
+                                ("proxy_id".to_string(), proxy_id),
+                                ("rule_id".to_string(), rule_id),
+                                ("source_ip".to_string(), source_ip),
+                            ]);
+
+                            let content = serde_json::json!({
+                               "title": title,
+                               "description": description
+                            })
+                            .to_string();
+
+                            let encrypted = match crypto::encrypt(
+                                content.as_bytes(),
+                                &viewer_pk,
+                                &signing_key,
+                                &fingerprint,
+                            ) {
+                                Ok(enc) => Some(enc),
+                                Err(e) => {
+                                    error!("[Hub] Encrypt alert failed: {}", e);
+                                    None
+                                }
+                            };
+
+                            let alert = Alert {
+                                id: req_id.clone(),
+                                node_id: node_name.clone(),
+                                severity: "info".to_string(),
+                                timestamp_unix: chrono::Utc::now().timestamp(),
+                                acknowledged: false,
+                                encrypted: encrypted.map(|e| EncryptedPayload {
+                                    ephemeral_pubkey: e.ephemeral_pubkey,
+                                    nonce: e.nonce,
+                                    ciphertext: e.ciphertext,
+                                    sender_fingerprint: e.sender_fingerprint,
+                                    signature: e.signature,
+                                    algorithm: e.algorithm,
+                                }),
+                                metadata,
+                            };
+
+                            if let Err(e) = client.push_alert(alert).await {
+                                error!("[Hub] Failed to push alert: {}", e);
+                            } else {
+                                info!("[Hub] Pushed approval alert for {}", req_id);
+                            }
+                        }
+                    }
+                }
+                Err(broadcast::error::RecvError::Lagged(_)) => {
+                    warn!("[Hub] Event loop lagged, missed messages");
+                }
+                Err(broadcast::error::RecvError::Closed) => {
+                    break;
+                }
+            }
         }
     }
 
@@ -589,14 +629,14 @@ impl HubClient {
         node_name: String,
         viewer_pk: VerifyingKey,
         signing_key: SigningKey,
-        fingerprint: String
+        fingerprint: String,
     ) {
         let outbound = ReceiverStream::new(rx).filter_map(move |log_bytes| {
             let node_name = node_name.clone();
             let viewer_pk = viewer_pk.clone();
             let signing_key = signing_key.clone();
             let fingerprint = fingerprint.clone();
-            
+
             let content = String::from_utf8_lossy(&log_bytes).to_string();
             // Encrypt
             match crypto::encrypt(content.as_bytes(), &viewer_pk, &signing_key, &fingerprint) {
@@ -611,9 +651,9 @@ impl HubClient {
                 }
             }
         });
-        
+
         if let Err(e) = client.push_logs(outbound).await {
-             error!("[Hub] PushLogs stream failed: {}", e);
+            error!("[Hub] PushLogs stream failed: {}", e);
         }
     }
 
@@ -636,12 +676,12 @@ impl HubClient {
 
         // Load client identity if available (not available during pairing)
         if cert_path.exists() && key_path.exists() {
-             if let Ok(cert_pem) = fs::read(&cert_path).await {
-                 if let Ok(key_pem) = fs::read(&key_path).await {
-                     let identity = Identity::from_pem(cert_pem, key_pem);
-                     tls = tls.identity(identity);
-                 }
-             }
+            if let Ok(cert_pem) = fs::read(&cert_path).await {
+                if let Ok(key_pem) = fs::read(&key_path).await {
+                    let identity = Identity::from_pem(cert_pem, key_pem);
+                    tls = tls.identity(identity);
+                }
+            }
         }
 
         // Load Hub TLS CA: Priority 1: Explicit flag, Priority 2: hub_ca.crt in data dir
@@ -650,7 +690,7 @@ impl HubClient {
         let effective_ca_path = if let Some(p) = &self.ca_cert_path {
             Path::new(p).to_path_buf()
         } else {
-             Path::new(&self.data_dir).join("hub_ca.crt")
+            Path::new(&self.data_dir).join("hub_ca.crt")
         };
 
         if effective_ca_path.exists() {
@@ -673,12 +713,14 @@ impl HubClient {
         let channel = match self.build_channel().await {
             Ok(c) => c,
             Err(e) => {
-                 error!("[Hub] Connect failed details: {:?}", e);
-                 return Err(anyhow!("Transport error: {}", e));
+                error!("[Hub] Connect failed details: {:?}", e);
+                return Err(anyhow!("Transport error: {}", e));
             }
         };
 
-        let interceptor = HubInterceptor { user_id: self.user_id.clone() };
+        let interceptor = HubInterceptor {
+            user_id: self.user_id.clone(),
+        };
         let service = NodeServiceClient::with_interceptor(channel, interceptor);
 
         self.client = Some(service);
@@ -693,7 +735,8 @@ impl HubClient {
     async fn ensure_hub_ca(&self) -> Result<Vec<u8>> {
         // 1. Explicit flag
         if let Some(p) = &self.ca_cert_path {
-            let data = fs::read(p).await
+            let data = fs::read(p)
+                .await
                 .map_err(|e| anyhow!("Failed to read CA cert from {}: {}", p, e))?;
             info!("[Hub] Using explicit CA cert: {}", p);
             return Ok(data);
@@ -708,8 +751,12 @@ impl HubClient {
         }
 
         // 3. TOFU probe
-        info!("[Hub] No Hub CA found. Probing {} for TOFU...", self.hub_addr);
-        let info = crate::hubca::probe_hub_ca(&self.hub_addr).await
+        info!(
+            "[Hub] No Hub CA found. Probing {} for TOFU...",
+            self.hub_addr
+        );
+        let info = crate::hubca::probe_hub_ca(&self.hub_addr)
+            .await
             .map_err(|e| anyhow!("Failed to probe Hub CA: {}", e))?;
 
         println!();
@@ -771,8 +818,9 @@ impl HubClient {
             Channel::from_shared(addr)?
                 .tls_config(tls)?
                 .connect_timeout(Duration::from_secs(10))
-                .connect()
-        ).await
+                .connect(),
+        )
+        .await
         .map_err(|_| anyhow!("Connection to Hub timed out (10s)"))?
         .map_err(|e| anyhow!("Failed to connect to Hub: {}", e))?;
 
@@ -802,7 +850,8 @@ impl HubClient {
             r#type: MSG_TYPE_SPAKE2_INIT,
             spake2_data: init_msg.to_vec(),
             ..Default::default()
-        }).await?;
+        })
+        .await?;
 
         let request_stream = tokio_stream::wrappers::ReceiverStream::new(rx);
         let response = client.pake_exchange(request_stream).await?;
@@ -811,16 +860,22 @@ impl HubClient {
         info!("[Pairing] Waiting for CLI...");
 
         // 6. Recv CLI Init
-        let cli_msg = resp_stream.message().await?.ok_or(anyhow!("Stream closed"))?;
+        let cli_msg = resp_stream
+            .message()
+            .await?
+            .ok_or(anyhow!("Stream closed"))?;
         if cli_msg.r#type == MSG_TYPE_ERROR {
-             return Err(anyhow!("CLI Error: {}", cli_msg.error_message));
+            return Err(anyhow!("CLI Error: {}", cli_msg.error_message));
         }
         session.set_peer_public(&cli_msg.spake2_data)?;
 
         // 7. Recv CLI Reply (Confirmation)
-        let cli_reply = resp_stream.message().await?.ok_or(anyhow!("Stream closed"))?;
+        let cli_reply = resp_stream
+            .message()
+            .await?
+            .ok_or(anyhow!("Stream closed"))?;
         if cli_reply.r#type == MSG_TYPE_ERROR {
-             return Err(anyhow!("CLI Error: {}", cli_reply.error_message));
+            return Err(anyhow!("CLI Error: {}", cli_reply.error_message));
         }
 
         // Display PAKE verification emoji (matches Go's display)
@@ -848,7 +903,10 @@ impl HubClient {
         println!("║                  NODE IDENTITY INFO                          ║");
         println!("╠══════════════════════════════════════════════════════════════╣");
         println!("║  Fingerprint: {:<46} ║", csr_fingerprint);
-        println!("║  Hash:        {:<46} ║", &csr_hash_str[..std::cmp::min(46, csr_hash_str.len())]);
+        println!(
+            "║  Hash:        {:<46} ║",
+            &csr_hash_str[..std::cmp::min(46, csr_hash_str.len())]
+        );
         println!("╠══════════════════════════════════════════════════════════════╣");
         println!("║  Verify this matches the request on your Controller/CLI!     ║");
         println!("╚══════════════════════════════════════════════════════════════╝");
@@ -861,20 +919,27 @@ impl HubClient {
             encrypted_payload: enc_csr,
             nonce,
             ..Default::default()
-        }).await?;
+        })
+        .await?;
 
         info!("[Pairing] CSR sent, waiting for signed certificate...");
 
         // 9. Recv Encrypted Cert
-        let cert_msg = resp_stream.message().await?.ok_or(anyhow!("Stream closed"))?;
+        let cert_msg = resp_stream
+            .message()
+            .await?
+            .ok_or(anyhow!("Stream closed"))?;
         if cert_msg.r#type == MSG_TYPE_ERROR {
-             return Err(anyhow!("CLI rejected pairing: {}", cert_msg.error_message));
+            return Err(anyhow!("CLI rejected pairing: {}", cert_msg.error_message));
         }
         let cert_pem_bytes = session.decrypt(&cert_msg.encrypted_payload, &cert_msg.nonce)?;
         fs::write(Path::new(&self.data_dir).join("node.crt"), &cert_pem_bytes).await?;
 
         // 10. Recv Encrypted CA
-        let ca_msg = resp_stream.message().await?.ok_or(anyhow!("Stream closed"))?;
+        let ca_msg = resp_stream
+            .message()
+            .await?
+            .ok_or(anyhow!("Stream closed"))?;
         let ca_pem_bytes = session.decrypt(&ca_msg.encrypted_payload, &ca_msg.nonce)?;
         fs::write(Path::new(&self.data_dir).join("cli_ca.crt"), &ca_pem_bytes).await?;
 
@@ -909,7 +974,8 @@ impl HubClient {
     async fn load_private_key(&self) -> Result<SigningKey> {
         let key_path = Path::new(&self.data_dir).join("node.key");
         let key_pem = fs::read_to_string(&key_path).await?;
-        let key = SigningKey::from_pkcs8_pem(&key_pem).map_err(|e| anyhow!("Failed to parse private key: {}", e))?;
+        let key = SigningKey::from_pkcs8_pem(&key_pem)
+            .map_err(|e| anyhow!("Failed to parse private key: {}", e))?;
         Ok(key)
     }
 
@@ -932,8 +998,15 @@ impl HubClient {
         if let Ok(ca_pem) = fs::read(&ca_path).await {
             if let Ok(pem_data) = pem::parse(&ca_pem) {
                 use x509_parser::prelude::FromDer;
-                if let Ok((_, cert)) = x509_parser::prelude::X509Certificate::from_der(pem_data.contents()) {
-                    let key_data = cert.tbs_certificate.subject_pki.subject_public_key.data.as_ref();
+                if let Ok((_, cert)) =
+                    x509_parser::prelude::X509Certificate::from_der(pem_data.contents())
+                {
+                    let key_data = cert
+                        .tbs_certificate
+                        .subject_pki
+                        .subject_public_key
+                        .data
+                        .as_ref();
                     if key_data.len() == 32 {
                         let mut arr = [0u8; 32];
                         arr.copy_from_slice(key_data);
@@ -1109,93 +1182,45 @@ impl HubClient {
 
     async fn dispatch_command(&self, cmd_type: i32, payload: Vec<u8>) -> CommandResult {
         let (status, error_message, response_payload) = match cmd_type {
-            command_types::STATUS | command_types::GET_METRICS => {
-                self.handle_status().await
-            },
-            command_types::LIST_PROXIES => {
-                self.handle_list_proxies().await
-            },
-            command_types::LIST_RULES => {
-                self.handle_list_rules(payload).await
-            },
-            command_types::ADD_RULE => {
-                self.handle_add_rule(payload).await
-            },
-            command_types::REMOVE_RULE => {
-                self.handle_remove_rule(payload).await
-            },
-            command_types::GET_ACTIVE_CONNECTIONS => {
-                self.handle_get_connections(payload).await
-            },
-            command_types::CLOSE_CONNECTION => {
-                self.handle_close_connection(payload).await
-            },
+            command_types::STATUS | command_types::GET_METRICS => self.handle_status().await,
+            command_types::LIST_PROXIES => self.handle_list_proxies().await,
+            command_types::LIST_RULES => self.handle_list_rules(payload).await,
+            command_types::ADD_RULE => self.handle_add_rule(payload).await,
+            command_types::REMOVE_RULE => self.handle_remove_rule(payload).await,
+            command_types::GET_ACTIVE_CONNECTIONS => self.handle_get_connections(payload).await,
+            command_types::CLOSE_CONNECTION => self.handle_close_connection(payload).await,
             command_types::CLOSE_ALL_CONNECTIONS => {
                 self.handle_close_all_connections(payload).await
-            },
-            command_types::CREATE_PROXY => {
-                self.handle_create_proxy(payload).await
-            },
-            command_types::APPLY_PROXY => {
-                self.handle_apply_proxy(payload).await
-            },
+            }
+            command_types::CREATE_PROXY => self.handle_create_proxy(payload).await,
+            command_types::APPLY_PROXY => self.handle_apply_proxy(payload).await,
             command_types::DELETE_PROXY | command_types::UNAPPLY_PROXY => {
                 self.handle_delete_proxy(payload).await
-            },
-            command_types::ENABLE_PROXY => {
-                self.handle_enable_proxy(payload).await
-            },
-            command_types::DISABLE_PROXY => {
-                self.handle_disable_proxy(payload).await
-            },
+            }
+            command_types::ENABLE_PROXY => self.handle_enable_proxy(payload).await,
+            command_types::DISABLE_PROXY => self.handle_disable_proxy(payload).await,
             command_types::UPDATE_PROXY | command_types::PROXY_UPDATE => {
                 self.handle_update_proxy(payload).await
-            },
-            command_types::RESTART_LISTENERS => {
-                self.handle_restart_listeners().await
-            },
-            command_types::RELOAD_RULES => {
-                self.handle_reload_rules(payload).await
-            },
-            command_types::RESOLVE_APPROVAL => {
-                self.handle_resolve_approval(payload).await
-            },
-            command_types::BLOCK_IP => {
-                self.handle_block_ip(payload).await
-            },
-            command_types::ALLOW_IP => {
-                self.handle_allow_ip(payload).await
-            },
-            command_types::LIST_GLOBAL_RULES => {
-                self.handle_list_global_rules().await
-            },
-            command_types::REMOVE_GLOBAL_RULE => {
-                self.handle_remove_global_rule(payload).await
-            },
-            command_types::GET_APPLIED => {
-                self.handle_get_applied().await
-            },
-            command_types::LIST_ACTIVE_APPROVALS => {
-                self.handle_list_active_approvals().await
-            },
-            command_types::CANCEL_APPROVAL => {
-                self.handle_cancel_approval(payload).await
-            },
-            command_types::CONFIGURE_GEOIP => {
-                self.handle_configure_geoip(payload).await
-            },
-            command_types::GET_GEOIP_STATUS => {
-                self.handle_get_geoip_status().await
-            },
-            command_types::LOOKUP_IP => {
-                self.handle_lookup_ip(payload).await
-            },
+            }
+            command_types::RESTART_LISTENERS => self.handle_restart_listeners().await,
+            command_types::RELOAD_RULES => self.handle_reload_rules(payload).await,
+            command_types::RESOLVE_APPROVAL => self.handle_resolve_approval(payload).await,
+            command_types::BLOCK_IP => self.handle_block_ip(payload).await,
+            command_types::ALLOW_IP => self.handle_allow_ip(payload).await,
+            command_types::LIST_GLOBAL_RULES => self.handle_list_global_rules().await,
+            command_types::REMOVE_GLOBAL_RULE => self.handle_remove_global_rule(payload).await,
+            command_types::GET_APPLIED => self.handle_get_applied().await,
+            command_types::LIST_ACTIVE_APPROVALS => self.handle_list_active_approvals().await,
+            command_types::CANCEL_APPROVAL => self.handle_cancel_approval(payload).await,
+            command_types::CONFIGURE_GEOIP => self.handle_configure_geoip(payload).await,
+            command_types::GET_GEOIP_STATUS => self.handle_get_geoip_status().await,
+            command_types::LOOKUP_IP => self.handle_lookup_ip(payload).await,
             _ => {
                 warn!("[Hub] Unhandled command type: {}", cmd_type);
                 ("ERROR".to_string(), "Unhandled command".to_string(), vec![])
             }
         };
-        
+
         CommandResult {
             status,
             error_message,
@@ -1207,19 +1232,19 @@ impl HubClient {
 
     async fn handle_status(&self) -> (String, String, Vec<u8>) {
         let statuses = self.manager.list_proxies().await;
-        
+
         let mut total_conns: i64 = 0;
         let mut active_conns: i64 = 0;
         let mut bytes_in: i64 = 0;
         let mut bytes_out: i64 = 0;
-        
+
         for s in &statuses {
             total_conns += s.total_connections;
             active_conns += s.active_connections;
             bytes_in += s.bytes_in;
             bytes_out += s.bytes_out;
         }
-        
+
         let resp = StatsSummaryResponse {
             total_connections: total_conns,
             total_bytes_in: bytes_in,
@@ -1228,7 +1253,7 @@ impl HubClient {
             proxy_count: statuses.len() as i32,
             ..Default::default()
         };
-        
+
         ("OK".to_string(), "".to_string(), resp.encode_to_vec())
     }
 
@@ -1250,8 +1275,12 @@ impl HubClient {
                 } else {
                     ("ERROR".to_string(), "Proxy not found".to_string(), vec![])
                 }
-            },
-            Err(e) => ("ERROR".to_string(), format!("Invalid request: {}", e), vec![])
+            }
+            Err(e) => (
+                "ERROR".to_string(),
+                format!("Invalid request: {}", e),
+                vec![],
+            ),
         }
     }
 
@@ -1264,66 +1293,94 @@ impl HubClient {
                         Ok(_) => {
                             info!("[Hub] Added rule {} to proxy {}", rule.name, req.proxy_id);
                             ("OK".to_string(), "".to_string(), rule_id.into_bytes())
-                        },
-                        Err(e) => ("ERROR".to_string(), e.to_string(), vec![])
+                        }
+                        Err(e) => ("ERROR".to_string(), e.to_string(), vec![]),
                     }
                 } else {
                     ("ERROR".to_string(), "No rule provided".to_string(), vec![])
                 }
-            },
-            Err(e) => ("ERROR".to_string(), format!("Invalid request: {}", e), vec![])
+            }
+            Err(e) => (
+                "ERROR".to_string(),
+                format!("Invalid request: {}", e),
+                vec![],
+            ),
         }
     }
 
     async fn handle_remove_rule(&self, payload: Vec<u8>) -> (String, String, Vec<u8>) {
         match RemoveRuleRequest::decode(payload.as_slice()) {
-            Ok(req) => {
-                match self.manager.remove_rule(&req.proxy_id, &req.rule_id).await {
-                    Ok(_) => {
-                        info!("[Hub] Removed rule {} from proxy {}", req.rule_id, req.proxy_id);
-                        ("OK".to_string(), "".to_string(), vec![])
-                    },
-                    Err(e) => ("ERROR".to_string(), e.to_string(), vec![])
+            Ok(req) => match self.manager.remove_rule(&req.proxy_id, &req.rule_id).await {
+                Ok(_) => {
+                    info!(
+                        "[Hub] Removed rule {} from proxy {}",
+                        req.rule_id, req.proxy_id
+                    );
+                    ("OK".to_string(), "".to_string(), vec![])
                 }
+                Err(e) => ("ERROR".to_string(), e.to_string(), vec![]),
             },
-            Err(e) => ("ERROR".to_string(), format!("Invalid request: {}", e), vec![])
+            Err(e) => (
+                "ERROR".to_string(),
+                format!("Invalid request: {}", e),
+                vec![],
+            ),
         }
     }
 
     async fn handle_get_connections(&self, payload: Vec<u8>) -> (String, String, Vec<u8>) {
         match GetActiveConnectionsRequest::decode(payload.as_slice()) {
             Ok(req) => {
-                let pid = if req.proxy_id.is_empty() { None } else { Some(req.proxy_id) };
+                let pid = if req.proxy_id.is_empty() {
+                    None
+                } else {
+                    Some(req.proxy_id)
+                };
                 let conns = self.manager.get_active_connections(pid).await;
                 let resp = GetActiveConnectionsResponse { connections: conns };
                 ("OK".to_string(), "".to_string(), resp.encode_to_vec())
-            },
-            Err(e) => ("ERROR".to_string(), format!("Invalid request: {}", e), vec![])
+            }
+            Err(e) => (
+                "ERROR".to_string(),
+                format!("Invalid request: {}", e),
+                vec![],
+            ),
         }
     }
 
     async fn handle_close_connection(&self, payload: Vec<u8>) -> (String, String, Vec<u8>) {
         match CloseConnectionRequest::decode(payload.as_slice()) {
             Ok(req) => {
-                info!("[Hub] Close connection request: {} on {}", req.conn_id, req.proxy_id);
-                match self.manager.close_connection(&req.proxy_id, &req.conn_id).await {
+                info!(
+                    "[Hub] Close connection request: {} on {}",
+                    req.conn_id, req.proxy_id
+                );
+                match self
+                    .manager
+                    .close_connection(&req.proxy_id, &req.conn_id)
+                    .await
+                {
                     Ok(_) => {
-                         let resp = CloseConnectionResponse { 
-                            success: true, 
-                            error_message: "".to_string() 
+                        let resp = CloseConnectionResponse {
+                            success: true,
+                            error_message: "".to_string(),
                         };
                         ("OK".to_string(), "".to_string(), resp.encode_to_vec())
-                    },
+                    }
                     Err(e) => {
-                         let resp = CloseConnectionResponse { 
-                            success: false, 
-                            error_message: e.to_string() 
+                        let resp = CloseConnectionResponse {
+                            success: false,
+                            error_message: e.to_string(),
                         };
                         ("ERROR".to_string(), e.to_string(), resp.encode_to_vec())
                     }
                 }
-            },
-            Err(e) => ("ERROR".to_string(), format!("Invalid request: {}", e), vec![])
+            }
+            Err(e) => (
+                "ERROR".to_string(),
+                format!("Invalid request: {}", e),
+                vec![],
+            ),
         }
     }
 
@@ -1338,7 +1395,7 @@ impl HubClient {
                             error_message: "".to_string(),
                         };
                         ("OK".to_string(), "".to_string(), resp.encode_to_vec())
-                    },
+                    }
                     Err(e) => {
                         let resp = CloseAllConnectionsResponse {
                             success: false,
@@ -1347,8 +1404,12 @@ impl HubClient {
                         ("ERROR".to_string(), e.to_string(), resp.encode_to_vec())
                     }
                 }
-            },
-            Err(e) => ("ERROR".to_string(), format!("Invalid request: {}", e), vec![])
+            }
+            Err(e) => (
+                "ERROR".to_string(),
+                format!("Invalid request: {}", e),
+                vec![],
+            ),
         }
     }
 
@@ -1358,7 +1419,10 @@ impl HubClient {
         // Try proto-based ApplyProxyRequest with embedded YAML config
         if let Ok(req) = ApplyProxyRequest::decode(payload.as_slice()) {
             if !req.config_yaml.is_empty() {
-                info!("[Hub] ApplyProxy (template): proxy_id={}, revision={}", req.proxy_id, req.revision_num);
+                info!(
+                    "[Hub] ApplyProxy (template): proxy_id={}, revision={}",
+                    req.proxy_id, req.revision_num
+                );
                 return self.apply_proxy_template(&req).await;
             }
         }
@@ -1370,7 +1434,7 @@ impl HubClient {
     async fn apply_proxy_template(&self, req: &ApplyProxyRequest) -> (String, String, Vec<u8>) {
         let proxy_id = &req.proxy_id;
 
-        // Parse YAML config 
+        // Parse YAML config
         let yaml_config: crate::config::YamlConfig = match serde_yaml::from_str(&req.config_yaml) {
             Ok(c) => c,
             Err(e) => {
@@ -1405,7 +1469,8 @@ impl HubClient {
                     if let Some(tcp) = &yaml_config.tcp {
                         if let Some(routers) = &tcp.routers {
                             for (_, router) in routers {
-                                if router.entry_points.contains(name) && !router.service.is_empty() {
+                                if router.entry_points.contains(name) && !router.service.is_empty()
+                                {
                                     if let Some(services) = &tcp.services {
                                         if let Some(svc) = services.get(&router.service) {
                                             if let Some(lb) = &svc.load_balancer {
@@ -1446,11 +1511,17 @@ impl HubClient {
 
                 match self.manager.create_proxy(create_req).await {
                     Ok(lid) => {
-                        info!("[Hub] ApplyProxy: Created listener {} for {}/{}", lid, proxy_id, name);
+                        info!(
+                            "[Hub] ApplyProxy: Created listener {} for {}/{}",
+                            lid, proxy_id, name
+                        );
                         new_listener_ids.push(lid);
-                    },
+                    }
                     Err(e) => {
-                        error!("[Hub] ApplyProxy: Failed to create listener for {}/{}: {}", proxy_id, name, e);
+                        error!(
+                            "[Hub] ApplyProxy: Failed to create listener for {}/{}: {}",
+                            proxy_id, name, e
+                        );
                         last_error = Some(e.to_string());
                     }
                 }
@@ -1516,7 +1587,7 @@ impl HubClient {
                             lock.insert(id.clone(), applied);
                         }
                         self.save_applied_proxies().await;
-                        
+
                         let status = ProxyStatus {
                             proxy_id: id,
                             running: true,
@@ -1529,11 +1600,15 @@ impl HubClient {
                             ..Default::default()
                         };
                         ("OK".to_string(), "".to_string(), status.encode_to_vec())
-                    },
-                    Err(e) => ("ERROR".to_string(), e.to_string(), vec![])
+                    }
+                    Err(e) => ("ERROR".to_string(), e.to_string(), vec![]),
                 }
-            },
-            Err(e) => ("ERROR".to_string(), format!("Invalid request: {}", e), vec![])
+            }
+            Err(e) => (
+                "ERROR".to_string(),
+                format!("Invalid request: {}", e),
+                vec![],
+            ),
         }
     }
 
@@ -1548,23 +1623,27 @@ impl HubClient {
                             lock.remove(&req.proxy_id);
                         }
                         self.save_applied_proxies().await;
-                        
-                        let resp = DeleteProxyResponse { 
-                            success: true, 
-                            error_message: "".to_string() 
+
+                        let resp = DeleteProxyResponse {
+                            success: true,
+                            error_message: "".to_string(),
                         };
                         ("OK".to_string(), "".to_string(), resp.encode_to_vec())
-                    },
+                    }
                     Err(e) => {
-                        let resp = DeleteProxyResponse { 
-                            success: false, 
-                            error_message: e.to_string() 
+                        let resp = DeleteProxyResponse {
+                            success: false,
+                            error_message: e.to_string(),
                         };
                         ("ERROR".to_string(), e.to_string(), resp.encode_to_vec())
                     }
                 }
-            },
-            Err(e) => ("ERROR".to_string(), format!("Invalid request: {}", e), vec![])
+            }
+            Err(e) => (
+                "ERROR".to_string(),
+                format!("Invalid request: {}", e),
+                vec![],
+            ),
         }
     }
 
@@ -1579,11 +1658,15 @@ impl HubClient {
                             error_message: "".to_string(),
                         };
                         ("OK".to_string(), "".to_string(), resp.encode_to_vec())
-                    },
-                    Err(e) => ("ERROR".to_string(), e.to_string(), vec![])
+                    }
+                    Err(e) => ("ERROR".to_string(), e.to_string(), vec![]),
                 }
-            },
-            Err(e) => ("ERROR".to_string(), format!("Invalid request: {}", e), vec![])
+            }
+            Err(e) => (
+                "ERROR".to_string(),
+                format!("Invalid request: {}", e),
+                vec![],
+            ),
         }
     }
 
@@ -1598,11 +1681,15 @@ impl HubClient {
                             error_message: "".to_string(),
                         };
                         ("OK".to_string(), "".to_string(), resp.encode_to_vec())
-                    },
-                    Err(e) => ("ERROR".to_string(), e.to_string(), vec![])
+                    }
+                    Err(e) => ("ERROR".to_string(), e.to_string(), vec![]),
                 }
-            },
-            Err(e) => ("ERROR".to_string(), format!("Invalid request: {}", e), vec![])
+            }
+            Err(e) => (
+                "ERROR".to_string(),
+                format!("Invalid request: {}", e),
+                vec![],
+            ),
         }
     }
 
@@ -1612,12 +1699,12 @@ impl HubClient {
                 info!("[Hub] Updating proxy: {}", req.proxy_id);
                 match self.manager.update_proxy(req).await {
                     Ok(_) => {
-                         let resp = UpdateProxyResponse {
+                        let resp = UpdateProxyResponse {
                             success: true,
                             error_message: "".to_string(),
                         };
                         ("OK".to_string(), "".to_string(), resp.encode_to_vec())
-                    },
+                    }
                     Err(e) => {
                         let resp = UpdateProxyResponse {
                             success: false,
@@ -1626,15 +1713,19 @@ impl HubClient {
                         ("ERROR".to_string(), e.to_string(), resp.encode_to_vec())
                     }
                 }
-            },
-            Err(e) => ("ERROR".to_string(), format!("Invalid request: {}", e), vec![])
+            }
+            Err(e) => (
+                "ERROR".to_string(),
+                format!("Invalid request: {}", e),
+                vec![],
+            ),
         }
     }
 
     async fn handle_restart_listeners(&self) -> (String, String, Vec<u8>) {
         info!("[Hub] Restarting all listeners");
         let count = self.manager.restart_listeners().await;
-        
+
         let resp = RestartListenersResponse {
             success: true,
             restarted_count: count,
@@ -1649,7 +1740,11 @@ impl HubClient {
                 let statuses = self.manager.list_proxies().await;
                 let mut total = 0i32;
                 for s in statuses {
-                    if let Ok(count) = self.manager.reload_rules(&s.proxy_id, req.rules.clone()).await {
+                    if let Ok(count) = self
+                        .manager
+                        .reload_rules(&s.proxy_id, req.rules.clone())
+                        .await
+                    {
                         total += count;
                     }
                 }
@@ -1659,8 +1754,12 @@ impl HubClient {
                     ..Default::default()
                 };
                 ("OK".to_string(), "".to_string(), resp.encode_to_vec())
-            },
-            Err(e) => ("ERROR".to_string(), format!("Invalid request: {}", e), vec![])
+            }
+            Err(e) => (
+                "ERROR".to_string(),
+                format!("Invalid request: {}", e),
+                vec![],
+            ),
         }
     }
 
@@ -1670,16 +1769,36 @@ impl HubClient {
             Ok(req) => {
                 // action: 1 = ALLOW, 2 = BLOCK
                 let allowed = req.action == 1;
-                info!("[Hub] Resolving approval {}: allowed={}, duration={}", req.req_id, allowed, req.duration_seconds);
-                
-                let resolved = self.manager.approval_manager.resolve(&req.req_id, allowed, req.duration_seconds).await;
+                info!(
+                    "[Hub] Resolving approval {}: allowed={}, mode={}, duration={}",
+                    req.req_id, allowed, req.retention_mode, req.duration_seconds
+                );
+
+                let resolved = self
+                    .manager
+                    .approval_manager
+                    .resolve_with_retention(
+                        &req.req_id,
+                        allowed,
+                        req.duration_seconds,
+                        req.retention_mode,
+                    )
+                    .await;
                 if resolved {
                     ("OK".to_string(), "".to_string(), vec![])
                 } else {
-                    ("ERROR".to_string(), "Approval not found".to_string(), vec![])
+                    (
+                        "ERROR".to_string(),
+                        "Approval not found".to_string(),
+                        vec![],
+                    )
                 }
-            },
-            Err(e) => ("ERROR".to_string(), format!("Invalid request: {}", e), vec![])
+            }
+            Err(e) => (
+                "ERROR".to_string(),
+                format!("Invalid request: {}", e),
+                vec![],
+            ),
         }
     }
 
@@ -1691,8 +1810,12 @@ impl HubClient {
                     return ("ERROR".to_string(), e.to_string(), vec![]);
                 }
                 ("OK".to_string(), "".to_string(), vec![])
-            },
-            Err(e) => ("ERROR".to_string(), format!("Invalid request: {}", e), vec![])
+            }
+            Err(e) => (
+                "ERROR".to_string(),
+                format!("Invalid request: {}", e),
+                vec![],
+            ),
         }
     }
 
@@ -1704,8 +1827,12 @@ impl HubClient {
                     return ("ERROR".to_string(), e.to_string(), vec![]);
                 }
                 ("OK".to_string(), "".to_string(), vec![])
-            },
-            Err(e) => ("ERROR".to_string(), format!("Invalid request: {}", e), vec![])
+            }
+            Err(e) => (
+                "ERROR".to_string(),
+                format!("Invalid request: {}", e),
+                vec![],
+            ),
         }
     }
 
@@ -1722,23 +1849,28 @@ impl HubClient {
                 info!("[Hub] Remove global rule: {}", req.rule_id);
                 match self.manager.remove_global_rule(&req.rule_id).await {
                     Ok(_) => {
-                         let resp = crate::proto::proxy::RemoveGlobalRuleResponse {
-                             success: true,
-                             error_message: "".to_string(),
-                         };
-                         ("OK".to_string(), "".to_string(), resp.encode_to_vec())
-                    },
-                    Err(e) => ("ERROR".to_string(), e.to_string(), vec![])
+                        let resp = crate::proto::proxy::RemoveGlobalRuleResponse {
+                            success: true,
+                            error_message: "".to_string(),
+                        };
+                        ("OK".to_string(), "".to_string(), resp.encode_to_vec())
+                    }
+                    Err(e) => ("ERROR".to_string(), e.to_string(), vec![]),
                 }
-            },
-            Err(e) => ("ERROR".to_string(), format!("Invalid request: {}", e), vec![])
+            }
+            Err(e) => (
+                "ERROR".to_string(),
+                format!("Invalid request: {}", e),
+                vec![],
+            ),
         }
     }
 
     async fn handle_get_applied(&self) -> (String, String, Vec<u8>) {
         let lock = self.applied_proxies.read().await;
-        let statuses: Vec<AppliedProxyStatus> = lock.values().map(|ap| {
-            AppliedProxyStatus {
+        let statuses: Vec<AppliedProxyStatus> = lock
+            .values()
+            .map(|ap| AppliedProxyStatus {
                 proxy_id: ap.proxy_id.clone(),
                 revision_num: ap.revision_num,
                 applied_at: chrono::DateTime::from_timestamp(ap.applied_at, 0)
@@ -1746,9 +1878,9 @@ impl HubClient {
                     .unwrap_or_default(),
                 status: ap.status.clone(),
                 error_message: ap.error_msg.clone().unwrap_or_default(),
-            }
-        }).collect();
-        
+            })
+            .collect();
+
         let resp = GetAppliedProxiesResponse { proxies: statuses };
         ("OK".to_string(), "".to_string(), resp.encode_to_vec())
     }
@@ -1756,16 +1888,23 @@ impl HubClient {
     async fn handle_list_active_approvals(&self) -> (String, String, Vec<u8>) {
         let entries = self.manager.approval_manager.list_active().await;
         info!("[Hub] List active approvals: {} entries", entries.len());
-        
-        let approvals: Vec<ActiveApproval> = entries.into_iter().map(|e| {
-            ActiveApproval {
+
+        let approvals: Vec<ActiveApproval> = entries
+            .into_iter()
+            .map(|e| ActiveApproval {
                 key: e.key,
                 source_ip: e.source_ip,
                 rule_id: e.rule_id,
                 proxy_id: e.proxy_id,
                 allowed: e.allowed,
-                created_at: Some(prost_types::Timestamp { seconds: e.created_at, nanos: 0 }),
-                expires_at: Some(prost_types::Timestamp { seconds: e.expires_at, nanos: 0 }),
+                created_at: Some(prost_types::Timestamp {
+                    seconds: e.created_at,
+                    nanos: 0,
+                }),
+                expires_at: Some(prost_types::Timestamp {
+                    seconds: e.expires_at,
+                    nanos: 0,
+                }),
                 bytes_in: e.bytes_in,
                 bytes_out: e.bytes_out,
                 geo_country: e.geo_country,
@@ -1774,8 +1913,8 @@ impl HubClient {
                 tls_session_id: "".to_string(),
                 blocked_count: e.blocked_count,
                 conn_ids: vec![],
-            }
-        }).collect();
+            })
+            .collect();
 
         let resp = ListActiveApprovalsResponse { approvals };
         ("OK".to_string(), "".to_string(), resp.encode_to_vec())
@@ -1786,8 +1925,12 @@ impl HubClient {
             Ok(req) => {
                 info!("[Hub] Cancel approval: {}", req.key);
                 ("OK".to_string(), "".to_string(), vec![])
-            },
-            Err(e) => ("ERROR".to_string(), format!("Invalid request: {}", e), vec![])
+            }
+            Err(e) => (
+                "ERROR".to_string(),
+                format!("Invalid request: {}", e),
+                vec![],
+            ),
         }
     }
 
@@ -1797,35 +1940,47 @@ impl HubClient {
                 info!("[Hub] Lookup IP: {}", req.ip);
                 let info = self.manager.lookup_ip(&req.ip).await;
                 use crate::proto::proxy::LookupIpResponse;
-                let resp = LookupIpResponse { 
+                let resp = LookupIpResponse {
                     geo: Some(info),
                     cached: false,
                     lookup_time_ms: 0,
                 };
                 ("OK".to_string(), "".to_string(), resp.encode_to_vec())
-            },
-            Err(e) => ("ERROR".to_string(), format!("Invalid request: {}", e), vec![])
+            }
+            Err(e) => (
+                "ERROR".to_string(),
+                format!("Invalid request: {}", e),
+                vec![],
+            ),
         }
     }
 
     async fn handle_configure_geoip(&self, payload: Vec<u8>) -> (String, String, Vec<u8>) {
         use crate::proto::proxy::{ConfigureGeoIpRequest, ConfigureGeoIpResponse};
-        
+
         match ConfigureGeoIpRequest::decode(payload.as_slice()) {
             Ok(req) => {
-                let city_db = if req.city_db_path.is_empty() { None } else { Some(req.city_db_path) };
-                let isp_db = if req.isp_db_path.is_empty() { None } else { Some(req.isp_db_path) };
-                
+                let city_db = if req.city_db_path.is_empty() {
+                    None
+                } else {
+                    Some(req.city_db_path)
+                };
+                let isp_db = if req.isp_db_path.is_empty() {
+                    None
+                } else {
+                    Some(req.isp_db_path)
+                };
+
                 let remote_url = if !req.provider.is_empty() {
                     let url = match req.provider.as_str() {
                         "ip-api" => "http://ip-api.com/json/{ip}".to_string(),
                         "ipinfo" => {
-                             if !req.api_key.is_empty() {
-                                 format!("https://ipinfo.io/{{ip}}?token={}", req.api_key)
-                             } else {
-                                 "https://ipinfo.io/{ip}".to_string()
-                             }
-                        },
+                            if !req.api_key.is_empty() {
+                                format!("https://ipinfo.io/{{ip}}?token={}", req.api_key)
+                            } else {
+                                "https://ipinfo.io/{ip}".to_string()
+                            }
+                        }
                         custom => custom.to_string(),
                     };
                     Some(url)
@@ -1838,24 +1993,37 @@ impl HubClient {
                     1 => Some("remote,local".to_string()), // MODE_REMOTE_API
                     _ => None,
                 };
-                
-                match self.manager.configure_geoip(city_db, isp_db, remote_url, strategy).await {
+
+                match self
+                    .manager
+                    .configure_geoip(city_db, isp_db, remote_url, strategy)
+                    .await
+                {
                     Ok(_) => {
-                        let resp = ConfigureGeoIpResponse { success: true, error: "".to_string() };
+                        let resp = ConfigureGeoIpResponse {
+                            success: true,
+                            error: "".to_string(),
+                        };
                         ("OK".to_string(), "".to_string(), resp.encode_to_vec())
-                    },
-                    Err(e) => ("ERROR".to_string(), e.to_string(), vec![])
+                    }
+                    Err(e) => ("ERROR".to_string(), e.to_string(), vec![]),
                 }
-            },
-            Err(e) => ("ERROR".to_string(), format!("Invalid request: {}", e), vec![])
+            }
+            Err(e) => (
+                "ERROR".to_string(),
+                format!("Invalid request: {}", e),
+                vec![],
+            ),
         }
     }
 
     async fn handle_get_geoip_status(&self) -> (String, String, Vec<u8>) {
         use crate::proto::proxy::GetGeoIpStatusResponse;
         let status = self.manager.get_geoip_status().await;
-        
-         let mode = if status.strategy.contains(&"remote".to_string()) && status.strategy.contains(&"local".to_string()) {
+
+        let mode = if status.strategy.contains(&"remote".to_string())
+            && status.strategy.contains(&"local".to_string())
+        {
             "hybrid".to_string()
         } else if status.strategy.contains(&"remote".to_string()) {
             "remote".to_string()
@@ -1865,11 +2033,19 @@ impl HubClient {
             "disabled".to_string()
         };
 
-        let resp = GetGeoIpStatusResponse { 
-            enabled: status.enabled, 
+        let resp = GetGeoIpStatusResponse {
+            enabled: status.enabled,
             mode,
-            city_db_path: if status.city_db_loaded { "Loaded".to_string() } else { "".to_string() },
-            isp_db_path: if status.isp_db_loaded { "Loaded".to_string() } else { "".to_string() },
+            city_db_path: if status.city_db_loaded {
+                "Loaded".to_string()
+            } else {
+                "".to_string()
+            },
+            isp_db_path: if status.isp_db_loaded {
+                "Loaded".to_string()
+            } else {
+                "".to_string()
+            },
             provider: status.remote_providers.first().cloned().unwrap_or_default(),
             strategy: status.strategy,
             cache_hits: 0,
@@ -1913,39 +2089,43 @@ impl HubClient {
     ) {
         let (tx, mut rx) = mpsc::channel::<SignalMessage>(10);
         let outbound = ReceiverStream::new(rx);
-        
+
         match client.stream_signaling(outbound).await {
             Ok(resp) => {
                 let mut inbound = resp.into_inner();
                 info!("[Hub] P2P Signaling stream established");
-                
+
                 while let Some(msg) = inbound.next().await {
                     match msg {
                         Ok(signal) => {
                             if signal.target_id != node_name && !signal.target_id.is_empty() {
                                 continue;
                             }
-                            
+
                             let tx_clone = tx.clone();
                             let mgr = manager.clone();
                             let stun = stun_server.clone();
                             let applied = applied_proxies.clone();
                             let ddir = data_dir.clone();
                             let node = node_name.clone();
-                            
+
                             tokio::spawn(async move {
-                                if let Err(e) = Self::handle_p2p_signal(signal, tx_clone, mgr, stun, applied, ddir, node).await {
+                                if let Err(e) = Self::handle_p2p_signal(
+                                    signal, tx_clone, mgr, stun, applied, ddir, node,
+                                )
+                                .await
+                                {
                                     error!("[Hub] P2P Signal handler error: {}", e);
                                 }
                             });
-                        },
+                        }
                         Err(e) => {
                             error!("[Hub] P2P Stream error: {}", e);
                             break;
                         }
                     }
                 }
-            },
+            }
             Err(e) => error!("[Hub] Failed to start signaling stream: {}", e),
         }
     }
@@ -1961,7 +2141,7 @@ impl HubClient {
     ) -> Result<()> {
         if signal.r#type == "offer" {
             info!("[Hub] Received P2P Offer from {}", signal.source_id);
-            
+
             let mut media_engine = MediaEngine::default();
             media_engine.register_default_codecs()?;
             let mut registry = webrtc::interceptor::registry::Registry::new();
@@ -1970,7 +2150,7 @@ impl HubClient {
                 .with_media_engine(media_engine)
                 .with_interceptor_registry(registry)
                 .build();
-            
+
             let config = RTCConfiguration {
                 ice_servers: vec![RTCIceServer {
                     urls: vec![stun_server.unwrap_or("stun:stun.l.google.com:19302".to_string())],
@@ -1978,78 +2158,106 @@ impl HubClient {
                 }],
                 ..Default::default()
             };
-            
+
             let pc = Arc::new(api.new_peer_connection(config).await?);
-            
+
             let mgr = manager.clone();
             let applied = applied_proxies.clone();
             let ddir = data_dir.clone();
             let node = node_name.clone();
-            
-            pc.on_data_channel(Box::new(move |dc: Arc<webrtc::data_channel::RTCDataChannel>| {
-                let dc_label = dc.label().to_string();
-                let mgr = mgr.clone();
-                let applied = applied.clone();
-                let ddir = ddir.clone();
-                let dc2 = dc.clone();
-                
-                Box::pin(async move {
-                    debug!("[Hub] P2P DataChannel opened: {}", dc_label);
-                    let dc3 = dc2.clone(); // For sending
-                    dc2.on_message(Box::new(move |msg: DataChannelMessage| {
-                        let mgr = mgr.clone();
-                        let applied = applied.clone();
-                        let ddir = ddir.clone();
-                        let dc_send = dc3.clone();
-                        let data = msg.data.to_vec();
-                        
-                        Box::pin(async move {
-                             if let Ok(payload) = EncryptedCommandPayload::decode(data.as_slice()) {
-                                 let result = Self::static_dispatch(payload.r#type, payload.payload, &mgr, &applied, &ddir).await;
-                                 let resp_bytes = result.encode_to_vec();
-                                 if let Err(e) = dc_send.send(&bytes::Bytes::from(resp_bytes)).await {
-                                     error!("[Hub] P2P Send error: {}", e);
-                                 }
-                             } else {
-                                 if let Ok(secure) = SecureCommandPayload::decode(data.as_slice()) {
-                                      if let Ok(payload) = EncryptedCommandPayload::decode(secure.data.as_slice()) {
-                                            let result = Self::static_dispatch(payload.r#type, payload.payload, &mgr, &applied, &ddir).await;
+
+            pc.on_data_channel(Box::new(
+                move |dc: Arc<webrtc::data_channel::RTCDataChannel>| {
+                    let dc_label = dc.label().to_string();
+                    let mgr = mgr.clone();
+                    let applied = applied.clone();
+                    let ddir = ddir.clone();
+                    let dc2 = dc.clone();
+
+                    Box::pin(async move {
+                        debug!("[Hub] P2P DataChannel opened: {}", dc_label);
+                        let dc3 = dc2.clone(); // For sending
+                        dc2.on_message(Box::new(move |msg: DataChannelMessage| {
+                            let mgr = mgr.clone();
+                            let applied = applied.clone();
+                            let ddir = ddir.clone();
+                            let dc_send = dc3.clone();
+                            let data = msg.data.to_vec();
+
+                            Box::pin(async move {
+                                if let Ok(payload) =
+                                    EncryptedCommandPayload::decode(data.as_slice())
+                                {
+                                    let result = Self::static_dispatch(
+                                        payload.r#type,
+                                        payload.payload,
+                                        &mgr,
+                                        &applied,
+                                        &ddir,
+                                    )
+                                    .await;
+                                    let resp_bytes = result.encode_to_vec();
+                                    if let Err(e) =
+                                        dc_send.send(&bytes::Bytes::from(resp_bytes)).await
+                                    {
+                                        error!("[Hub] P2P Send error: {}", e);
+                                    }
+                                } else {
+                                    if let Ok(secure) =
+                                        SecureCommandPayload::decode(data.as_slice())
+                                    {
+                                        if let Ok(payload) =
+                                            EncryptedCommandPayload::decode(secure.data.as_slice())
+                                        {
+                                            let result = Self::static_dispatch(
+                                                payload.r#type,
+                                                payload.payload,
+                                                &mgr,
+                                                &applied,
+                                                &ddir,
+                                            )
+                                            .await;
                                             let resp_bytes = result.encode_to_vec();
-                                            if let Err(e) = dc_send.send(&bytes::Bytes::from(resp_bytes)).await {
+                                            if let Err(e) =
+                                                dc_send.send(&bytes::Bytes::from(resp_bytes)).await
+                                            {
                                                 error!("[Hub] P2P Send error: {}", e);
                                             }
-                                       }
-                                 }
-                                 warn!("[Hub] Failed to decode P2P message");
-                             }
-                        })
-                    }));
-                })
-            }));
+                                        }
+                                    }
+                                    warn!("[Hub] Failed to decode P2P message");
+                                }
+                            })
+                        }));
+                    })
+                },
+            ));
 
             let desc = RTCSessionDescription::offer(signal.payload.clone())?;
             pc.set_remote_description(desc).await?;
-            
+
             let answer = pc.create_answer(None).await?;
             let mut answer_gather = answer.clone();
             pc.set_local_description(answer).await?;
-            
+
             let payload = answer_gather.sdp;
-             tx.send(SignalMessage {
+            tx.send(SignalMessage {
                 target_id: signal.source_id,
                 source_id: node_name.clone(),
                 r#type: "answer".to_string(),
                 payload,
                 source_user_id: "".to_string(),
-            }).await?;
-            
+            })
+            .await?;
+
             let pc_clone = pc.clone();
             tokio::spawn(async move {
                 let mut done = false;
                 while !done {
                     tokio::time::sleep(Duration::from_secs(5)).await;
-                    if pc_clone.connection_state() == RTCPeerConnectionState::Closed || 
-                       pc_clone.connection_state() == RTCPeerConnectionState::Failed {
+                    if pc_clone.connection_state() == RTCPeerConnectionState::Closed
+                        || pc_clone.connection_state() == RTCPeerConnectionState::Failed
+                    {
                         done = true;
                     }
                 }
@@ -2059,47 +2267,70 @@ impl HubClient {
     }
 
     async fn static_dispatch(
-        cmd_type: i32, 
-        payload: Vec<u8>, 
-        manager: &Arc<ProxyManager>, 
+        cmd_type: i32,
+        payload: Vec<u8>,
+        manager: &Arc<ProxyManager>,
         _applied_proxies: &Arc<RwLock<HashMap<String, AppliedProxy>>>,
-        _data_dir: &str
+        _data_dir: &str,
     ) -> CommandResult {
         if cmd_type == command_types::STATUS {
-             let statuses = manager.list_proxies().await;
-             let mut total_conns = 0;
-             let mut active = 0;
-             let mut total_in = 0;
-             let mut total_out = 0;
-             for s in &statuses {
-                 total_conns += s.total_connections;
-                 active += s.active_connections;
-                 total_in += s.bytes_in;
-                 total_out += s.bytes_out;
-             }
-             let resp = StatsSummaryResponse {
-                 total_connections: total_conns,
-                 active_connections: active,
-                 total_bytes_in: total_in,
-                 total_bytes_out: total_out,
-                 proxy_count: statuses.len() as i32,
-                 ..Default::default()
-             };
-             return CommandResult { status: "OK".to_string(), error_message: "".to_string(), response_payload: resp.encode_to_vec() };
+            let statuses = manager.list_proxies().await;
+            let mut total_conns = 0;
+            let mut active = 0;
+            let mut total_in = 0;
+            let mut total_out = 0;
+            for s in &statuses {
+                total_conns += s.total_connections;
+                active += s.active_connections;
+                total_in += s.bytes_in;
+                total_out += s.bytes_out;
+            }
+            let resp = StatsSummaryResponse {
+                total_connections: total_conns,
+                active_connections: active,
+                total_bytes_in: total_in,
+                total_bytes_out: total_out,
+                proxy_count: statuses.len() as i32,
+                ..Default::default()
+            };
+            return CommandResult {
+                status: "OK".to_string(),
+                error_message: "".to_string(),
+                response_payload: resp.encode_to_vec(),
+            };
         }
-        
+
         if cmd_type == command_types::RESOLVE_APPROVAL {
             if let Ok(req) = ResolveApprovalRequest::decode(payload.as_slice()) {
                 let allowed = req.action == 1;
-                let resolved = manager.approval_manager.resolve(&req.req_id, allowed, req.duration_seconds).await;
+                let resolved = manager
+                    .approval_manager
+                    .resolve_with_retention(
+                        &req.req_id,
+                        allowed,
+                        req.duration_seconds,
+                        req.retention_mode,
+                    )
+                    .await;
                 if resolved {
-                     return CommandResult { status: "OK".to_string(), ..Default::default() };
+                    return CommandResult {
+                        status: "OK".to_string(),
+                        ..Default::default()
+                    };
                 } else {
-                     return CommandResult { status: "ERROR".to_string(), error_message: "Not found".to_string(), ..Default::default() };
+                    return CommandResult {
+                        status: "ERROR".to_string(),
+                        error_message: "Not found".to_string(),
+                        ..Default::default()
+                    };
                 }
             }
         }
-        
-        CommandResult { status: "ERROR".to_string(), error_message: "Unimplemented in P2P".to_string(), ..Default::default() }
+
+        CommandResult {
+            status: "ERROR".to_string(),
+            error_message: "Unimplemented in P2P".to_string(),
+            ..Default::default()
+        }
     }
 }

@@ -1,0 +1,15 @@
+--- a/vendor/github.com/wlynxg/anet/interface_android.go
++++ b/vendor/github.com/wlynxg/anet/interface_android.go
+@@ -164,9 +164,9 @@
+ 	toName       map[int]string // interface index to its name
+ }
+ 
+-//go:linkname zoneCache net.zoneCache
++// //go:linkname zoneCache net.zoneCache
+ var zoneCache ipv6ZoneCache
+ 
+-//go:linkname zoneCacheX golang.org/x/net/internal/socket.zoneCache
++// //go:linkname zoneCacheX golang.org/x/net/internal/socket.zoneCache
+ var zoneCacheX ipv6ZoneCache
+ 
+ // update refreshes the network interface information if the cache was last

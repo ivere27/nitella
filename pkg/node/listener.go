@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
-	"encoding/json"
 	"fmt"
 	"net"
 	"sync"
@@ -18,11 +17,16 @@ import (
 	"github.com/ivere27/nitella/pkg/log"
 	"github.com/ivere27/nitella/pkg/node/stats"
 	"github.com/ivere27/nitella/pkg/node/stream"
+	"google.golang.org/protobuf/proto"
 )
 
 // ApprovalRequestTimeout is the maximum time to wait for an approval decision.
 // Set to 2 minutes to allow time for mobile approval via FCM push notification.
 const ApprovalRequestTimeout = 2 * time.Minute
+
+// ApprovalGeoLookupTimeout bounds geo enrichment latency for live connection handling.
+// If GeoIP is slow/unavailable, approval flow should still be near-real-time.
+const ApprovalGeoLookupTimeout = 250 * time.Millisecond
 
 // TarpitHistoryMaxAge is how long to keep tarpit history entries before cleanup.
 // Entries older than this are removed to prevent memory leak from port scanners.
@@ -153,6 +157,10 @@ func (p *EmbeddedListener) SetStatsService(s *stats.StatsService) {
 // SetApprovalManager sets the approval manager for real-time approval workflow
 func (p *EmbeddedListener) SetApprovalManager(am *ApprovalManager) {
 	p.approval = am
+	// Wire connection closer so expired approvals auto-close active connections
+	if am != nil {
+		am.SetConnectionCloser(p)
+	}
 }
 
 // SetGlobalRules sets the global rules store for cross-proxy rules
@@ -297,7 +305,11 @@ func (p *EmbeddedListener) Start() error {
 	log.Tracef("[TRACE] EmbeddedListener.Start: Starting accept loop goroutine...")
 	p.wg.Add(1)
 	go p.acceptLoop()
-	log.Printf("[INFO] EmbeddedListener.Start: Started on %s", p.ListenAddr)
+	if p.ID != "" {
+		log.Printf("[INFO] EmbeddedListener.Start: Started on %s (proxyId=%s)", p.ListenAddr, p.ID)
+	} else {
+		log.Printf("[INFO] EmbeddedListener.Start: Started on %s", p.ListenAddr)
+	}
 
 	return nil
 }
@@ -496,6 +508,8 @@ func (p *EmbeddedListener) handleConn(conn net.Conn) {
 	fmt.Sscanf(sourcePortStr, "%d", &sourcePort)
 
 	var connBytesIn, connBytesOut int64
+	connDone := make(chan struct{})
+	defer close(connDone)
 
 	// Track connection for forced shutdown & listing
 	p.connsMux.Lock()
@@ -520,7 +534,7 @@ func (p *EmbeddedListener) handleConn(conn net.Conn) {
 	// GeoIP Lookup
 	var geoInfo *pbCommon.GeoInfo
 	if p.geoIP != nil {
-		geoInfo = p.geoIP.Lookup(sourceIP)
+		geoInfo = p.geoIP.LookupWithTimeout(sourceIP, ApprovalGeoLookupTimeout)
 	}
 
 	// Emit CONNECTED
@@ -567,8 +581,9 @@ func (p *EmbeddedListener) handleConn(conn net.Conn) {
 
 	ruleId := "default"
 	backend := ""
-	var tlsSessionID string      // For approval cache tracking
-	var hasApprovalEntry bool    // Track if this conn has an approval cache entry
+	var tlsSessionID string   // For approval cache tracking
+	var hasApprovalEntry bool // Track if this conn has an approval cache entry
+	var connectionOnlyMaxDuration time.Duration
 	if rule != nil {
 		action = rule.Action
 		backend = rule.TargetBackend
@@ -583,6 +598,8 @@ func (p *EmbeddedListener) handleConn(conn net.Conn) {
 		}
 	}
 
+	log.Printf("[DEBUG] handleConn: source=%s, ruleID=%s, action=%v", sourceIP, ruleId, action)
+
 	// Apply global allow: overrides BLOCK but NOT REQUIRE_APPROVAL
 	// This ensures human oversight is maintained for high-security scenarios
 	if globalAllowed && action == common.ActionType_ACTION_TYPE_BLOCK {
@@ -592,6 +609,7 @@ func (p *EmbeddedListener) handleConn(conn net.Conn) {
 
 	// 2. Handle REQUIRE_APPROVAL action
 	if action == common.ActionType_ACTION_TYPE_REQUIRE_APPROVAL {
+		log.Printf("[DEBUG] Entering REQUIRE_APPROVAL block")
 		if p.approval == nil {
 			// No approval manager configured - fall back to block
 			log.Printf("[WARN] Action REQUIRE_APPROVAL but no ApprovalManager configured - blocking")
@@ -619,7 +637,9 @@ func (p *EmbeddedListener) handleConn(conn net.Conn) {
 			}
 
 			// Check cache first
+			log.Printf("[DEBUG] Checking cache for ip=%s rule=%s sess=%s", sourceIP, ruleId, tlsSessionID)
 			if found, allowed := p.approval.CheckCache(sourceIP, ruleId, tlsSessionID); found {
+				log.Printf("[DEBUG] Cache hit: allowed=%v", allowed)
 				if allowed {
 					action = common.ActionType_ACTION_TYPE_ALLOW
 					// Track this connection under the approval with live byte counters
@@ -643,16 +663,17 @@ func (p *EmbeddedListener) handleConn(conn net.Conn) {
 					geoISP = geoInfo.Isp
 				}
 
-				info, err := json.Marshal(map[string]interface{}{
-					"source_ip":   sourceIP,
-					"destination": p.DefaultBackend,
-					"proxy_id":    p.ID,
-					"proxy_name":  p.Name,
-					"rule_id":     ruleId,
-					"geo_country": geoCountry,
-					"geo_city":    geoCity,
-					"geo_isp":     geoISP,
-				})
+				alertDetails := &pbCommon.AlertDetails{
+					SourceIp:    sourceIP,
+					Destination: p.DefaultBackend,
+					ProxyId:     p.ID,
+					ProxyName:   p.Name,
+					RuleId:      ruleId,
+					GeoCountry:  geoCountry,
+					GeoCity:     geoCity,
+					GeoIsp:      geoISP,
+				}
+				info, err := proto.Marshal(alertDetails)
 				if err != nil {
 					log.Errorf("failed to marshal approval request info: %v", err)
 				}
@@ -701,16 +722,23 @@ func (p *EmbeddedListener) handleConn(conn net.Conn) {
 						action = common.ActionType_ACTION_TYPE_BLOCK
 					} else if result.Allowed {
 						action = common.ActionType_ACTION_TYPE_ALLOW
-						// Cache the decision
-						if result.Duration > 0 {
-							p.approval.AddToCacheWithGeo(sourceIP, ruleId, p.ID, tlsSessionID, true, result.Duration, geoCountry, geoCity, geoISP)
-							p.approval.SetConnID(sourceIP, ruleId, tlsSessionID, connID, &connBytesIn, &connBytesOut)
-							hasApprovalEntry = true
+						if result.RetentionMode == common.ApprovalRetentionMode_APPROVAL_RETENTION_MODE_CONNECTION_ONLY {
+							// CONNECTION_ONLY applies only to this connection; no cache entry.
+							if result.Duration > 0 {
+								connectionOnlyMaxDuration = result.Duration
+							}
+						} else {
+							// CACHE mode stores decision for follow-up connections.
+							if result.Duration > 0 {
+								p.approval.AddToCacheWithGeo(sourceIP, ruleId, p.ID, tlsSessionID, true, result.Duration, geoCountry, geoCity, geoISP)
+								p.approval.SetConnID(sourceIP, ruleId, tlsSessionID, connID, &connBytesIn, &connBytesOut)
+								hasApprovalEntry = true
+							}
 						}
 					} else {
 						action = common.ActionType_ACTION_TYPE_BLOCK
-						// Cache block decision too
-						if result.Duration > 0 {
+						// Cache block decision only in CACHE mode.
+						if result.RetentionMode != common.ApprovalRetentionMode_APPROVAL_RETENTION_MODE_CONNECTION_ONLY && result.Duration > 0 {
 							p.approval.AddToCacheWithGeo(sourceIP, ruleId, p.ID, tlsSessionID, false, result.Duration, geoCountry, geoCity, geoISP)
 						}
 					}
@@ -893,6 +921,21 @@ func (p *EmbeddedListener) handleConn(conn net.Conn) {
 		return
 	}
 	defer backendConn.Close()
+
+	// CONNECTION_ONLY with a positive duration means "this connection only, max N seconds".
+	if connectionOnlyMaxDuration > 0 {
+		maxLifetime := connectionOnlyMaxDuration
+		go func() {
+			timer := time.NewTimer(maxLifetime)
+			defer timer.Stop()
+			select {
+			case <-timer.C:
+				log.Printf("[Approval] Connection-only decision expired after %v, closing %s", maxLifetime, connID)
+				conn.Close()
+			case <-connDone:
+			}
+		}()
+	}
 
 	// Bidirectional copy - track bytes for stats
 	var wg sync.WaitGroup

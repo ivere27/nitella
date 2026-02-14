@@ -9,6 +9,8 @@ import (
 	"github.com/ivere27/nitella/pkg/geoip"
 )
 
+const defaultGeoLookupTimeout = 3 * time.Second
+
 // GeoIPService manages the GeoIP client (FFI or gRPC)
 type GeoIPService struct {
 	client geoip.GeoIPClient
@@ -34,6 +36,12 @@ func (s *GeoIPService) SetClient(c geoip.GeoIPClient) {
 
 // Lookup performs a GeoIP lookup.
 func (s *GeoIPService) Lookup(ip string) *pbCommon.GeoInfo {
+	return s.LookupWithTimeout(ip, defaultGeoLookupTimeout)
+}
+
+// LookupWithTimeout performs a GeoIP lookup with the specified timeout.
+// If timeout is <= 0, defaultGeoLookupTimeout is used.
+func (s *GeoIPService) LookupWithTimeout(ip string, timeout time.Duration) *pbCommon.GeoInfo {
 	s.mu.RLock()
 	client := s.client
 	s.mu.RUnlock()
@@ -42,7 +50,10 @@ func (s *GeoIPService) Lookup(ip string) *pbCommon.GeoInfo {
 		return &pbCommon.GeoInfo{}
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	if timeout <= 0 {
+		timeout = defaultGeoLookupTimeout
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
 	info, err := client.Lookup(ctx, ip)

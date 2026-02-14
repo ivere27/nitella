@@ -8,7 +8,6 @@ package proxy
 
 import (
 	context "context"
-	empty "github.com/golang/protobuf/ptypes/empty"
 	grpc "google.golang.org/grpc"
 	codes "google.golang.org/grpc/codes"
 	status "google.golang.org/grpc/status"
@@ -20,74 +19,20 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	ProxyControlService_CreateProxy_FullMethodName          = "/nitella.proxy.ProxyControlService/CreateProxy"
-	ProxyControlService_DisableProxy_FullMethodName         = "/nitella.proxy.ProxyControlService/DisableProxy"
-	ProxyControlService_EnableProxy_FullMethodName          = "/nitella.proxy.ProxyControlService/EnableProxy"
-	ProxyControlService_DeleteProxy_FullMethodName          = "/nitella.proxy.ProxyControlService/DeleteProxy"
-	ProxyControlService_UpdateProxy_FullMethodName          = "/nitella.proxy.ProxyControlService/UpdateProxy"
-	ProxyControlService_RestartListeners_FullMethodName     = "/nitella.proxy.ProxyControlService/RestartListeners"
-	ProxyControlService_GetStatus_FullMethodName            = "/nitella.proxy.ProxyControlService/GetStatus"
-	ProxyControlService_ReloadRules_FullMethodName          = "/nitella.proxy.ProxyControlService/ReloadRules"
-	ProxyControlService_AddRule_FullMethodName              = "/nitella.proxy.ProxyControlService/AddRule"
-	ProxyControlService_RemoveRule_FullMethodName           = "/nitella.proxy.ProxyControlService/RemoveRule"
-	ProxyControlService_ListRules_FullMethodName            = "/nitella.proxy.ProxyControlService/ListRules"
-	ProxyControlService_ListProxies_FullMethodName          = "/nitella.proxy.ProxyControlService/ListProxies"
-	ProxyControlService_BlockIP_FullMethodName              = "/nitella.proxy.ProxyControlService/BlockIP"
-	ProxyControlService_AllowIP_FullMethodName              = "/nitella.proxy.ProxyControlService/AllowIP"
-	ProxyControlService_ListGlobalRules_FullMethodName      = "/nitella.proxy.ProxyControlService/ListGlobalRules"
-	ProxyControlService_RemoveGlobalRule_FullMethodName     = "/nitella.proxy.ProxyControlService/RemoveGlobalRule"
-	ProxyControlService_StreamConnections_FullMethodName    = "/nitella.proxy.ProxyControlService/StreamConnections"
-	ProxyControlService_StreamMetrics_FullMethodName        = "/nitella.proxy.ProxyControlService/StreamMetrics"
-	ProxyControlService_GetActiveConnections_FullMethodName = "/nitella.proxy.ProxyControlService/GetActiveConnections"
-	ProxyControlService_CloseConnection_FullMethodName      = "/nitella.proxy.ProxyControlService/CloseConnection"
-	ProxyControlService_CloseAllConnections_FullMethodName  = "/nitella.proxy.ProxyControlService/CloseAllConnections"
-	ProxyControlService_ConfigureGeoIP_FullMethodName       = "/nitella.proxy.ProxyControlService/ConfigureGeoIP"
-	ProxyControlService_LookupIP_FullMethodName             = "/nitella.proxy.ProxyControlService/LookupIP"
-	ProxyControlService_GetGeoIPStatus_FullMethodName       = "/nitella.proxy.ProxyControlService/GetGeoIPStatus"
-	ProxyControlService_ListActiveApprovals_FullMethodName  = "/nitella.proxy.ProxyControlService/ListActiveApprovals"
-	ProxyControlService_CancelApproval_FullMethodName       = "/nitella.proxy.ProxyControlService/CancelApproval"
-	ProxyControlService_ResolveApproval_FullMethodName      = "/nitella.proxy.ProxyControlService/ResolveApproval"
+	ProxyControlService_SendCommand_FullMethodName       = "/nitella.proxy.ProxyControlService/SendCommand"
+	ProxyControlService_StreamConnections_FullMethodName = "/nitella.proxy.ProxyControlService/StreamConnections"
+	ProxyControlService_StreamMetrics_FullMethodName     = "/nitella.proxy.ProxyControlService/StreamMetrics"
 )
 
 // ProxyControlServiceClient is the client API for ProxyControlService service.
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 type ProxyControlServiceClient interface {
-	// Lifecycle Management
-	CreateProxy(ctx context.Context, in *CreateProxyRequest, opts ...grpc.CallOption) (*CreateProxyResponse, error)
-	DisableProxy(ctx context.Context, in *DisableProxyRequest, opts ...grpc.CallOption) (*DisableProxyResponse, error)
-	EnableProxy(ctx context.Context, in *EnableProxyRequest, opts ...grpc.CallOption) (*EnableProxyResponse, error)
-	DeleteProxy(ctx context.Context, in *DeleteProxyRequest, opts ...grpc.CallOption) (*DeleteProxyResponse, error)
-	UpdateProxy(ctx context.Context, in *UpdateProxyRequest, opts ...grpc.CallOption) (*UpdateProxyResponse, error)
-	RestartListeners(ctx context.Context, in *empty.Empty, opts ...grpc.CallOption) (*RestartListenersResponse, error)
-	GetStatus(ctx context.Context, in *GetStatusRequest, opts ...grpc.CallOption) (*ProxyStatus, error)
-	ReloadRules(ctx context.Context, in *ReloadRulesRequest, opts ...grpc.CallOption) (*ReloadRulesResponse, error)
-	// Rule Management (Runtime)
-	AddRule(ctx context.Context, in *AddRuleRequest, opts ...grpc.CallOption) (*Rule, error)
-	RemoveRule(ctx context.Context, in *RemoveRuleRequest, opts ...grpc.CallOption) (*empty.Empty, error)
-	ListRules(ctx context.Context, in *ListRulesRequest, opts ...grpc.CallOption) (*ListRulesResponse, error)
-	ListProxies(ctx context.Context, in *ListProxiesRequest, opts ...grpc.CallOption) (*ListProxiesResponse, error)
-	// Quick Actions (Ephemeral, runtime only)
-	BlockIP(ctx context.Context, in *BlockIPRequest, opts ...grpc.CallOption) (*empty.Empty, error)
-	AllowIP(ctx context.Context, in *AllowIPRequest, opts ...grpc.CallOption) (*empty.Empty, error)
-	ListGlobalRules(ctx context.Context, in *ListGlobalRulesRequest, opts ...grpc.CallOption) (*ListGlobalRulesResponse, error)
-	RemoveGlobalRule(ctx context.Context, in *RemoveGlobalRuleRequest, opts ...grpc.CallOption) (*RemoveGlobalRuleResponse, error)
-	// Observability
-	StreamConnections(ctx context.Context, in *StreamConnectionsRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[ConnectionEvent], error)
-	StreamMetrics(ctx context.Context, in *StreamMetricsRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[MetricsSample], error)
-	// Connection Management
-	GetActiveConnections(ctx context.Context, in *GetActiveConnectionsRequest, opts ...grpc.CallOption) (*GetActiveConnectionsResponse, error)
-	CloseConnection(ctx context.Context, in *CloseConnectionRequest, opts ...grpc.CallOption) (*CloseConnectionResponse, error)
-	CloseAllConnections(ctx context.Context, in *CloseAllConnectionsRequest, opts ...grpc.CallOption) (*CloseAllConnectionsResponse, error)
-	// Configuration
-	ConfigureGeoIP(ctx context.Context, in *ConfigureGeoIPRequest, opts ...grpc.CallOption) (*ConfigureGeoIPResponse, error)
-	// GeoIP Lookup
-	LookupIP(ctx context.Context, in *LookupIPRequest, opts ...grpc.CallOption) (*LookupIPResponse, error)
-	GetGeoIPStatus(ctx context.Context, in *GetGeoIPStatusRequest, opts ...grpc.CallOption) (*GetGeoIPStatusResponse, error)
-	// Active Approval Management
-	ListActiveApprovals(ctx context.Context, in *ListActiveApprovalsRequest, opts ...grpc.CallOption) (*ListActiveApprovalsResponse, error)
-	CancelApproval(ctx context.Context, in *CancelApprovalRequest, opts ...grpc.CallOption) (*CancelApprovalResponse, error)
-	ResolveApproval(ctx context.Context, in *ResolveApprovalRequest, opts ...grpc.CallOption) (*ResolveApprovalResponse, error)
+	// E2E Encrypted Command (same envelope as Hub relay)
+	SendCommand(ctx context.Context, in *SendCommandRequest, opts ...grpc.CallOption) (*SendCommandResponse, error)
+	// Observability (E2E encrypted streams)
+	StreamConnections(ctx context.Context, in *StreamConnectionsRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[EncryptedStreamPayload], error)
+	StreamMetrics(ctx context.Context, in *StreamMetricsRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[EncryptedStreamPayload], error)
 }
 
 type proxyControlServiceClient struct {
@@ -98,173 +43,23 @@ func NewProxyControlServiceClient(cc grpc.ClientConnInterface) ProxyControlServi
 	return &proxyControlServiceClient{cc}
 }
 
-func (c *proxyControlServiceClient) CreateProxy(ctx context.Context, in *CreateProxyRequest, opts ...grpc.CallOption) (*CreateProxyResponse, error) {
+func (c *proxyControlServiceClient) SendCommand(ctx context.Context, in *SendCommandRequest, opts ...grpc.CallOption) (*SendCommandResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(CreateProxyResponse)
-	err := c.cc.Invoke(ctx, ProxyControlService_CreateProxy_FullMethodName, in, out, cOpts...)
+	out := new(SendCommandResponse)
+	err := c.cc.Invoke(ctx, ProxyControlService_SendCommand_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
 	return out, nil
 }
 
-func (c *proxyControlServiceClient) DisableProxy(ctx context.Context, in *DisableProxyRequest, opts ...grpc.CallOption) (*DisableProxyResponse, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(DisableProxyResponse)
-	err := c.cc.Invoke(ctx, ProxyControlService_DisableProxy_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *proxyControlServiceClient) EnableProxy(ctx context.Context, in *EnableProxyRequest, opts ...grpc.CallOption) (*EnableProxyResponse, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(EnableProxyResponse)
-	err := c.cc.Invoke(ctx, ProxyControlService_EnableProxy_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *proxyControlServiceClient) DeleteProxy(ctx context.Context, in *DeleteProxyRequest, opts ...grpc.CallOption) (*DeleteProxyResponse, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(DeleteProxyResponse)
-	err := c.cc.Invoke(ctx, ProxyControlService_DeleteProxy_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *proxyControlServiceClient) UpdateProxy(ctx context.Context, in *UpdateProxyRequest, opts ...grpc.CallOption) (*UpdateProxyResponse, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(UpdateProxyResponse)
-	err := c.cc.Invoke(ctx, ProxyControlService_UpdateProxy_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *proxyControlServiceClient) RestartListeners(ctx context.Context, in *empty.Empty, opts ...grpc.CallOption) (*RestartListenersResponse, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(RestartListenersResponse)
-	err := c.cc.Invoke(ctx, ProxyControlService_RestartListeners_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *proxyControlServiceClient) GetStatus(ctx context.Context, in *GetStatusRequest, opts ...grpc.CallOption) (*ProxyStatus, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(ProxyStatus)
-	err := c.cc.Invoke(ctx, ProxyControlService_GetStatus_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *proxyControlServiceClient) ReloadRules(ctx context.Context, in *ReloadRulesRequest, opts ...grpc.CallOption) (*ReloadRulesResponse, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(ReloadRulesResponse)
-	err := c.cc.Invoke(ctx, ProxyControlService_ReloadRules_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *proxyControlServiceClient) AddRule(ctx context.Context, in *AddRuleRequest, opts ...grpc.CallOption) (*Rule, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(Rule)
-	err := c.cc.Invoke(ctx, ProxyControlService_AddRule_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *proxyControlServiceClient) RemoveRule(ctx context.Context, in *RemoveRuleRequest, opts ...grpc.CallOption) (*empty.Empty, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(empty.Empty)
-	err := c.cc.Invoke(ctx, ProxyControlService_RemoveRule_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *proxyControlServiceClient) ListRules(ctx context.Context, in *ListRulesRequest, opts ...grpc.CallOption) (*ListRulesResponse, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(ListRulesResponse)
-	err := c.cc.Invoke(ctx, ProxyControlService_ListRules_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *proxyControlServiceClient) ListProxies(ctx context.Context, in *ListProxiesRequest, opts ...grpc.CallOption) (*ListProxiesResponse, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(ListProxiesResponse)
-	err := c.cc.Invoke(ctx, ProxyControlService_ListProxies_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *proxyControlServiceClient) BlockIP(ctx context.Context, in *BlockIPRequest, opts ...grpc.CallOption) (*empty.Empty, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(empty.Empty)
-	err := c.cc.Invoke(ctx, ProxyControlService_BlockIP_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *proxyControlServiceClient) AllowIP(ctx context.Context, in *AllowIPRequest, opts ...grpc.CallOption) (*empty.Empty, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(empty.Empty)
-	err := c.cc.Invoke(ctx, ProxyControlService_AllowIP_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *proxyControlServiceClient) ListGlobalRules(ctx context.Context, in *ListGlobalRulesRequest, opts ...grpc.CallOption) (*ListGlobalRulesResponse, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(ListGlobalRulesResponse)
-	err := c.cc.Invoke(ctx, ProxyControlService_ListGlobalRules_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *proxyControlServiceClient) RemoveGlobalRule(ctx context.Context, in *RemoveGlobalRuleRequest, opts ...grpc.CallOption) (*RemoveGlobalRuleResponse, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(RemoveGlobalRuleResponse)
-	err := c.cc.Invoke(ctx, ProxyControlService_RemoveGlobalRule_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *proxyControlServiceClient) StreamConnections(ctx context.Context, in *StreamConnectionsRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[ConnectionEvent], error) {
+func (c *proxyControlServiceClient) StreamConnections(ctx context.Context, in *StreamConnectionsRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[EncryptedStreamPayload], error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	stream, err := c.cc.NewStream(ctx, &ProxyControlService_ServiceDesc.Streams[0], ProxyControlService_StreamConnections_FullMethodName, cOpts...)
 	if err != nil {
 		return nil, err
 	}
-	x := &grpc.GenericClientStream[StreamConnectionsRequest, ConnectionEvent]{ClientStream: stream}
+	x := &grpc.GenericClientStream[StreamConnectionsRequest, EncryptedStreamPayload]{ClientStream: stream}
 	if err := x.ClientStream.SendMsg(in); err != nil {
 		return nil, err
 	}
@@ -275,15 +70,15 @@ func (c *proxyControlServiceClient) StreamConnections(ctx context.Context, in *S
 }
 
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
-type ProxyControlService_StreamConnectionsClient = grpc.ServerStreamingClient[ConnectionEvent]
+type ProxyControlService_StreamConnectionsClient = grpc.ServerStreamingClient[EncryptedStreamPayload]
 
-func (c *proxyControlServiceClient) StreamMetrics(ctx context.Context, in *StreamMetricsRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[MetricsSample], error) {
+func (c *proxyControlServiceClient) StreamMetrics(ctx context.Context, in *StreamMetricsRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[EncryptedStreamPayload], error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	stream, err := c.cc.NewStream(ctx, &ProxyControlService_ServiceDesc.Streams[1], ProxyControlService_StreamMetrics_FullMethodName, cOpts...)
 	if err != nil {
 		return nil, err
 	}
-	x := &grpc.GenericClientStream[StreamMetricsRequest, MetricsSample]{ClientStream: stream}
+	x := &grpc.GenericClientStream[StreamMetricsRequest, EncryptedStreamPayload]{ClientStream: stream}
 	if err := x.ClientStream.SendMsg(in); err != nil {
 		return nil, err
 	}
@@ -294,137 +89,17 @@ func (c *proxyControlServiceClient) StreamMetrics(ctx context.Context, in *Strea
 }
 
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
-type ProxyControlService_StreamMetricsClient = grpc.ServerStreamingClient[MetricsSample]
-
-func (c *proxyControlServiceClient) GetActiveConnections(ctx context.Context, in *GetActiveConnectionsRequest, opts ...grpc.CallOption) (*GetActiveConnectionsResponse, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(GetActiveConnectionsResponse)
-	err := c.cc.Invoke(ctx, ProxyControlService_GetActiveConnections_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *proxyControlServiceClient) CloseConnection(ctx context.Context, in *CloseConnectionRequest, opts ...grpc.CallOption) (*CloseConnectionResponse, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(CloseConnectionResponse)
-	err := c.cc.Invoke(ctx, ProxyControlService_CloseConnection_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *proxyControlServiceClient) CloseAllConnections(ctx context.Context, in *CloseAllConnectionsRequest, opts ...grpc.CallOption) (*CloseAllConnectionsResponse, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(CloseAllConnectionsResponse)
-	err := c.cc.Invoke(ctx, ProxyControlService_CloseAllConnections_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *proxyControlServiceClient) ConfigureGeoIP(ctx context.Context, in *ConfigureGeoIPRequest, opts ...grpc.CallOption) (*ConfigureGeoIPResponse, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(ConfigureGeoIPResponse)
-	err := c.cc.Invoke(ctx, ProxyControlService_ConfigureGeoIP_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *proxyControlServiceClient) LookupIP(ctx context.Context, in *LookupIPRequest, opts ...grpc.CallOption) (*LookupIPResponse, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(LookupIPResponse)
-	err := c.cc.Invoke(ctx, ProxyControlService_LookupIP_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *proxyControlServiceClient) GetGeoIPStatus(ctx context.Context, in *GetGeoIPStatusRequest, opts ...grpc.CallOption) (*GetGeoIPStatusResponse, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(GetGeoIPStatusResponse)
-	err := c.cc.Invoke(ctx, ProxyControlService_GetGeoIPStatus_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *proxyControlServiceClient) ListActiveApprovals(ctx context.Context, in *ListActiveApprovalsRequest, opts ...grpc.CallOption) (*ListActiveApprovalsResponse, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(ListActiveApprovalsResponse)
-	err := c.cc.Invoke(ctx, ProxyControlService_ListActiveApprovals_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *proxyControlServiceClient) CancelApproval(ctx context.Context, in *CancelApprovalRequest, opts ...grpc.CallOption) (*CancelApprovalResponse, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(CancelApprovalResponse)
-	err := c.cc.Invoke(ctx, ProxyControlService_CancelApproval_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *proxyControlServiceClient) ResolveApproval(ctx context.Context, in *ResolveApprovalRequest, opts ...grpc.CallOption) (*ResolveApprovalResponse, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(ResolveApprovalResponse)
-	err := c.cc.Invoke(ctx, ProxyControlService_ResolveApproval_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
+type ProxyControlService_StreamMetricsClient = grpc.ServerStreamingClient[EncryptedStreamPayload]
 
 // ProxyControlServiceServer is the server API for ProxyControlService service.
 // All implementations must embed UnimplementedProxyControlServiceServer
 // for forward compatibility.
 type ProxyControlServiceServer interface {
-	// Lifecycle Management
-	CreateProxy(context.Context, *CreateProxyRequest) (*CreateProxyResponse, error)
-	DisableProxy(context.Context, *DisableProxyRequest) (*DisableProxyResponse, error)
-	EnableProxy(context.Context, *EnableProxyRequest) (*EnableProxyResponse, error)
-	DeleteProxy(context.Context, *DeleteProxyRequest) (*DeleteProxyResponse, error)
-	UpdateProxy(context.Context, *UpdateProxyRequest) (*UpdateProxyResponse, error)
-	RestartListeners(context.Context, *empty.Empty) (*RestartListenersResponse, error)
-	GetStatus(context.Context, *GetStatusRequest) (*ProxyStatus, error)
-	ReloadRules(context.Context, *ReloadRulesRequest) (*ReloadRulesResponse, error)
-	// Rule Management (Runtime)
-	AddRule(context.Context, *AddRuleRequest) (*Rule, error)
-	RemoveRule(context.Context, *RemoveRuleRequest) (*empty.Empty, error)
-	ListRules(context.Context, *ListRulesRequest) (*ListRulesResponse, error)
-	ListProxies(context.Context, *ListProxiesRequest) (*ListProxiesResponse, error)
-	// Quick Actions (Ephemeral, runtime only)
-	BlockIP(context.Context, *BlockIPRequest) (*empty.Empty, error)
-	AllowIP(context.Context, *AllowIPRequest) (*empty.Empty, error)
-	ListGlobalRules(context.Context, *ListGlobalRulesRequest) (*ListGlobalRulesResponse, error)
-	RemoveGlobalRule(context.Context, *RemoveGlobalRuleRequest) (*RemoveGlobalRuleResponse, error)
-	// Observability
-	StreamConnections(*StreamConnectionsRequest, grpc.ServerStreamingServer[ConnectionEvent]) error
-	StreamMetrics(*StreamMetricsRequest, grpc.ServerStreamingServer[MetricsSample]) error
-	// Connection Management
-	GetActiveConnections(context.Context, *GetActiveConnectionsRequest) (*GetActiveConnectionsResponse, error)
-	CloseConnection(context.Context, *CloseConnectionRequest) (*CloseConnectionResponse, error)
-	CloseAllConnections(context.Context, *CloseAllConnectionsRequest) (*CloseAllConnectionsResponse, error)
-	// Configuration
-	ConfigureGeoIP(context.Context, *ConfigureGeoIPRequest) (*ConfigureGeoIPResponse, error)
-	// GeoIP Lookup
-	LookupIP(context.Context, *LookupIPRequest) (*LookupIPResponse, error)
-	GetGeoIPStatus(context.Context, *GetGeoIPStatusRequest) (*GetGeoIPStatusResponse, error)
-	// Active Approval Management
-	ListActiveApprovals(context.Context, *ListActiveApprovalsRequest) (*ListActiveApprovalsResponse, error)
-	CancelApproval(context.Context, *CancelApprovalRequest) (*CancelApprovalResponse, error)
-	ResolveApproval(context.Context, *ResolveApprovalRequest) (*ResolveApprovalResponse, error)
+	// E2E Encrypted Command (same envelope as Hub relay)
+	SendCommand(context.Context, *SendCommandRequest) (*SendCommandResponse, error)
+	// Observability (E2E encrypted streams)
+	StreamConnections(*StreamConnectionsRequest, grpc.ServerStreamingServer[EncryptedStreamPayload]) error
+	StreamMetrics(*StreamMetricsRequest, grpc.ServerStreamingServer[EncryptedStreamPayload]) error
 	mustEmbedUnimplementedProxyControlServiceServer()
 }
 
@@ -435,86 +110,14 @@ type ProxyControlServiceServer interface {
 // pointer dereference when methods are called.
 type UnimplementedProxyControlServiceServer struct{}
 
-func (UnimplementedProxyControlServiceServer) CreateProxy(context.Context, *CreateProxyRequest) (*CreateProxyResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method CreateProxy not implemented")
+func (UnimplementedProxyControlServiceServer) SendCommand(context.Context, *SendCommandRequest) (*SendCommandResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method SendCommand not implemented")
 }
-func (UnimplementedProxyControlServiceServer) DisableProxy(context.Context, *DisableProxyRequest) (*DisableProxyResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method DisableProxy not implemented")
-}
-func (UnimplementedProxyControlServiceServer) EnableProxy(context.Context, *EnableProxyRequest) (*EnableProxyResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method EnableProxy not implemented")
-}
-func (UnimplementedProxyControlServiceServer) DeleteProxy(context.Context, *DeleteProxyRequest) (*DeleteProxyResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method DeleteProxy not implemented")
-}
-func (UnimplementedProxyControlServiceServer) UpdateProxy(context.Context, *UpdateProxyRequest) (*UpdateProxyResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method UpdateProxy not implemented")
-}
-func (UnimplementedProxyControlServiceServer) RestartListeners(context.Context, *empty.Empty) (*RestartListenersResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method RestartListeners not implemented")
-}
-func (UnimplementedProxyControlServiceServer) GetStatus(context.Context, *GetStatusRequest) (*ProxyStatus, error) {
-	return nil, status.Error(codes.Unimplemented, "method GetStatus not implemented")
-}
-func (UnimplementedProxyControlServiceServer) ReloadRules(context.Context, *ReloadRulesRequest) (*ReloadRulesResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method ReloadRules not implemented")
-}
-func (UnimplementedProxyControlServiceServer) AddRule(context.Context, *AddRuleRequest) (*Rule, error) {
-	return nil, status.Error(codes.Unimplemented, "method AddRule not implemented")
-}
-func (UnimplementedProxyControlServiceServer) RemoveRule(context.Context, *RemoveRuleRequest) (*empty.Empty, error) {
-	return nil, status.Error(codes.Unimplemented, "method RemoveRule not implemented")
-}
-func (UnimplementedProxyControlServiceServer) ListRules(context.Context, *ListRulesRequest) (*ListRulesResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method ListRules not implemented")
-}
-func (UnimplementedProxyControlServiceServer) ListProxies(context.Context, *ListProxiesRequest) (*ListProxiesResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method ListProxies not implemented")
-}
-func (UnimplementedProxyControlServiceServer) BlockIP(context.Context, *BlockIPRequest) (*empty.Empty, error) {
-	return nil, status.Error(codes.Unimplemented, "method BlockIP not implemented")
-}
-func (UnimplementedProxyControlServiceServer) AllowIP(context.Context, *AllowIPRequest) (*empty.Empty, error) {
-	return nil, status.Error(codes.Unimplemented, "method AllowIP not implemented")
-}
-func (UnimplementedProxyControlServiceServer) ListGlobalRules(context.Context, *ListGlobalRulesRequest) (*ListGlobalRulesResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method ListGlobalRules not implemented")
-}
-func (UnimplementedProxyControlServiceServer) RemoveGlobalRule(context.Context, *RemoveGlobalRuleRequest) (*RemoveGlobalRuleResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method RemoveGlobalRule not implemented")
-}
-func (UnimplementedProxyControlServiceServer) StreamConnections(*StreamConnectionsRequest, grpc.ServerStreamingServer[ConnectionEvent]) error {
+func (UnimplementedProxyControlServiceServer) StreamConnections(*StreamConnectionsRequest, grpc.ServerStreamingServer[EncryptedStreamPayload]) error {
 	return status.Error(codes.Unimplemented, "method StreamConnections not implemented")
 }
-func (UnimplementedProxyControlServiceServer) StreamMetrics(*StreamMetricsRequest, grpc.ServerStreamingServer[MetricsSample]) error {
+func (UnimplementedProxyControlServiceServer) StreamMetrics(*StreamMetricsRequest, grpc.ServerStreamingServer[EncryptedStreamPayload]) error {
 	return status.Error(codes.Unimplemented, "method StreamMetrics not implemented")
-}
-func (UnimplementedProxyControlServiceServer) GetActiveConnections(context.Context, *GetActiveConnectionsRequest) (*GetActiveConnectionsResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method GetActiveConnections not implemented")
-}
-func (UnimplementedProxyControlServiceServer) CloseConnection(context.Context, *CloseConnectionRequest) (*CloseConnectionResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method CloseConnection not implemented")
-}
-func (UnimplementedProxyControlServiceServer) CloseAllConnections(context.Context, *CloseAllConnectionsRequest) (*CloseAllConnectionsResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method CloseAllConnections not implemented")
-}
-func (UnimplementedProxyControlServiceServer) ConfigureGeoIP(context.Context, *ConfigureGeoIPRequest) (*ConfigureGeoIPResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method ConfigureGeoIP not implemented")
-}
-func (UnimplementedProxyControlServiceServer) LookupIP(context.Context, *LookupIPRequest) (*LookupIPResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method LookupIP not implemented")
-}
-func (UnimplementedProxyControlServiceServer) GetGeoIPStatus(context.Context, *GetGeoIPStatusRequest) (*GetGeoIPStatusResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method GetGeoIPStatus not implemented")
-}
-func (UnimplementedProxyControlServiceServer) ListActiveApprovals(context.Context, *ListActiveApprovalsRequest) (*ListActiveApprovalsResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method ListActiveApprovals not implemented")
-}
-func (UnimplementedProxyControlServiceServer) CancelApproval(context.Context, *CancelApprovalRequest) (*CancelApprovalResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method CancelApproval not implemented")
-}
-func (UnimplementedProxyControlServiceServer) ResolveApproval(context.Context, *ResolveApprovalRequest) (*ResolveApprovalResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method ResolveApproval not implemented")
 }
 func (UnimplementedProxyControlServiceServer) mustEmbedUnimplementedProxyControlServiceServer() {}
 func (UnimplementedProxyControlServiceServer) testEmbeddedByValue()                             {}
@@ -537,290 +140,20 @@ func RegisterProxyControlServiceServer(s grpc.ServiceRegistrar, srv ProxyControl
 	s.RegisterService(&ProxyControlService_ServiceDesc, srv)
 }
 
-func _ProxyControlService_CreateProxy_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(CreateProxyRequest)
+func _ProxyControlService_SendCommand_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SendCommandRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(ProxyControlServiceServer).CreateProxy(ctx, in)
+		return srv.(ProxyControlServiceServer).SendCommand(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: ProxyControlService_CreateProxy_FullMethodName,
+		FullMethod: ProxyControlService_SendCommand_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(ProxyControlServiceServer).CreateProxy(ctx, req.(*CreateProxyRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
-func _ProxyControlService_DisableProxy_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(DisableProxyRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(ProxyControlServiceServer).DisableProxy(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: ProxyControlService_DisableProxy_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(ProxyControlServiceServer).DisableProxy(ctx, req.(*DisableProxyRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
-func _ProxyControlService_EnableProxy_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(EnableProxyRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(ProxyControlServiceServer).EnableProxy(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: ProxyControlService_EnableProxy_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(ProxyControlServiceServer).EnableProxy(ctx, req.(*EnableProxyRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
-func _ProxyControlService_DeleteProxy_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(DeleteProxyRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(ProxyControlServiceServer).DeleteProxy(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: ProxyControlService_DeleteProxy_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(ProxyControlServiceServer).DeleteProxy(ctx, req.(*DeleteProxyRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
-func _ProxyControlService_UpdateProxy_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(UpdateProxyRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(ProxyControlServiceServer).UpdateProxy(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: ProxyControlService_UpdateProxy_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(ProxyControlServiceServer).UpdateProxy(ctx, req.(*UpdateProxyRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
-func _ProxyControlService_RestartListeners_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(empty.Empty)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(ProxyControlServiceServer).RestartListeners(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: ProxyControlService_RestartListeners_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(ProxyControlServiceServer).RestartListeners(ctx, req.(*empty.Empty))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
-func _ProxyControlService_GetStatus_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(GetStatusRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(ProxyControlServiceServer).GetStatus(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: ProxyControlService_GetStatus_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(ProxyControlServiceServer).GetStatus(ctx, req.(*GetStatusRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
-func _ProxyControlService_ReloadRules_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(ReloadRulesRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(ProxyControlServiceServer).ReloadRules(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: ProxyControlService_ReloadRules_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(ProxyControlServiceServer).ReloadRules(ctx, req.(*ReloadRulesRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
-func _ProxyControlService_AddRule_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(AddRuleRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(ProxyControlServiceServer).AddRule(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: ProxyControlService_AddRule_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(ProxyControlServiceServer).AddRule(ctx, req.(*AddRuleRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
-func _ProxyControlService_RemoveRule_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(RemoveRuleRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(ProxyControlServiceServer).RemoveRule(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: ProxyControlService_RemoveRule_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(ProxyControlServiceServer).RemoveRule(ctx, req.(*RemoveRuleRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
-func _ProxyControlService_ListRules_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(ListRulesRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(ProxyControlServiceServer).ListRules(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: ProxyControlService_ListRules_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(ProxyControlServiceServer).ListRules(ctx, req.(*ListRulesRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
-func _ProxyControlService_ListProxies_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(ListProxiesRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(ProxyControlServiceServer).ListProxies(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: ProxyControlService_ListProxies_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(ProxyControlServiceServer).ListProxies(ctx, req.(*ListProxiesRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
-func _ProxyControlService_BlockIP_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(BlockIPRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(ProxyControlServiceServer).BlockIP(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: ProxyControlService_BlockIP_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(ProxyControlServiceServer).BlockIP(ctx, req.(*BlockIPRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
-func _ProxyControlService_AllowIP_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(AllowIPRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(ProxyControlServiceServer).AllowIP(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: ProxyControlService_AllowIP_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(ProxyControlServiceServer).AllowIP(ctx, req.(*AllowIPRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
-func _ProxyControlService_ListGlobalRules_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(ListGlobalRulesRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(ProxyControlServiceServer).ListGlobalRules(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: ProxyControlService_ListGlobalRules_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(ProxyControlServiceServer).ListGlobalRules(ctx, req.(*ListGlobalRulesRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
-func _ProxyControlService_RemoveGlobalRule_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(RemoveGlobalRuleRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(ProxyControlServiceServer).RemoveGlobalRule(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: ProxyControlService_RemoveGlobalRule_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(ProxyControlServiceServer).RemoveGlobalRule(ctx, req.(*RemoveGlobalRuleRequest))
+		return srv.(ProxyControlServiceServer).SendCommand(ctx, req.(*SendCommandRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -830,184 +163,22 @@ func _ProxyControlService_StreamConnections_Handler(srv interface{}, stream grpc
 	if err := stream.RecvMsg(m); err != nil {
 		return err
 	}
-	return srv.(ProxyControlServiceServer).StreamConnections(m, &grpc.GenericServerStream[StreamConnectionsRequest, ConnectionEvent]{ServerStream: stream})
+	return srv.(ProxyControlServiceServer).StreamConnections(m, &grpc.GenericServerStream[StreamConnectionsRequest, EncryptedStreamPayload]{ServerStream: stream})
 }
 
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
-type ProxyControlService_StreamConnectionsServer = grpc.ServerStreamingServer[ConnectionEvent]
+type ProxyControlService_StreamConnectionsServer = grpc.ServerStreamingServer[EncryptedStreamPayload]
 
 func _ProxyControlService_StreamMetrics_Handler(srv interface{}, stream grpc.ServerStream) error {
 	m := new(StreamMetricsRequest)
 	if err := stream.RecvMsg(m); err != nil {
 		return err
 	}
-	return srv.(ProxyControlServiceServer).StreamMetrics(m, &grpc.GenericServerStream[StreamMetricsRequest, MetricsSample]{ServerStream: stream})
+	return srv.(ProxyControlServiceServer).StreamMetrics(m, &grpc.GenericServerStream[StreamMetricsRequest, EncryptedStreamPayload]{ServerStream: stream})
 }
 
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
-type ProxyControlService_StreamMetricsServer = grpc.ServerStreamingServer[MetricsSample]
-
-func _ProxyControlService_GetActiveConnections_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(GetActiveConnectionsRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(ProxyControlServiceServer).GetActiveConnections(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: ProxyControlService_GetActiveConnections_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(ProxyControlServiceServer).GetActiveConnections(ctx, req.(*GetActiveConnectionsRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
-func _ProxyControlService_CloseConnection_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(CloseConnectionRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(ProxyControlServiceServer).CloseConnection(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: ProxyControlService_CloseConnection_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(ProxyControlServiceServer).CloseConnection(ctx, req.(*CloseConnectionRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
-func _ProxyControlService_CloseAllConnections_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(CloseAllConnectionsRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(ProxyControlServiceServer).CloseAllConnections(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: ProxyControlService_CloseAllConnections_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(ProxyControlServiceServer).CloseAllConnections(ctx, req.(*CloseAllConnectionsRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
-func _ProxyControlService_ConfigureGeoIP_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(ConfigureGeoIPRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(ProxyControlServiceServer).ConfigureGeoIP(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: ProxyControlService_ConfigureGeoIP_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(ProxyControlServiceServer).ConfigureGeoIP(ctx, req.(*ConfigureGeoIPRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
-func _ProxyControlService_LookupIP_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(LookupIPRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(ProxyControlServiceServer).LookupIP(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: ProxyControlService_LookupIP_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(ProxyControlServiceServer).LookupIP(ctx, req.(*LookupIPRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
-func _ProxyControlService_GetGeoIPStatus_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(GetGeoIPStatusRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(ProxyControlServiceServer).GetGeoIPStatus(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: ProxyControlService_GetGeoIPStatus_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(ProxyControlServiceServer).GetGeoIPStatus(ctx, req.(*GetGeoIPStatusRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
-func _ProxyControlService_ListActiveApprovals_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(ListActiveApprovalsRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(ProxyControlServiceServer).ListActiveApprovals(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: ProxyControlService_ListActiveApprovals_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(ProxyControlServiceServer).ListActiveApprovals(ctx, req.(*ListActiveApprovalsRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
-func _ProxyControlService_CancelApproval_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(CancelApprovalRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(ProxyControlServiceServer).CancelApproval(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: ProxyControlService_CancelApproval_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(ProxyControlServiceServer).CancelApproval(ctx, req.(*CancelApprovalRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
-func _ProxyControlService_ResolveApproval_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(ResolveApprovalRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(ProxyControlServiceServer).ResolveApproval(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: ProxyControlService_ResolveApproval_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(ProxyControlServiceServer).ResolveApproval(ctx, req.(*ResolveApprovalRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
+type ProxyControlService_StreamMetricsServer = grpc.ServerStreamingServer[EncryptedStreamPayload]
 
 // ProxyControlService_ServiceDesc is the grpc.ServiceDesc for ProxyControlService service.
 // It's only intended for direct use with grpc.RegisterService,
@@ -1017,104 +188,8 @@ var ProxyControlService_ServiceDesc = grpc.ServiceDesc{
 	HandlerType: (*ProxyControlServiceServer)(nil),
 	Methods: []grpc.MethodDesc{
 		{
-			MethodName: "CreateProxy",
-			Handler:    _ProxyControlService_CreateProxy_Handler,
-		},
-		{
-			MethodName: "DisableProxy",
-			Handler:    _ProxyControlService_DisableProxy_Handler,
-		},
-		{
-			MethodName: "EnableProxy",
-			Handler:    _ProxyControlService_EnableProxy_Handler,
-		},
-		{
-			MethodName: "DeleteProxy",
-			Handler:    _ProxyControlService_DeleteProxy_Handler,
-		},
-		{
-			MethodName: "UpdateProxy",
-			Handler:    _ProxyControlService_UpdateProxy_Handler,
-		},
-		{
-			MethodName: "RestartListeners",
-			Handler:    _ProxyControlService_RestartListeners_Handler,
-		},
-		{
-			MethodName: "GetStatus",
-			Handler:    _ProxyControlService_GetStatus_Handler,
-		},
-		{
-			MethodName: "ReloadRules",
-			Handler:    _ProxyControlService_ReloadRules_Handler,
-		},
-		{
-			MethodName: "AddRule",
-			Handler:    _ProxyControlService_AddRule_Handler,
-		},
-		{
-			MethodName: "RemoveRule",
-			Handler:    _ProxyControlService_RemoveRule_Handler,
-		},
-		{
-			MethodName: "ListRules",
-			Handler:    _ProxyControlService_ListRules_Handler,
-		},
-		{
-			MethodName: "ListProxies",
-			Handler:    _ProxyControlService_ListProxies_Handler,
-		},
-		{
-			MethodName: "BlockIP",
-			Handler:    _ProxyControlService_BlockIP_Handler,
-		},
-		{
-			MethodName: "AllowIP",
-			Handler:    _ProxyControlService_AllowIP_Handler,
-		},
-		{
-			MethodName: "ListGlobalRules",
-			Handler:    _ProxyControlService_ListGlobalRules_Handler,
-		},
-		{
-			MethodName: "RemoveGlobalRule",
-			Handler:    _ProxyControlService_RemoveGlobalRule_Handler,
-		},
-		{
-			MethodName: "GetActiveConnections",
-			Handler:    _ProxyControlService_GetActiveConnections_Handler,
-		},
-		{
-			MethodName: "CloseConnection",
-			Handler:    _ProxyControlService_CloseConnection_Handler,
-		},
-		{
-			MethodName: "CloseAllConnections",
-			Handler:    _ProxyControlService_CloseAllConnections_Handler,
-		},
-		{
-			MethodName: "ConfigureGeoIP",
-			Handler:    _ProxyControlService_ConfigureGeoIP_Handler,
-		},
-		{
-			MethodName: "LookupIP",
-			Handler:    _ProxyControlService_LookupIP_Handler,
-		},
-		{
-			MethodName: "GetGeoIPStatus",
-			Handler:    _ProxyControlService_GetGeoIPStatus_Handler,
-		},
-		{
-			MethodName: "ListActiveApprovals",
-			Handler:    _ProxyControlService_ListActiveApprovals_Handler,
-		},
-		{
-			MethodName: "CancelApproval",
-			Handler:    _ProxyControlService_CancelApproval_Handler,
-		},
-		{
-			MethodName: "ResolveApproval",
-			Handler:    _ProxyControlService_ResolveApproval_Handler,
+			MethodName: "SendCommand",
+			Handler:    _ProxyControlService_SendCommand_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{

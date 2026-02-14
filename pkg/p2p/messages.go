@@ -64,8 +64,23 @@ func ParseAuthMessage(data []byte) (*AuthMessage, error) {
 type P2PMessage struct {
 	Type      string          `json:"type"`
 	Timestamp int64           `json:"timestamp"`
-	Nonce     string          `json:"nonce"` // Random unique ID for replay protection
+	Nonce     string          `json:"nonce"`                // Random unique ID for replay protection
+	RequestID string          `json:"request_id,omitempty"` // Correlation ID for request-response
 	Payload   json.RawMessage `json:"payload"`
+}
+
+// P2PCommandPayload is the payload for command messages sent over P2P.
+type P2PCommandPayload struct {
+	CommandType int32  `json:"command_type"`
+	Data        []byte `json:"data"`
+}
+
+// P2PCommandResponse is the payload for command response messages sent over P2P.
+type P2PCommandResponse struct {
+	RequestID string `json:"request_id"`
+	Status    string `json:"status"`
+	Error     string `json:"error,omitempty"`
+	Data      []byte `json:"data,omitempty"`
 }
 
 // ApprovalRequest is sent from Node to CLI via P2P when connection needs approval
@@ -115,6 +130,43 @@ func NewP2PMessage(msgType string, payload interface{}) (*P2PMessage, error) {
 		Nonce:     nonce,
 		Payload:   payloadBytes,
 	}, nil
+}
+
+// NewP2PMessageWithRequestID creates a new P2P message with a specific request ID for correlation.
+func NewP2PMessageWithRequestID(msgType string, requestID string, payload interface{}) (*P2PMessage, error) {
+	payloadBytes, err := json.Marshal(payload)
+	if err != nil {
+		return nil, err
+	}
+	nonce, err := generateNonce()
+	if err != nil {
+		return nil, fmt.Errorf("failed to generate nonce: %w", err)
+	}
+	return &P2PMessage{
+		Type:      msgType,
+		Timestamp: time.Now().Unix(),
+		Nonce:     nonce,
+		RequestID: requestID,
+		Payload:   payloadBytes,
+	}, nil
+}
+
+// ParseCommandPayload extracts P2PCommandPayload from P2PMessage payload.
+func (m *P2PMessage) ParseCommandPayload() (*P2PCommandPayload, error) {
+	var cmd P2PCommandPayload
+	if err := json.Unmarshal(m.Payload, &cmd); err != nil {
+		return nil, err
+	}
+	return &cmd, nil
+}
+
+// ParseCommandResponse extracts P2PCommandResponse from P2PMessage payload.
+func (m *P2PMessage) ParseCommandResponse() (*P2PCommandResponse, error) {
+	var resp P2PCommandResponse
+	if err := json.Unmarshal(m.Payload, &resp); err != nil {
+		return nil, err
+	}
+	return &resp, nil
 }
 
 // Marshal serializes a P2P message
@@ -197,9 +249,9 @@ func DecryptP2PMessage(data []byte, recipientPrivKey ed25519.PrivateKey) (*P2PMe
 		return nil, err
 	}
 
-	// If not encrypted, return as-is
+	// Reject unencrypted messages — all P2P messages must be encrypted
 	if wrapper.Type != MessageTypeEncrypted {
-		return wrapper, nil
+		return nil, fmt.Errorf("rejecting unencrypted P2P message (type=%s): all messages must be encrypted", wrapper.Type)
 	}
 
 	// Parse encrypted payload

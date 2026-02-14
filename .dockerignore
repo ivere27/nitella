@@ -35,3 +35,7 @@ pkg/**/*_test.go
 *.yaml
 *.yml
 !geoip_provider.yaml
+
+# Huge directories not needed for Go services
+rust/
+app/

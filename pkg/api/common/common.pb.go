@@ -505,6 +505,57 @@ func (ApprovalActionType) EnumDescriptor() ([]byte, []int) {
 	return file_common_common_proto_rawDescGZIP(), []int{7}
 }
 
+// ApprovalRetentionMode controls whether an approval decision is cached or
+// applied only to the current pending connection.
+type ApprovalRetentionMode int32
+
+const (
+	ApprovalRetentionMode_APPROVAL_RETENTION_MODE_UNSPECIFIED     ApprovalRetentionMode = 0 // Fallback to CACHE mode
+	ApprovalRetentionMode_APPROVAL_RETENTION_MODE_CACHE           ApprovalRetentionMode = 1 // Cache decision for duration_seconds
+	ApprovalRetentionMode_APPROVAL_RETENTION_MODE_CONNECTION_ONLY ApprovalRetentionMode = 2 // No cache; duration_seconds is max connection lifetime
+)
+
+// Enum value maps for ApprovalRetentionMode.
+var (
+	ApprovalRetentionMode_name = map[int32]string{
+		0: "APPROVAL_RETENTION_MODE_UNSPECIFIED",
+		1: "APPROVAL_RETENTION_MODE_CACHE",
+		2: "APPROVAL_RETENTION_MODE_CONNECTION_ONLY",
+	}
+	ApprovalRetentionMode_value = map[string]int32{
+		"APPROVAL_RETENTION_MODE_UNSPECIFIED":     0,
+		"APPROVAL_RETENTION_MODE_CACHE":           1,
+		"APPROVAL_RETENTION_MODE_CONNECTION_ONLY": 2,
+	}
+)
+
+func (x ApprovalRetentionMode) Enum() *ApprovalRetentionMode {
+	p := new(ApprovalRetentionMode)
+	*p = x
+	return p
+}
+
+func (x ApprovalRetentionMode) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (ApprovalRetentionMode) Descriptor() protoreflect.EnumDescriptor {
+	return file_common_common_proto_enumTypes[8].Descriptor()
+}
+
+func (ApprovalRetentionMode) Type() protoreflect.EnumType {
+	return &file_common_common_proto_enumTypes[8]
+}
+
+func (x ApprovalRetentionMode) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use ApprovalRetentionMode.Descriptor instead.
+func (ApprovalRetentionMode) EnumDescriptor() ([]byte, []int) {
+	return file_common_common_proto_rawDescGZIP(), []int{8}
+}
+
 // P2PMode defines the peer-to-peer connection strategy
 type P2PMode int32
 
@@ -542,11 +593,11 @@ func (x P2PMode) String() string {
 }
 
 func (P2PMode) Descriptor() protoreflect.EnumDescriptor {
-	return file_common_common_proto_enumTypes[8].Descriptor()
+	return file_common_common_proto_enumTypes[9].Descriptor()
 }
 
 func (P2PMode) Type() protoreflect.EnumType {
-	return &file_common_common_proto_enumTypes[8]
+	return &file_common_common_proto_enumTypes[9]
 }
 
 func (x P2PMode) Number() protoreflect.EnumNumber {
@@ -555,7 +606,7 @@ func (x P2PMode) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use P2PMode.Descriptor instead.
 func (P2PMode) EnumDescriptor() ([]byte, []int) {
-	return file_common_common_proto_rawDescGZIP(), []int{8}
+	return file_common_common_proto_rawDescGZIP(), []int{9}
 }
 
 // CryptoAlgorithm for forward compatibility
@@ -589,11 +640,11 @@ func (x CryptoAlgorithm) String() string {
 }
 
 func (CryptoAlgorithm) Descriptor() protoreflect.EnumDescriptor {
-	return file_common_common_proto_enumTypes[9].Descriptor()
+	return file_common_common_proto_enumTypes[10].Descriptor()
 }
 
 func (CryptoAlgorithm) Type() protoreflect.EnumType {
-	return &file_common_common_proto_enumTypes[9]
+	return &file_common_common_proto_enumTypes[10]
 }
 
 func (x CryptoAlgorithm) Number() protoreflect.EnumNumber {
@@ -602,7 +653,7 @@ func (x CryptoAlgorithm) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use CryptoAlgorithm.Descriptor instead.
 func (CryptoAlgorithm) EnumDescriptor() ([]byte, []int) {
-	return file_common_common_proto_rawDescGZIP(), []int{9}
+	return file_common_common_proto_rawDescGZIP(), []int{10}
 }
 
 // EncryptedPayload wraps E2E encrypted data using X25519 ECDH + AES-256-GCM.
@@ -849,6 +900,108 @@ func (x *Alert) GetMetadata() map[string]string {
 	return nil
 }
 
+// AlertDetails contains encrypted alert information for approval requests.
+// This replaces JSON-encoded alert info for type safety.
+type AlertDetails struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	SourceIp      string                 `protobuf:"bytes,1,opt,name=source_ip,json=sourceIp,proto3" json:"source_ip,omitempty"`
+	Destination   string                 `protobuf:"bytes,2,opt,name=destination,proto3" json:"destination,omitempty"`
+	ProxyId       string                 `protobuf:"bytes,3,opt,name=proxy_id,json=proxyId,proto3" json:"proxy_id,omitempty"`
+	ProxyName     string                 `protobuf:"bytes,4,opt,name=proxy_name,json=proxyName,proto3" json:"proxy_name,omitempty"`
+	RuleId        string                 `protobuf:"bytes,5,opt,name=rule_id,json=ruleId,proto3" json:"rule_id,omitempty"`
+	GeoCountry    string                 `protobuf:"bytes,6,opt,name=geo_country,json=geoCountry,proto3" json:"geo_country,omitempty"`
+	GeoCity       string                 `protobuf:"bytes,7,opt,name=geo_city,json=geoCity,proto3" json:"geo_city,omitempty"`
+	GeoIsp        string                 `protobuf:"bytes,8,opt,name=geo_isp,json=geoIsp,proto3" json:"geo_isp,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *AlertDetails) Reset() {
+	*x = AlertDetails{}
+	mi := &file_common_common_proto_msgTypes[3]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *AlertDetails) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*AlertDetails) ProtoMessage() {}
+
+func (x *AlertDetails) ProtoReflect() protoreflect.Message {
+	mi := &file_common_common_proto_msgTypes[3]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use AlertDetails.ProtoReflect.Descriptor instead.
+func (*AlertDetails) Descriptor() ([]byte, []int) {
+	return file_common_common_proto_rawDescGZIP(), []int{3}
+}
+
+func (x *AlertDetails) GetSourceIp() string {
+	if x != nil {
+		return x.SourceIp
+	}
+	return ""
+}
+
+func (x *AlertDetails) GetDestination() string {
+	if x != nil {
+		return x.Destination
+	}
+	return ""
+}
+
+func (x *AlertDetails) GetProxyId() string {
+	if x != nil {
+		return x.ProxyId
+	}
+	return ""
+}
+
+func (x *AlertDetails) GetProxyName() string {
+	if x != nil {
+		return x.ProxyName
+	}
+	return ""
+}
+
+func (x *AlertDetails) GetRuleId() string {
+	if x != nil {
+		return x.RuleId
+	}
+	return ""
+}
+
+func (x *AlertDetails) GetGeoCountry() string {
+	if x != nil {
+		return x.GeoCountry
+	}
+	return ""
+}
+
+func (x *AlertDetails) GetGeoCity() string {
+	if x != nil {
+		return x.GeoCity
+	}
+	return ""
+}
+
+func (x *AlertDetails) GetGeoIsp() string {
+	if x != nil {
+		return x.GeoIsp
+	}
+	return ""
+}
+
 // GeoInfo contains geographical information for an IP address.
 type GeoInfo struct {
 	state   protoimpl.MessageState `protogen:"open.v1"`
@@ -874,7 +1027,7 @@ type GeoInfo struct {
 
 func (x *GeoInfo) Reset() {
 	*x = GeoInfo{}
-	mi := &file_common_common_proto_msgTypes[3]
+	mi := &file_common_common_proto_msgTypes[4]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -886,7 +1039,7 @@ func (x *GeoInfo) String() string {
 func (*GeoInfo) ProtoMessage() {}
 
 func (x *GeoInfo) ProtoReflect() protoreflect.Message {
-	mi := &file_common_common_proto_msgTypes[3]
+	mi := &file_common_common_proto_msgTypes[4]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -899,7 +1052,7 @@ func (x *GeoInfo) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GeoInfo.ProtoReflect.Descriptor instead.
 func (*GeoInfo) Descriptor() ([]byte, []int) {
-	return file_common_common_proto_rawDescGZIP(), []int{3}
+	return file_common_common_proto_rawDescGZIP(), []int{4}
 }
 
 func (x *GeoInfo) GetCountry() string {
@@ -1029,7 +1182,18 @@ const file_common_common_proto_rawDesc = "" +
 	"\bmetadata\x18\a \x03(\v2\x1c.nitella.Alert.MetadataEntryR\bmetadata\x1a;\n" +
 	"\rMetadataEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\xe6\x02\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\xf5\x01\n" +
+	"\fAlertDetails\x12\x1b\n" +
+	"\tsource_ip\x18\x01 \x01(\tR\bsourceIp\x12 \n" +
+	"\vdestination\x18\x02 \x01(\tR\vdestination\x12\x19\n" +
+	"\bproxy_id\x18\x03 \x01(\tR\aproxyId\x12\x1d\n" +
+	"\n" +
+	"proxy_name\x18\x04 \x01(\tR\tproxyName\x12\x17\n" +
+	"\arule_id\x18\x05 \x01(\tR\x06ruleId\x12\x1f\n" +
+	"\vgeo_country\x18\x06 \x01(\tR\n" +
+	"geoCountry\x12\x19\n" +
+	"\bgeo_city\x18\a \x01(\tR\ageoCity\x12\x17\n" +
+	"\ageo_isp\x18\b \x01(\tR\x06geoIsp\"\xe6\x02\n" +
 	"\aGeoInfo\x12\x18\n" +
 	"\acountry\x18\x01 \x01(\tR\acountry\x12\x12\n" +
 	"\x04city\x18\x02 \x01(\tR\x04city\x12\x10\n" +
@@ -1111,7 +1275,11 @@ const file_common_common_proto_rawDesc = "" +
 	" APPROVAL_ACTION_TYPE_UNSPECIFIED\x10\x00\x12\x1e\n" +
 	"\x1aAPPROVAL_ACTION_TYPE_ALLOW\x10\x01\x12\x1e\n" +
 	"\x1aAPPROVAL_ACTION_TYPE_BLOCK\x10\x02\x12'\n" +
-	"#APPROVAL_ACTION_TYPE_BLOCK_ADD_RULE\x10\x03*]\n" +
+	"#APPROVAL_ACTION_TYPE_BLOCK_ADD_RULE\x10\x03*\x90\x01\n" +
+	"\x15ApprovalRetentionMode\x12'\n" +
+	"#APPROVAL_RETENTION_MODE_UNSPECIFIED\x10\x00\x12!\n" +
+	"\x1dAPPROVAL_RETENTION_MODE_CACHE\x10\x01\x12+\n" +
+	"'APPROVAL_RETENTION_MODE_CONNECTION_ONLY\x10\x02*]\n" +
 	"\aP2PMode\x12\x18\n" +
 	"\x14P2P_MODE_UNSPECIFIED\x10\x00\x12\x11\n" +
 	"\rP2P_MODE_AUTO\x10\x01\x12\x13\n" +
@@ -1133,8 +1301,8 @@ func file_common_common_proto_rawDescGZIP() []byte {
 	return file_common_common_proto_rawDescData
 }
 
-var file_common_common_proto_enumTypes = make([]protoimpl.EnumInfo, 10)
-var file_common_common_proto_msgTypes = make([]protoimpl.MessageInfo, 5)
+var file_common_common_proto_enumTypes = make([]protoimpl.EnumInfo, 11)
+var file_common_common_proto_msgTypes = make([]protoimpl.MessageInfo, 6)
 var file_common_common_proto_goTypes = []any{
 	(ActionType)(0),              // 0: nitella.ActionType
 	(FallbackAction)(0),          // 1: nitella.FallbackAction
@@ -1144,18 +1312,20 @@ var file_common_common_proto_goTypes = []any{
 	(SortOrder)(0),               // 5: nitella.SortOrder
 	(PemLabel)(0),                // 6: nitella.PemLabel
 	(ApprovalActionType)(0),      // 7: nitella.ApprovalActionType
-	(P2PMode)(0),                 // 8: nitella.P2PMode
-	(CryptoAlgorithm)(0),         // 9: nitella.CryptoAlgorithm
-	(*EncryptedPayload)(nil),     // 10: nitella.EncryptedPayload
-	(*SecureCommandPayload)(nil), // 11: nitella.SecureCommandPayload
-	(*Alert)(nil),                // 12: nitella.Alert
-	(*GeoInfo)(nil),              // 13: nitella.GeoInfo
-	nil,                          // 14: nitella.Alert.MetadataEntry
+	(ApprovalRetentionMode)(0),   // 8: nitella.ApprovalRetentionMode
+	(P2PMode)(0),                 // 9: nitella.P2PMode
+	(CryptoAlgorithm)(0),         // 10: nitella.CryptoAlgorithm
+	(*EncryptedPayload)(nil),     // 11: nitella.EncryptedPayload
+	(*SecureCommandPayload)(nil), // 12: nitella.SecureCommandPayload
+	(*Alert)(nil),                // 13: nitella.Alert
+	(*AlertDetails)(nil),         // 14: nitella.AlertDetails
+	(*GeoInfo)(nil),              // 15: nitella.GeoInfo
+	nil,                          // 16: nitella.Alert.MetadataEntry
 }
 var file_common_common_proto_depIdxs = []int32{
-	9,  // 0: nitella.EncryptedPayload.algorithm:type_name -> nitella.CryptoAlgorithm
-	10, // 1: nitella.Alert.encrypted:type_name -> nitella.EncryptedPayload
-	14, // 2: nitella.Alert.metadata:type_name -> nitella.Alert.MetadataEntry
+	10, // 0: nitella.EncryptedPayload.algorithm:type_name -> nitella.CryptoAlgorithm
+	11, // 1: nitella.Alert.encrypted:type_name -> nitella.EncryptedPayload
+	16, // 2: nitella.Alert.metadata:type_name -> nitella.Alert.MetadataEntry
 	3,  // [3:3] is the sub-list for method output_type
 	3,  // [3:3] is the sub-list for method input_type
 	3,  // [3:3] is the sub-list for extension type_name
@@ -1173,8 +1343,8 @@ func file_common_common_proto_init() {
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_common_common_proto_rawDesc), len(file_common_common_proto_rawDesc)),
-			NumEnums:      10,
-			NumMessages:   5,
+			NumEnums:      11,
+			NumMessages:   6,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

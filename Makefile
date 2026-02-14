@@ -3,13 +3,38 @@
 
 BUILD_DIR := bin
 
+# Android NDK variables
+ANDROID_CC_ARM ?= $(HOME)/android-ndk-r23c/toolchains/llvm/prebuilt/linux-x86_64/bin/armv7a-linux-androideabi21-clang
+ANDROID_CC_ARM64 ?= $(HOME)/android-ndk-r23c/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android21-clang
+ANDROID_CC_X86_64 ?= $(HOME)/android-ndk-r23c/toolchains/llvm/prebuilt/linux-x86_64/bin/x86_64-linux-android21-clang
+ANDROID_STRIP_ARM ?= $(HOME)/android-ndk-r23c/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip
+ANDROID_STRIP_ARM64 ?= $(HOME)/android-ndk-r23c/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip
+
 # Build info
 COMMIT_HASH ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo "unknown")
+COMMIT_DATE ?= $(shell git log -1 --format='%cd' --date=format:'%Y-%m-%dT%H:%M:%SZ' 2>/dev/null || echo $(shell date +"%Y-%m-%dT%H:%M:%SZ"))
 BUILD_DATE := $(shell date +"%Y-%m-%dT%H:%M:%SZ")
-LD_FLAGS := -X main.commitHash=$(COMMIT_HASH) -X main.buildDate=$(BUILD_DATE)
+CURRENT_DIR := $(PWD)
+LD_FLAGS := -X main.commitHash=$(COMMIT_HASH) -X main.commitDate=$(COMMIT_DATE) -X main.buildDate=$(BUILD_DATE)
+TAGS ?= release
+TAG ?= unstable
+
+# Flutter flavoring
+ifeq ($(TAG), unstable)
+    FLAVOR := unstable
+    DART_DEFINES_EXTRA := --dart-define=EXPERIMENTAL=true
+else
+    FLAVOR := stable
+    DART_DEFINES_EXTRA :=
+endif
+
+MOBILE_BACKEND_PATH := ./cmd/mobile_backend
 
 .PHONY: all build proto test clean deps fmt lint build_plugin
 .PHONY: hub_build hub_server hubctl_build hub_proto hub_test hub_run hub_docker_build hub_docker_run
+.PHONY: local_proto local_ffi_proto mobile_build mobile_android mobile_ios mobile_linux app_run
+.PHONY: mobile_test mobile_test_e2e mobile_test_e2e_standalone mobile_test_e2e_visible mobile_test_clean
+.PHONY: pre shared_android build_android run_android_release run_android_debug release_unstable release_unstable_clean release_stable release_stable_clean
 
 all: build
 
@@ -34,7 +59,7 @@ build: proto geoip_build mock_build nitellad_build nitella_build hub_build
 # Proto Generation
 # ============================================================================
 
-proto: common_proto proxy_proto process_proto process_ffi_proto geoip_proto geoip_ffi_proto hub_proto
+proto: common_proto proxy_proto process_proto process_ffi_proto geoip_proto geoip_ffi_proto hub_proto local_proto
 
 common_proto:
 	@mkdir -p pkg/api/common
@@ -70,12 +95,187 @@ geoip_ffi_proto: common_proto geoip_proto
 		--synurang-ffi_out=pkg/api/geoip --synurang-ffi_opt=paths=source_relative,services=GeoIPService \
 		api/geoip/geoip.proto
 
+local_proto: common_proto proxy_proto
+	@mkdir -p pkg/api/local
+	protoc --proto_path=api \
+		--go_out=pkg/api --go_opt=paths=source_relative \
+		--go-grpc_out=pkg/api --go-grpc_opt=paths=source_relative \
+		api/local/nitella_local.proto
+
+local_ffi_proto: common_proto proxy_proto local_proto
+	@mkdir -p pkg/api/local app/lib/local
+	protoc --proto_path=api \
+		--plugin=protoc-gen-synurang-ffi=$(shell go env GOPATH)/bin/protoc-gen-synurang-ffi \
+		--synurang-ffi_out=pkg/api/local --synurang-ffi_opt=paths=source_relative,services=MobileLogicService \
+		api/local/nitella_local.proto
+	@# Move generated Dart FFI file to Flutter source tree and fix imports
+	mv pkg/api/local/nitella_local_ffi.pb.dart app/lib/local/nitella_local_ffi.pb.dart
+	sed -i "s|import 'proxy/proxy.pb.dart';|import 'package:nitella_app/proxy/proxy.pb.dart' show ConfigureGeoIPResponse, GetGeoIPStatusResponse, RestartListenersResponse, Rule;|" app/lib/local/nitella_local_ffi.pb.dart
+	sed -i "/import 'dart:typed_data';/d" app/lib/local/nitella_local_ffi.pb.dart
+
+# ============================================================================
+# Mobile Backend (FFI)
+# ============================================================================
+
+mobile_build: proto mobile_android
+
+# Build Android shared libraries (.so) directly for FFI
+mobile_android: proto
+	@echo "Building nitella Android library and headers..."
+	@echo "Building Android shared libraries in parallel..."
+	@mkdir -p src
+	GOARCH=arm64 GOOS=android CGO_ENABLED=1 CC=$(ANDROID_CC_ARM64) \
+		go build -trimpath -tags "$(TAGS)" -ldflags "-s -w $(LD_FLAGS) -extldflags '-Wl,-z,max-page-size=16384'" -o libnitella-android-arm64.so -buildmode=c-shared $(MOBILE_BACKEND_PATH) & \
+	GOARCH=arm GOOS=android GOARM=7 CGO_ENABLED=1 CC=$(ANDROID_CC_ARM) \
+		go build -trimpath -tags "$(TAGS)" -ldflags "-s -w $(LD_FLAGS)" -o libnitella-android-arm.so -buildmode=c-shared $(MOBILE_BACKEND_PATH) & \
+	GOARCH=amd64 GOOS=android CGO_ENABLED=1 CC=$(ANDROID_CC_X86_64) \
+		go build -trimpath -tags "$(TAGS)" -ldflags "-s -w $(LD_FLAGS) -extldflags '-Wl,-z,max-page-size=16384'" -o libnitella-android-x86_64.so -buildmode=c-shared $(MOBILE_BACKEND_PATH) & \
+	wait
+	rm -f libnitella-android-*.h
+	mv libnitella-android-arm64.so libnitella-android-arm.so libnitella-android-x86_64.so ./src/
+	mkdir -p app/android/app/src/main/jniLibs/arm64-v8a
+	cp ./src/libnitella-android-arm64.so app/android/app/src/main/jniLibs/arm64-v8a/libnitella.so
+	mkdir -p app/android/app/src/main/jniLibs/armeabi-v7a
+	cp ./src/libnitella-android-arm.so app/android/app/src/main/jniLibs/armeabi-v7a/libnitella.so
+	mkdir -p app/android/app/src/main/jniLibs/x86_64
+	cp ./src/libnitella-android-x86_64.so app/android/app/src/main/jniLibs/x86_64/libnitella.so
+
+mobile_clean:
+	rm -rf src/libnitella-android-*.so
+	rm -rf app/android/app/src/main/jniLibs/*/libnitella.so
+
+# Linux shared library for Flutter desktop
+mobile_linux: proto
+	@echo "Building Linux shared library..."
+	CGO_ENABLED=1 go build -buildmode=c-shared \
+		-ldflags "$(LD_FLAGS)" \
+		-o libnitella.so ./cmd/mobile_backend
+	@echo "Copying shared library and header to app/linux..."
+	cp libnitella.so app/linux/
+	cp libnitella.h app/linux/
+
+# Run Flutter desktop app in debug mode
+app_run: mobile_linux
+	@echo "Running Flutter app..."
+	cd app && flutter run -d linux
+
+# ============================================================================
+# Android Build & Run (FFI Mode)
+# ============================================================================
+
+pre:
+	$(MAKE) build_plugin
+	cd app && flutter pub get
+	dart pub global activate protoc_plugin
+	go install google.golang.org/protobuf/cmd/protoc-gen-go@latest
+	go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@latest
+
+build_android:
+	cd app && flutter build appbundle --release --obfuscate --split-debug-info=./debug-info --flavor $(FLAVOR) --dart-define=COMMIT_HASH=$(COMMIT_HASH) --dart-define=COMMIT_DATE=$(COMMIT_DATE) --dart-define=BUILD_DATE=$(BUILD_DATE) $(DART_DEFINES_EXTRA)
+
+run_android_release:
+	@DEVICE_ID=$$(flutter devices | grep "android" | head -n 1 | awk -F "•" '{print $$2}' | xargs); \
+	if [ -z "$$DEVICE_ID" ]; then echo "No Android device found"; exit 1; fi; \
+	echo "Using Android device: $$DEVICE_ID"; \
+	cd app && flutter run -d $$DEVICE_ID --release --flavor $(FLAVOR) --dart-define=COMMIT_HASH=$(COMMIT_HASH) --dart-define=COMMIT_DATE=$(COMMIT_DATE) --dart-define=BUILD_DATE=$(BUILD_DATE) $(DART_DEFINES_EXTRA)
+
+run_android_debug:
+	@DEVICE_ID=$$(flutter devices | grep "android" | head -n 1 | awk -F "•" '{print $$2}' | xargs); \
+	if [ -z "$$DEVICE_ID" ]; then echo "No Android device found"; exit 1; fi; \
+	echo "Using Android device: $$DEVICE_ID"; \
+	cd app && flutter run -d $$DEVICE_ID --debug --flavor $(FLAVOR) --dart-define=COMMIT_HASH=$(COMMIT_HASH) --dart-define=COMMIT_DATE=$(COMMIT_DATE) --dart-define=BUILD_DATE=$(BUILD_DATE) $(DART_DEFINES_EXTRA)
+
+release_unstable:
+	TAG=unstable CLEAN=false ./build_with_docker.sh
+
+release_unstable_clean:
+	TAG=unstable CLEAN=true ./build_with_docker.sh
+
+release_stable:
+	TAG=stable CLEAN=false ./build_with_docker.sh
+
+release_stable_clean:
+	TAG=stable CLEAN=true ./build_with_docker.sh
+
+# ============================================================================
+# Flutter Proto Generation
+# ============================================================================
+
+flutter_proto: flutter_common_proto flutter_proxy_proto flutter_hub_proto flutter_local_proto
+
+flutter_common_proto:
+	@mkdir -p app/lib/common
+	protoc --proto_path=api \
+		--dart_out=grpc:app/lib \
+		api/common/common.proto
+
+flutter_proxy_proto: flutter_common_proto
+	@mkdir -p app/lib/proxy
+	protoc --proto_path=api \
+		--dart_out=grpc:app/lib \
+		api/proxy/proxy.proto
+
+flutter_hub_proto: flutter_common_proto
+	@mkdir -p app/lib/hub
+	protoc --proto_path=api \
+		--dart_out=grpc:app/lib \
+		api/hub/hub_common.proto \
+		api/hub/hub_node.proto \
+		api/hub/hub_mobile.proto
+
+flutter_local_proto: flutter_common_proto flutter_proxy_proto
+	@mkdir -p app/lib/local
+	protoc --proto_path=api \
+		--dart_out=grpc:app/lib \
+		api/local/nitella_local.proto
+
+flutter_clean:
+	rm -f app/lib/common/*.pb*.dart
+	rm -f app/lib/proxy/*.pb*.dart
+	rm -f app/lib/hub/*.pb*.dart
+	rm -f app/lib/local/*.pb*.dart
+
 # ============================================================================
 # Test
 # ============================================================================
 
 test:
 	go test -v ./...
+
+# ============================================================================
+# Mobile Integration Tests
+# ============================================================================
+
+# Run full E2E tests (Mobile -> Hub -> Node -> Backend)
+mobile_test_e2e:
+	@echo "============================================"
+	@echo "Running Full E2E Integration Tests"
+	@echo "============================================"
+	./scripts/run_full_e2e_test.sh
+
+# Run E2E tests in standalone mode (faster, no Hub relay)
+mobile_test_e2e_standalone:
+	@echo "============================================"
+	@echo "Running E2E Tests (Standalone Mode)"
+	@echo "============================================"
+	./scripts/run_full_e2e_test.sh --standalone
+
+# Run E2E tests with VISIBLE window (real app opens, you see taps!)
+mobile_test_e2e_visible:
+	@echo "============================================"
+	@echo "Running E2E Tests (VISIBLE MODE)"
+	@echo "============================================"
+	@echo "The app will open and you'll see automated UI interactions!"
+	./scripts/run_full_e2e_test.sh --standalone --visible
+
+# Run Flutter widget tests (no external services needed)
+mobile_test:
+	cd app && flutter test
+
+# Clean up mobile test artifacts
+mobile_test_clean:
+	rm -rf .test-tmp .e2e-test-tmp
+	rm -rf /tmp/nitella-mobile-test-*
 
 # ============================================================================
 # GeoIP Module
@@ -398,7 +598,7 @@ hub_test_clean:
 #        make hub_run HUB_PORT=50052 HUB_DB=hub.db
 #        make hub_run HUB_TLS_CERT=cert.pem HUB_TLS_KEY=key.pem
 HUB_PORT ?= 50052
-HUB_HTTP_PORT ?= 8080
+HUB_HTTP_PORT ?= 9090
 HUB_DB ?= hub.db
 HUB_TLS_CERT ?=
 HUB_TLS_KEY ?=

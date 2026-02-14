@@ -17,11 +17,11 @@ type ProxyModel struct {
 	FallbackAction  int `xorm:"default 0"` // 0=Close, 1=Mock
 	FallbackMock    string
 	Enabled         bool      `xorm:"default true"`
-	CertPEM         string    `xorm:"text"`
-	KeyPEM          string    `xorm:"text"`
-	CaPEM           string    `xorm:"text"`
+	CertPEM         string    `xorm:"'cert_pem' text"`
+	KeyPEM          string    `xorm:"'key_pem' text"`
+	CaPEM           string    `xorm:"'ca_pem' text"`
 	ClientAuthType  int       `xorm:"default 0"` // 0=Auto, 1=None, 2=Request, 3=Require
-	HealthCheckJSON string    `xorm:"text"`      // JSON of HealthCheckConfig
+	HealthCheckJSON string    `xorm:"'health_check_json' text"`      // JSON of HealthCheckConfig
 	CreatedAt       time.Time `xorm:"created"`
 	UpdatedAt       time.Time `xorm:"updated"`
 }
@@ -37,9 +37,9 @@ type RuleModel struct {
 	TargetBackend string
 
 	// Serialized Data
-	ConditionsJSON string `xorm:"text"` // JSON array of conditions
-	MockConfigJSON string `xorm:"text"` // JSON of MockConfig
-	RateLimitJSON  string `xorm:"text"` // JSON of RateLimitConfig
+	ConditionsJSON string `xorm:"'conditions_json' text"` // JSON array of conditions
+	MockConfigJSON string `xorm:"'mock_config_json' text"` // JSON of MockConfig
+	RateLimitJSON  string `xorm:"'rate_limit_json' text"` // JSON of RateLimitConfig
 	Expression     string // Traefik-style expression string
 
 	CreatedAt time.Time `xorm:"created"`

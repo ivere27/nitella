@@ -1,22 +1,24 @@
 use std::collections::HashMap;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicI32, Ordering};
+use std::sync::Arc;
 use tokio::sync::RwLock;
+use tracing::{error, info};
 use uuid::Uuid;
-use tracing::{info, error};
 
-use crate::proxy::{ProxyListener, EmbeddedListener};
-use crate::process_proxy::ProcessProxyListener;
+use crate::approval::ApprovalManager; // Added
+use crate::db::Database;
 use crate::geoip::GeoIPService;
+use crate::process_proxy::ProcessProxyListener;
+use crate::proto::common::{
+    ActionType, ConditionType, FallbackAction, GeoInfo, MockPreset, Operator,
+};
+use crate::proto::proxy::{
+    ActiveConnection, ClientAuthType, Condition, CreateProxyRequest, GlobalRule, HealthStatus,
+    ProxyStatus, Rule, UpdateProxyRequest,
+};
+use crate::proxy::{EmbeddedListener, ProxyListener};
 use crate::rules::RuleEngine;
 use crate::stats::StatsService;
-use crate::db::Database;
-use crate::approval::ApprovalManager; // Added
-use crate::proto::proxy::{
-    CreateProxyRequest, ClientAuthType, ProxyStatus, HealthStatus, Rule, 
-    UpdateProxyRequest, GlobalRule, Condition, ActiveConnection
-};
-use crate::proto::common::{ActionType, ConditionType, Operator, GeoInfo, MockPreset, FallbackAction};
 
 pub struct ManagedProxy {
     pub listener: Arc<ProxyListener>,
@@ -41,8 +43,8 @@ pub struct ProxyManager {
 
 impl ProxyManager {
     pub fn new(
-        geoip: Arc<GeoIPService>, 
-        global_rules: Arc<RwLock<RuleEngine>>, 
+        geoip: Arc<GeoIPService>,
+        global_rules: Arc<RwLock<RuleEngine>>,
         stats: Arc<StatsService>,
         db: Option<Database>,
         process_mode: bool,
@@ -58,18 +60,18 @@ impl ProxyManager {
             process_mode,
             approval_manager,
         };
-        
+
         // Spawn cleanup task for global rules
         let rules = manager.global_rules.clone();
         let expirations = manager.global_rule_expirations.clone();
-        
+
         tokio::spawn(async move {
             let mut interval = tokio::time::interval(std::time::Duration::from_secs(60));
             loop {
                 interval.tick().await;
                 let now = std::time::SystemTime::now();
                 let mut rules_msg = String::new();
-                
+
                 let mut expired_ids = Vec::new();
                 {
                     let lock = expirations.read().await;
@@ -79,16 +81,16 @@ impl ProxyManager {
                         }
                     }
                 }
-                
+
                 if !expired_ids.is_empty() {
                     let mut lock = rules.write().await;
                     let mut current = lock.get_rules();
                     let before_count = current.len();
                     current.retain(|r| !expired_ids.contains(&r.id));
-                    
+
                     if current.len() < before_count {
                         lock.update_rules(current);
-                        
+
                         // Cleanup expirations map
                         let mut exp_lock = expirations.write().await;
                         for id in expired_ids {
@@ -121,11 +123,11 @@ impl ProxyManager {
                                 error!("Failed to reload rules for {}: {}", id, e);
                             }
                         }
-                    },
+                    }
                     Err(e) => error!("Failed to load rules for proxy {}: {}", id, e),
                 }
             }
-            
+
             // Load Global Rules
             if let Ok(rules) = db.load_rules("GLOBAL").await {
                 info!("Loaded {} global rules", rules.len());
@@ -138,29 +140,39 @@ impl ProxyManager {
 
     pub async fn create_proxy(&self, mut req: CreateProxyRequest) -> anyhow::Result<String> {
         // Auto-set DefaultAction to MOCK if DefaultMock is specified but action is unspecified
-        if req.default_action == ActionType::Unspecified as i32 && req.default_mock != MockPreset::Unspecified as i32 {
+        if req.default_action == ActionType::Unspecified as i32
+            && req.default_mock != MockPreset::Unspecified as i32
+        {
             req.default_action = ActionType::Mock as i32;
         }
 
         let id = if req.listen_addr.is_empty() {
-            Uuid::new_v4().to_string() 
+            Uuid::new_v4().to_string()
         } else {
             Uuid::new_v4().to_string()
         };
 
-        self.start_proxy_instance(id.clone(), req.clone(), None).await?;
-        
+        self.start_proxy_instance(id.clone(), req.clone(), None)
+            .await?;
+
         if let Some(db) = &self.db {
             if let Err(e) = db.save_proxy(&id, &req).await {
                 error!("Failed to persist proxy: {}", e);
             }
         }
-        
+
         Ok(id)
     }
 
-    async fn start_proxy_instance(&self, id: String, req: CreateProxyRequest, existing_rules: Option<Vec<Rule>>) -> anyhow::Result<()> {
-        let local_rules = Arc::new(RwLock::new(RuleEngine::new(existing_rules.unwrap_or_default())));
+    async fn start_proxy_instance(
+        &self,
+        id: String,
+        req: CreateProxyRequest,
+        existing_rules: Option<Vec<Rule>>,
+    ) -> anyhow::Result<()> {
+        let local_rules = Arc::new(RwLock::new(RuleEngine::new(
+            existing_rules.unwrap_or_default(),
+        )));
         let health_status = Arc::new(AtomicI32::new(HealthStatus::Unknown as i32));
         let listener_arc: Arc<ProxyListener>;
         let abort_handle;
@@ -192,22 +204,19 @@ impl ProxyManager {
             );
 
             if !req.cert_pem.is_empty() {
-                let auth_type = ClientAuthType::try_from(req.client_auth_type).unwrap_or(ClientAuthType::ClientAuthNone);
-                listener = listener.with_tls(
-                    &req.cert_pem, 
-                    &req.key_pem, 
-                    &req.ca_pem, 
-                    auth_type
-                )?;
+                let auth_type = ClientAuthType::try_from(req.client_auth_type)
+                    .unwrap_or(ClientAuthType::ClientAuthNone);
+                listener =
+                    listener.with_tls(&req.cert_pem, &req.key_pem, &req.ca_pem, auth_type)?;
             }
-            
+
             let l_wrapper = Arc::new(listener);
-            
+
             // Bind synchronously to catch errors early
             let tcp_listener = l_wrapper.bind().await?;
 
             listener_arc = Arc::new(ProxyListener::Embedded(l_wrapper.clone()));
-            
+
             let id_clone = id.clone();
             let handle = tokio::spawn(async move {
                 if let Err(e) = l_wrapper.run_with_listener(tcp_listener).await {
@@ -229,7 +238,7 @@ impl ProxyManager {
 
         let mut lock = self.proxies.write().await;
         lock.insert(id, managed);
-        
+
         Ok(())
     }
 
@@ -262,7 +271,7 @@ impl ProxyManager {
         let mut lock = self.proxies.write().await;
         if let Some(managed) = lock.get_mut(id) {
             if !managed.enabled {
-                return Ok(()); 
+                return Ok(());
             }
             managed.abort_handle.abort();
             if let ProxyListener::Process(p) = &*managed.listener {
@@ -283,7 +292,7 @@ impl ProxyManager {
             let lock = self.proxies.read().await;
             if let Some(managed) = lock.get(id) {
                 if managed.enabled {
-                    return Ok(()); 
+                    return Ok(());
                 }
                 config_clone = managed.config.clone();
             } else {
@@ -291,7 +300,8 @@ impl ProxyManager {
             }
         }
 
-        self.start_proxy_instance(id.to_string(), config_clone, None).await?;
+        self.start_proxy_instance(id.to_string(), config_clone, None)
+            .await?;
         info!("Enabled proxy {}", id);
         Ok(())
     }
@@ -300,7 +310,7 @@ impl ProxyManager {
         let lock = self.proxies.read().await;
         let mut results = Vec::new();
         for (id, p) in lock.iter() {
-             results.push(self.get_proxy_status_internal(id, p).await);
+            results.push(self.get_proxy_status_internal(id, p).await);
         }
         results
     }
@@ -316,15 +326,13 @@ impl ProxyManager {
 
     async fn get_proxy_status_internal(&self, id: &str, p: &ManagedProxy) -> ProxyStatus {
         match &*p.listener {
-            ProxyListener::Process(pl) => {
-                 pl.get_status().await
-            },
+            ProxyListener::Process(pl) => pl.get_status().await,
             ProxyListener::Embedded(_) => {
-                 let (active, total, b_in, b_out) = self.stats.get_summary(Some(id));
-                 let health = p.health_status.load(Ordering::Relaxed);
-                 
-                 ProxyStatus {
-                    proxy_id: id.to_string(), 
+                let (active, total, b_in, b_out) = self.stats.get_summary(Some(id));
+                let health = p.health_status.load(Ordering::Relaxed);
+
+                ProxyStatus {
+                    proxy_id: id.to_string(),
                     running: p.enabled,
                     listen_addr: p.config.listen_addr.clone(),
                     default_backend: p.config.default_backend.clone(),
@@ -373,18 +381,18 @@ impl ProxyManager {
     pub async fn update_proxy(&self, req: UpdateProxyRequest) -> anyhow::Result<()> {
         let rules_to_keep: Option<Vec<Rule>>;
         let mut new_config: CreateProxyRequest;
-        
+
         {
-             let lock = self.proxies.read().await;
-             if let Some(managed) = lock.get(&req.proxy_id) {
-                 let engine = managed.rule_engine.read().await;
-                 rules_to_keep = Some(engine.get_rules());
-                 new_config = managed.config.clone();
-             } else {
-                 return Err(anyhow::anyhow!("Proxy not found"));
-             }
+            let lock = self.proxies.read().await;
+            if let Some(managed) = lock.get(&req.proxy_id) {
+                let engine = managed.rule_engine.read().await;
+                rules_to_keep = Some(engine.get_rules());
+                new_config = managed.config.clone();
+            } else {
+                return Err(anyhow::anyhow!("Proxy not found"));
+            }
         }
-        
+
         if !self.remove_proxy_from_memory(&req.proxy_id).await {
             return Err(anyhow::anyhow!("Proxy not found during removal"));
         }
@@ -420,26 +428,29 @@ impl ProxyManager {
             new_config.fallback_mock = req.fallback_mock;
         }
         if req.client_auth_type != ClientAuthType::ClientAuthAuto as i32 {
-             new_config.client_auth_type = req.client_auth_type;
-        }
-         
-        // Auto-set DefaultAction to MOCK if we have a preset but action is unspecified/allow
-        // This handles cases where update sets mock preset but forgets action
-        if new_config.default_mock != MockPreset::Unspecified as i32 && 
-           (new_config.default_action == ActionType::Unspecified as i32 || new_config.default_action == ActionType::Allow as i32) {
-             // If the PREVIOUS action was Mock, it's fine. If it was Allow, we should probably upgrade it?
-             // Actually, CreateProxy logic handles this for new proxies.
-             // Here we are patching existing config.
+            new_config.client_auth_type = req.client_auth_type;
         }
 
-        self.start_proxy_instance(req.proxy_id.clone(), new_config.clone(), rules_to_keep).await?;
-        
-        if let Some(db) = &self.db {
-             if let Err(e) = db.save_proxy(&req.proxy_id, &new_config).await {
-                 error!("Failed to persist updated proxy: {}", e);
-             }
+        // Auto-set DefaultAction to MOCK if we have a preset but action is unspecified/allow
+        // This handles cases where update sets mock preset but forgets action
+        if new_config.default_mock != MockPreset::Unspecified as i32
+            && (new_config.default_action == ActionType::Unspecified as i32
+                || new_config.default_action == ActionType::Allow as i32)
+        {
+            // If the PREVIOUS action was Mock, it's fine. If it was Allow, we should probably upgrade it?
+            // Actually, CreateProxy logic handles this for new proxies.
+            // Here we are patching existing config.
         }
-         
+
+        self.start_proxy_instance(req.proxy_id.clone(), new_config.clone(), rules_to_keep)
+            .await?;
+
+        if let Some(db) = &self.db {
+            if let Err(e) = db.save_proxy(&req.proxy_id, &new_config).await {
+                error!("Failed to persist updated proxy: {}", e);
+            }
+        }
+
         Ok(())
     }
 
@@ -447,26 +458,26 @@ impl ProxyManager {
         let statuses = self.list_proxies().await;
         let mut count = 0;
         for s in statuses {
-             if let Some(_) = self.proxies.write().await.remove(&s.proxy_id) {
-                  // Wait a bit to ensure port release? 
-                  // In EmbeddedListener, the TcpListener drop should close the socket.
-                  // However, tokio tasks might still be running.
-             }
-             
-             // Re-create using disable/enable logic but ensuring full stop
-             if let Err(e) = self.disable_proxy(&s.proxy_id).await {
-                 error!("Failed to disable proxy {}: {}", s.proxy_id, e);
-                 continue;
-             }
-             
-             // Sleep briefly to allow OS to release port
-             tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            if let Some(_) = self.proxies.write().await.remove(&s.proxy_id) {
+                // Wait a bit to ensure port release?
+                // In EmbeddedListener, the TcpListener drop should close the socket.
+                // However, tokio tasks might still be running.
+            }
 
-             if let Err(e) = self.enable_proxy(&s.proxy_id).await {
-                 error!("Failed to enable proxy {}: {}", s.proxy_id, e);
-             } else {
-                 count += 1;
-             }
+            // Re-create using disable/enable logic but ensuring full stop
+            if let Err(e) = self.disable_proxy(&s.proxy_id).await {
+                error!("Failed to disable proxy {}: {}", s.proxy_id, e);
+                continue;
+            }
+
+            // Sleep briefly to allow OS to release port
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+            if let Err(e) = self.enable_proxy(&s.proxy_id).await {
+                error!("Failed to enable proxy {}: {}", s.proxy_id, e);
+            } else {
+                count += 1;
+            }
         }
         count
     }
@@ -484,29 +495,37 @@ impl ProxyManager {
         let engine = self.global_rules.read().await;
         let rules = engine.get_rules();
         let expirations = self.global_rule_expirations.read().await;
-        
-        rules.into_iter().map(|r| {
-            // Reconstruct GlobalRule from Rule
-            // source_ip is in conditions
-            let source_ip = r.conditions.iter()
-                .find(|c| c.r#type == ConditionType::SourceIp as i32)
-                .map(|c| c.value.clone())
-                .unwrap_or_default();
-                
-            let expires_at = expirations.get(&r.id).map(|t| {
-                 let d = t.duration_since(std::time::UNIX_EPOCH).unwrap_or_default();
-                 prost_types::Timestamp { seconds: d.as_secs() as i64, nanos: 0 }
-            });
 
-            GlobalRule {
-                id: r.id,
-                name: r.name,
-                source_ip,
-                action: r.action,
-                expires_at,
-                created_at: None, // We don't track creation time in Rule struct
-            }
-        }).collect()
+        rules
+            .into_iter()
+            .map(|r| {
+                // Reconstruct GlobalRule from Rule
+                // source_ip is in conditions
+                let source_ip = r
+                    .conditions
+                    .iter()
+                    .find(|c| c.r#type == ConditionType::SourceIp as i32)
+                    .map(|c| c.value.clone())
+                    .unwrap_or_default();
+
+                let expires_at = expirations.get(&r.id).map(|t| {
+                    let d = t.duration_since(std::time::UNIX_EPOCH).unwrap_or_default();
+                    prost_types::Timestamp {
+                        seconds: d.as_secs() as i64,
+                        nanos: 0,
+                    }
+                });
+
+                GlobalRule {
+                    id: r.id,
+                    name: r.name,
+                    source_ip,
+                    action: r.action,
+                    expires_at,
+                    created_at: None, // We don't track creation time in Rule struct
+                }
+            })
+            .collect()
     }
 
     pub async fn add_global_rule(&self, rule: GlobalRule) -> anyhow::Result<()> {
@@ -520,7 +539,7 @@ impl ProxyManager {
         let r = Rule {
             id: rule.id.clone(),
             name: rule.name.clone(),
-            priority: 1000, 
+            priority: 1000,
             enabled: true,
             conditions: vec![condition],
             action: rule.action,
@@ -539,23 +558,24 @@ impl ProxyManager {
         }
 
         if let Some(ts) = rule.expires_at {
-             if ts.seconds > 0 {
-                 let exp_time = std::time::UNIX_EPOCH + std::time::Duration::from_secs(ts.seconds as u64);
-                 let mut lock = self.global_rule_expirations.write().await;
-                 lock.insert(rule.id.clone(), exp_time);
-                 
-                 // Temporary rule: do not persist
-                 return Ok(());
-             }
+            if ts.seconds > 0 {
+                let exp_time =
+                    std::time::UNIX_EPOCH + std::time::Duration::from_secs(ts.seconds as u64);
+                let mut lock = self.global_rule_expirations.write().await;
+                lock.insert(rule.id.clone(), exp_time);
+
+                // Temporary rule: do not persist
+                return Ok(());
+            }
         }
-        
+
         // Permanent rule: persist
         if let Some(db) = &self.db {
             if let Err(e) = db.save_rule("GLOBAL", &r).await {
                 error!("Failed to save global rule: {}", e);
             }
         }
-        
+
         Ok(())
     }
 
@@ -570,28 +590,29 @@ impl ProxyManager {
             let mut lock = self.global_rule_expirations.write().await;
             lock.remove(rule_id);
         }
-        
+
         if let Some(db) = &self.db {
             let _ = db.delete_rule(rule_id).await;
         }
-        
+
         Ok(())
     }
 
     pub async fn block_ip(&self, ip: String, duration_seconds: i64) -> anyhow::Result<()> {
         let id = format!("block-{}", ip);
         let expires_at = if duration_seconds > 0 {
-            Some(prost_types::Timestamp { 
+            Some(prost_types::Timestamp {
                 seconds: std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
                     .unwrap_or_default()
-                    .as_secs() as i64 + duration_seconds,
-                nanos: 0 
+                    .as_secs() as i64
+                    + duration_seconds,
+                nanos: 0,
             })
         } else {
             None
         };
-        
+
         let rule = GlobalRule {
             id,
             name: format!("Block IP {}", ip),
@@ -606,17 +627,18 @@ impl ProxyManager {
     pub async fn allow_ip(&self, ip: String, duration_seconds: i64) -> anyhow::Result<()> {
         let id = format!("allow-{}", ip);
         let expires_at = if duration_seconds > 0 {
-            Some(prost_types::Timestamp { 
+            Some(prost_types::Timestamp {
                 seconds: std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
                     .unwrap_or_default()
-                    .as_secs() as i64 + duration_seconds,
-                nanos: 0 
+                    .as_secs() as i64
+                    + duration_seconds,
+                nanos: 0,
             })
         } else {
             None
         };
-        
+
         let rule = GlobalRule {
             id,
             name: format!("Allow IP {}", ip),
@@ -627,7 +649,6 @@ impl ProxyManager {
         };
         self.add_global_rule(rule).await
     }
-
 
     pub async fn remove_rule(&self, proxy_id: &str, rule_id: &str) -> anyhow::Result<()> {
         {
@@ -681,14 +702,14 @@ impl ProxyManager {
                 let _ = db.save_rule(proxy_id, &r).await;
             }
         }
-        
+
         Ok(count)
     }
 
     pub async fn get_active_connections(&self, proxy_id: Option<String>) -> Vec<ActiveConnection> {
         let mut conns = Vec::new();
         let lock = self.proxies.read().await;
-        
+
         if let Some(pid) = proxy_id {
             if let Some(managed) = lock.get(&pid) {
                 if let Ok(mut c) = managed.listener.get_active_connections().await {
@@ -710,13 +731,21 @@ impl ProxyManager {
         if proxy_id.is_empty() {
             // Search all proxies for the connection
             for managed in lock.values() {
-                if managed.listener.close_connection(conn_id.to_string()).await.is_ok() {
+                if managed
+                    .listener
+                    .close_connection(conn_id.to_string())
+                    .await
+                    .is_ok()
+                {
                     return Ok(());
                 }
             }
             Err(anyhow::anyhow!("Connection not found in any proxy"))
         } else if let Some(managed) = lock.get(proxy_id) {
-            managed.listener.close_connection(conn_id.to_string()).await?;
+            managed
+                .listener
+                .close_connection(conn_id.to_string())
+                .await?;
             Ok(())
         } else {
             Err(anyhow::anyhow!("Proxy not found"))
@@ -735,19 +764,29 @@ impl ProxyManager {
             managed.listener.close_all_connections().await?;
             Ok(())
         } else {
-             Err(anyhow::anyhow!("Proxy not found"))
+            Err(anyhow::anyhow!("Proxy not found"))
         }
     }
 
     // --- GeoIP Management ---
 
-    pub async fn configure_geoip(&self, city_db: Option<String>, isp_db: Option<String>, remote_url: Option<String>, strategy: Option<String>) -> anyhow::Result<()> {
+    pub async fn configure_geoip(
+        &self,
+        city_db: Option<String>,
+        isp_db: Option<String>,
+        remote_url: Option<String>,
+        strategy: Option<String>,
+    ) -> anyhow::Result<()> {
         if let Some(url) = remote_url {
             self.geoip.set_remote_url(url).await;
         }
 
         if let Some(s) = strategy {
-            let parts: Vec<String> = s.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect();
+            let parts: Vec<String> = s
+                .split(',')
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .collect();
             if !parts.is_empty() {
                 self.geoip.set_strategy(parts).await;
             }
@@ -756,7 +795,7 @@ impl ProxyManager {
         if city_db.is_some() || isp_db.is_some() {
             self.geoip.reload_local_db(city_db, isp_db).await?;
         }
-        
+
         Ok(())
     }
 

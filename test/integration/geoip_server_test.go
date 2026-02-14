@@ -4,10 +4,14 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/json"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -33,6 +37,8 @@ func TestGeoIPServer(t *testing.T) {
 	if _, err := os.Stat(serverBin); os.IsNotExist(err) {
 		t.Fatalf("geoip-server binary not found at %s. Run 'make build' first.", serverBin)
 	}
+
+	mockSrv := startMockGeoIPServer(t)
 
 	// Get free ports
 	publicPort := getFreePort(t)
@@ -60,7 +66,7 @@ func TestGeoIPServer(t *testing.T) {
 		"-admin-token", adminToken,
 		"-db", tmpDB.Name(),
 		"-cert-data-dir", certDataDir,
-		"-remote", "ipwhois=https://ipwhois.app/json/%s",
+		"-remote", fmt.Sprintf("ipwhois=%s/json/%%s", mockSrv.URL),
 	)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
@@ -298,6 +304,8 @@ func TestGeoIPCLI(t *testing.T) {
 		t.Fatalf("geoip CLI binary not found. Run 'make build' first.")
 	}
 
+	mockSrv := startMockGeoIPServer(t)
+
 	// Start server
 	publicPort := getFreePort(t)
 	adminPort := getFreePort(t)
@@ -316,7 +324,7 @@ func TestGeoIPCLI(t *testing.T) {
 		"-admin-token", adminToken,
 		"-db", tmpDB.Name(),
 		"-cert-data-dir", certDataDir,
-		"-remote", "ipwhois=https://ipwhois.app/json/%s",
+		"-remote", fmt.Sprintf("ipwhois=%s/json/%%s", mockSrv.URL),
 	)
 	serverCmd.Start()
 	defer func() {
@@ -428,6 +436,8 @@ func TestLookupResult(t *testing.T) {
 		t.Skip("geoip-server not found")
 	}
 
+	mockSrv := startMockGeoIPServer(t)
+
 	publicPort := getFreePort(t)
 	tmpDB, _ := os.CreateTemp("", "geoip_result_test_*.db")
 	tmpDB.Close()
@@ -441,7 +451,7 @@ func TestLookupResult(t *testing.T) {
 		"-admin-port", "0",
 		"-db", tmpDB.Name(),
 		"-cert-data-dir", certDataDir,
-		"-remote", "ipwhois=https://ipwhois.app/json/%s",
+		"-remote", fmt.Sprintf("ipwhois=%s/json/%%s", mockSrv.URL),
 	)
 	cmd.Start()
 	defer func() {
@@ -506,6 +516,48 @@ func verifyGeoInfo(t *testing.T, info *pbCommon.GeoInfo, ip, expectedCountry str
 
 	t.Logf("GeoInfo for %s: Country=%s (%s), City=%s, Region=%s, ISP=%s, Source=%s, Latency=%dms",
 		ip, info.Country, info.CountryCode, info.City, info.RegionName, info.Isp, info.Source, info.LatencyMs)
+}
+
+// startMockGeoIPServer starts a local HTTP server that returns mock ipwhois-format responses.
+func startMockGeoIPServer(t *testing.T) *httptest.Server {
+	t.Helper()
+
+	responses := map[string]map[string]interface{}{
+		"8.8.8.8": {
+			"country": "United States", "country_code": "US",
+			"region": "California", "city": "Mountain View",
+			"latitude": 37.386, "longitude": -122.084,
+			"connection": map[string]string{"isp": "Google LLC", "org": "Google LLC", "asn": "AS15169"},
+		},
+		"1.1.1.1": {
+			"country": "Australia", "country_code": "AU",
+			"region": "New South Wales", "city": "Sydney",
+			"latitude": -33.868, "longitude": 151.207,
+			"connection": map[string]string{"isp": "Cloudflare, Inc.", "org": "APNIC and Cloudflare DNS Resolver project", "asn": "AS13335"},
+		},
+	}
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// URL pattern: /json/<ip>
+		parts := strings.Split(strings.TrimPrefix(r.URL.Path, "/"), "/")
+		ip := ""
+		if len(parts) >= 2 {
+			ip = parts[1]
+		}
+		resp, ok := responses[ip]
+		if !ok {
+			resp = map[string]interface{}{
+				"country": "Unknown", "country_code": "XX",
+				"region": "Unknown", "city": "Unknown",
+				"latitude": 0.0, "longitude": 0.0,
+				"connection": map[string]string{"isp": "Unknown", "org": "Unknown", "asn": "AS0"},
+			}
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(resp)
+	}))
+	t.Cleanup(srv.Close)
+	return srv
 }
 
 // Helper functions

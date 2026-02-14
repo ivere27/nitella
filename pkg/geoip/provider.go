@@ -99,6 +99,7 @@ func (p *LocalProvider) Lookup(ipStr string) (*pbCommon.GeoInfo, error) {
 	found := false
 
 	if p.cityReader != nil {
+		// Try City method first (for City DB)
 		if record, err := p.cityReader.City(ip); err == nil {
 			info.Country = record.Country.IsoCode
 			info.CountryCode = record.Country.IsoCode
@@ -120,6 +121,13 @@ func (p *LocalProvider) Lookup(ipStr string) (*pbCommon.GeoInfo, error) {
 			info.Timezone = record.Location.TimeZone
 
 			found = true
+		} else {
+			// Fallback to Country method (for Country DB or if City fails)
+			if record, err := p.cityReader.Country(ip); err == nil {
+				info.Country = record.Country.IsoCode
+				info.CountryCode = record.Country.IsoCode
+				found = true
+			}
 		}
 	}
 

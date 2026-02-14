@@ -21,6 +21,7 @@ require (
 	golang.org/x/crypto v0.47.0
 	golang.org/x/term v0.39.0
 	google.golang.org/api v0.263.0
+	google.golang.org/genproto v0.0.0-20251202230838-ff82c1b0f217
 	google.golang.org/grpc v1.78.0
 	google.golang.org/protobuf v1.36.11
 	gopkg.in/yaml.v3 v3.0.1
@@ -81,7 +82,7 @@ require (
 	github.com/spf13/pflag v1.0.9 // indirect
 	github.com/spiffe/go-spiffe/v2 v2.6.0 // indirect
 	github.com/syndtr/goleveldb v1.0.0 // indirect
-	github.com/wlynxg/anet v0.0.3 // indirect
+	github.com/wlynxg/anet v0.0.6-0.20250109065809-5501d401a269 // indirect
 	go.opentelemetry.io/auto/sdk v1.2.1 // indirect
 	go.opentelemetry.io/contrib/detectors/gcp v1.38.0 // indirect
 	go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc v0.61.0 // indirect
@@ -98,7 +99,6 @@ require (
 	golang.org/x/text v0.33.0 // indirect
 	golang.org/x/time v0.14.0 // indirect
 	google.golang.org/appengine/v2 v2.0.6 // indirect
-	google.golang.org/genproto v0.0.0-20251202230838-ff82c1b0f217 // indirect
 	google.golang.org/genproto/googleapis/api v0.0.0-20251202230838-ff82c1b0f217 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260122232226-8e98ce8d340d // indirect
 	rsc.io/qr v0.2.0 // indirect

@@ -2,6 +2,8 @@
 
 A mobile-controlled Layer 4 reverse proxy with Zero-Trust architecture. The Hub acts as a "blind relay" - all commands, metrics, and configurations are end-to-end encrypted.
 
+Note: `nitellad-rs/` is an experimental/benchmark Rust implementation. The default build/test/runtime path in this repository is the Go implementation (`cmd/nitellad`).
+
 ## Architecture
 
 ```
@@ -149,8 +151,8 @@ nitella> list
 - `geoip config remote <provider>` - Configure remote API provider
 - `lookup <ip>` - GeoIP lookup for an IP
 - `stream` - Stream connection events (Ctrl+C to stop)
-- `approve <id> [duration]` - Approve a pending connection request
-- `deny <id> [reason]` - Deny a pending connection request
+- `approve [cache|once] <id> [duration]` - Approve a pending connection request
+- `deny [cache|once] <id> [duration] [reason]` - Deny a pending connection request
 - `pending` - List pending approval requests
 - `block <ip> [duration_seconds]` - Quick block an IP globally
 - `allow <ip> [duration_seconds]` - Quick allow an IP globally
@@ -168,10 +170,6 @@ The CLI creates a cryptographic identity (Ed25519 keypair with BIP-39 mnemonic) 
 # Or provide passphrase via flag/env (for automation)
 ./bin/nitella --passphrase "your-secret"
 NITELLA_PASSPHRASE="your-secret" ./bin/nitella
-
-# Use different KDF security profiles
-./bin/nitella --kdf-profile secure --passphrase "your-secret"
-NITELLA_KDF_PROFILE=secure ./bin/nitella
 ```
 
 **Passphrase Strength Analysis:**
@@ -189,15 +187,13 @@ Passphrase Security Analysis:
      Scenario:   all hyperscalers combined (1M H100s) @ 500000000 hashes/sec
 ```
 
-**KDF Profiles:**
+The key is encrypted with Argon2id + AES-256-GCM. KDF parameters are stored in the encrypted file for future compatibility. The `default` profile is used automatically:
 
 | Profile | Memory | Iterations | Use Case |
 |---------|--------|------------|----------|
 | `server` | 32 MB | 1 | High-throughput servers |
 | `default` | 64 MB | 2 | CLI tools (OWASP recommended) |
 | `secure` | 128 MB | 3 | Password managers, wallets |
-
-The key is encrypted with Argon2id + AES-256-GCM. KDF parameters are stored in the encrypted file for future compatibility.
 
 **Keyboard Shortcuts:**
 - `Tab` - Auto-complete commands
@@ -228,9 +224,11 @@ nitella nodes
 nitella node <node-id> status
 
 # Handle approval requests (when using REQUIRE_APPROVAL action)
-nitella pending             # List pending requests
-nitella approve <id> 1h     # Approve for 1 hour
-nitella deny <id>           # Deny request
+nitella pending                     # List pending requests
+nitella approve cache <id> 1h       # Approve for 1 hour (cached)
+nitella approve once <id>           # Approve this connection only
+nitella deny <id>                   # Deny this connection
+nitella deny cache <id> 1h reason   # Deny and cache for 1 hour
 
 # Identity management
 nitella identity            # Show identity info
@@ -293,8 +291,9 @@ nitella>
   Source: 1.2.3.4 (CN, Beijing)
   Dest:   prod-db:5432
 
-nitella> approve abc123 1h    # Allow for 1 hour
-nitella> deny abc123          # Block the connection
+nitella> approve cache abc123 1h    # Allow for 1 hour (cached)
+nitella> approve once abc123       # Allow this connection only
+nitella> deny abc123               # Deny this connection
 ```
 
 See [docs/APPROVAL_SYSTEM.md](docs/APPROVAL_SYSTEM.md) for detailed documentation.
@@ -360,10 +359,15 @@ nitella/
 ├── api/                      # Protobuf definitions
 │   ├── common/               # Shared types (ActionType, ConditionType, etc.)
 │   ├── proxy/                # Proxy control service
+│   ├── hub/                  # Hub relay service (node, mobile, admin)
+│   ├── local/                # Mobile backend FFI service
 │   ├── process/              # Child process IPC
 │   └── geoip/                # GeoIP service
+├── app/                      # Flutter mobile app
+│   ├── lib/screens/          # UI screens
+│   └── lib/                  # Generated proto + services
 ├── cmd/
-│   ├── nitellad/             # Reverse proxy daemon
+│   ├── nitellad/             # Reverse proxy daemon + Hub server
 │   ├── nitella/              # Proxy admin CLI
 │   ├── geoip-server/         # GeoIP server binary
 │   ├── geoip/                # GeoIP CLI binary
@@ -372,6 +376,12 @@ nitella/
 │   ├── api/                  # Generated protobuf code
 │   ├── node/                 # Proxy engine (listener, rules, stats)
 │   ├── server/               # gRPC server implementations
+│   ├── service/              # Mobile backend logic (FFI via Synurang)
+│   ├── hub/                  # Hub server implementation
+│   ├── identity/             # BIP-39 identity management
+│   ├── pairing/              # PAKE and QR code pairing
+│   ├── p2p/                  # WebRTC P2P connections
+│   ├── crypto/               # E2E encryption (X25519, AES-256-GCM)
 │   ├── config/               # YAML config loader
 │   ├── geoip/                # GeoIP library
 │   ├── mockproto/            # Mock protocol handlers

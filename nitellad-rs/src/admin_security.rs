@@ -29,7 +29,8 @@ pub async fn ensure_admin_certs(data_dir: &str) -> Result<(String, String)> {
     fs::write(&ca_key_path, ca_cert.serialize_private_key_pem()).await?;
 
     // Generate Server Cert
-    let mut server_params = rcgen::CertificateParams::new(vec!["localhost".to_string(), "127.0.0.1".to_string()]);
+    let mut server_params =
+        rcgen::CertificateParams::new(vec!["localhost".to_string(), "127.0.0.1".to_string()]);
     server_params.alg = &rcgen::PKCS_ED25519;
     let server_cert = rcgen::Certificate::from_params(server_params)?;
     let server_cert_pem = server_cert.serialize_pem_with_signer(&ca_cert)?;

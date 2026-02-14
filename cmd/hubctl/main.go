@@ -17,6 +17,7 @@ import (
 	"time"
 
 	hubpb "github.com/ivere27/nitella/pkg/api/hub"
+	nitellaPprof "github.com/ivere27/nitella/pkg/pprof"
 	"github.com/spf13/cobra"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
@@ -26,12 +27,13 @@ import (
 
 var (
 	// Global flags
-	hubAddr   string
-	adminKey  string
-	tlsCert   string
-	tlsKey    string
-	tlsCA     string
-	outputJSON   bool
+	hubAddr    string
+	adminKey   string
+	tlsCert    string
+	tlsKey     string
+	tlsCA      string
+	outputJSON bool
+	pprofPort  int
 
 	// Config file path
 	configPath string
@@ -53,6 +55,7 @@ func main() {
 		Long:  `hubctl is a command-line tool for administering nitella Hub servers.`,
 		PersistentPreRun: func(cmd *cobra.Command, args []string) {
 			loadConfig()
+			nitellaPprof.Start(pprofPort)
 		},
 	}
 
@@ -64,6 +67,7 @@ func main() {
 	rootCmd.PersistentFlags().StringVar(&tlsCA, "tls-ca", "", "Path to CA certificate (required for self-signed Hub CA)")
 	rootCmd.PersistentFlags().BoolVar(&outputJSON, "json", false, "Output in JSON format")
 	rootCmd.PersistentFlags().StringVar(&configPath, "config", "", "Config file path")
+	rootCmd.PersistentFlags().IntVar(&pprofPort, "pprof-port", 0, "Port for pprof HTTP server (0 = disabled, requires -tags pprof build)")
 
 	// Add commands
 	rootCmd.AddCommand(

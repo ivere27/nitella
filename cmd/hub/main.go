@@ -17,10 +17,11 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
-	"github.com/ivere27/nitella/pkg/cli"
+	"github.com/ivere27/nitella/pkg/core"
 	"github.com/ivere27/nitella/pkg/hub/auth"
 	"github.com/ivere27/nitella/pkg/hub/certmanager"
 	"github.com/ivere27/nitella/pkg/hub/firebase"
@@ -28,22 +29,24 @@ import (
 	"github.com/ivere27/nitella/pkg/hub/server"
 	"github.com/ivere27/nitella/pkg/hub/store"
 	"github.com/ivere27/nitella/pkg/log"
+	nitellaPprof "github.com/ivere27/nitella/pkg/pprof"
 	"github.com/ivere27/nitella/pkg/tier"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/keepalive"
+	"google.golang.org/grpc/metadata"
 )
 
 var (
 	// Server configuration
 	port     = flag.Int("port", 50052, "gRPC server port")
-	httpPort = flag.Int("http-port", 8080, "HTTP health check port")
+	httpPort = flag.Int("http-port", 9090, "HTTP health check port")
 
 	// TLS configuration
-	tlsCert    = flag.String("tls-cert", "", "Path to TLS certificate (required for mTLS)")
-	tlsKey     = flag.String("tls-key", "", "Path to TLS private key (required for mTLS)")
-	tlsCA      = flag.String("tls-ca", "", "Path to CA certificate for client verification")
-	autoCert   = flag.Bool("auto-cert", false, "Force auto-generate TLS certs (Hub CA + Leaf). If --tls-cert/--tls-key fail, auto-cert is used as fallback")
+	tlsCert     = flag.String("tls-cert", "", "Path to TLS certificate (required for mTLS)")
+	tlsKey      = flag.String("tls-key", "", "Path to TLS private key (required for mTLS)")
+	tlsCA       = flag.String("tls-ca", "", "Path to CA certificate for client verification")
+	autoCert    = flag.Bool("auto-cert", false, "Force auto-generate TLS certs (Hub CA + Leaf). If --tls-cert/--tls-key fail, auto-cert is used as fallback")
 	certDataDir = flag.String("cert-data-dir", "", "Directory for auto-cert storage (default: same as db)")
 
 	// Database configuration
@@ -66,10 +69,17 @@ var (
 	// Logging
 	verbose = flag.Bool("verbose", false, "Enable verbose logging")
 	trace   = flag.Bool("trace", false, "Enable trace logging (very verbose)")
+
+	// Profiling (only effective with -tags pprof)
+	pprofPort = flag.Int("pprof-port", 0, "Port for pprof HTTP server (0 = disabled, requires -tags pprof build)")
+
+	// Shutdown behavior
+	gracefulShutdownTimeout = flag.Duration("graceful-timeout", 30*time.Second, "Graceful shutdown timeout before force stop")
 )
 
 func main() {
 	flag.Parse()
+	nitellaPprof.Start(*pprofPort)
 
 	// Configure logging
 	if *trace {
@@ -222,7 +232,7 @@ func main() {
 	))
 	opts = append(opts, grpc.ChainStreamInterceptor(
 		ipRateLimiter.StreamInterceptor(),
-		streamLoggingInterceptor,
+		streamLoggingInterceptor(jwtManager),
 		hubServer.StreamAuthInterceptor,
 		tierRateLimiter.StreamInterceptor(),
 	))
@@ -251,22 +261,30 @@ func main() {
 		sig := <-sigCh
 		log.Infof("Received signal %v, shutting down gracefully...", sig)
 
-		// Give connections 30 seconds to finish
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer cancel()
-
 		stopped := make(chan struct{})
 		go func() {
 			grpcServer.GracefulStop()
 			close(stopped)
 		}()
 
+		timer := time.NewTimer(*gracefulShutdownTimeout)
+		defer timer.Stop()
+
 		select {
-		case <-ctx.Done():
-			log.Warnf("Graceful shutdown timed out, forcing stop")
+		case sig2 := <-sigCh:
+			log.Warnf("Received signal %v during shutdown, forcing stop", sig2)
+			grpcServer.Stop()
+		case <-timer.C:
+			log.Warnf("Graceful shutdown timed out after %v, forcing stop", *gracefulShutdownTimeout)
 			grpcServer.Stop()
 		case <-stopped:
 			log.Infof("Graceful shutdown completed")
+		}
+
+		// Ensure GracefulStop goroutine exits after Stop().
+		select {
+		case <-stopped:
+		case <-time.After(2 * time.Second):
 		}
 
 		// Stop cert manager if running
@@ -278,6 +296,10 @@ func main() {
 	// Start serving
 	log.Infof("Hub server listening on :%d", *port)
 	if err := grpcServer.Serve(listener); err != nil {
+		if err == grpc.ErrServerStopped {
+			log.Infof("Hub server stopped")
+			return
+		}
 		log.Fatalf("Failed to serve: %v", err)
 	}
 }
@@ -341,7 +363,7 @@ func loadTLSConfig(certFile, keyFile, caFile string) (*tls.Config, error) {
 
 	// Load CA for client verification if provided
 	if caFile != "" {
-		caPool, err := cli.LoadCertPool(caFile)
+		caPool, err := core.LoadCertPool(caFile)
 		if err != nil {
 			return nil, err
 		}
@@ -371,19 +393,75 @@ func loggingInterceptor(ctx context.Context, req interface{}, info *grpc.UnarySe
 	return resp, err
 }
 
-// streamLoggingInterceptor logs streaming RPC calls
-func streamLoggingInterceptor(srv interface{}, ss grpc.ServerStream, info *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
-	start := time.Now()
-	err := handler(srv, ss)
-	duration := time.Since(start)
+// streamLoggingInterceptor logs streaming RPC calls and includes user_id when available.
+func streamLoggingInterceptor(tokenManager *auth.TokenManager) grpc.StreamServerInterceptor {
+	return func(srv interface{}, ss grpc.ServerStream, info *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
+		start := time.Now()
+		err := handler(srv, ss)
+		duration := time.Since(start)
 
-	if err != nil {
-		log.Warnf("Stream %s ended with error: %v (duration: %v)", info.FullMethod, err, duration)
-	} else if *verbose {
-		log.Infof("Stream %s ended (duration: %v)", info.FullMethod, duration)
+		if err != nil {
+			// PairingService/PakeExchange has dedicated structured logs in PairingServer.
+			// Skip generic stream warning here to avoid duplicate ambiguous lines.
+			if info.FullMethod == "/nitella.hub.PairingService/PakeExchange" {
+				return err
+			}
+			userID := extractStreamUserID(ss.Context(), tokenManager)
+			if userID != "" {
+				log.Warnf("Stream %s ended with error: %v (user_id: %s, duration: %v)", info.FullMethod, err, userID, duration)
+			} else {
+				log.Warnf("Stream %s ended with error: %v (duration: %v)", info.FullMethod, err, duration)
+			}
+		} else if *verbose {
+			log.Infof("Stream %s ended (duration: %v)", info.FullMethod, duration)
+		}
+
+		return err
+	}
+}
+
+func extractStreamUserID(ctx context.Context, tokenManager *auth.TokenManager) string {
+	if userID, ok := auth.GetUserID(ctx); ok {
+		userID = strings.TrimSpace(userID)
+		if userID != "" {
+			return userID
+		}
 	}
 
-	return err
+	md, ok := metadata.FromIncomingContext(ctx)
+	if !ok {
+		return ""
+	}
+
+	if ids := md.Get("user_id"); len(ids) > 0 {
+		userID := strings.TrimSpace(ids[0])
+		if userID != "" {
+			return userID
+		}
+	}
+
+	if tokenManager == nil {
+		return ""
+	}
+
+	authz := md.Get("authorization")
+	if len(authz) == 0 {
+		return ""
+	}
+
+	tokenStr := strings.TrimSpace(authz[0])
+	if strings.HasPrefix(strings.ToLower(tokenStr), "bearer ") {
+		tokenStr = strings.TrimSpace(tokenStr[len("bearer "):])
+	}
+	if tokenStr == "" {
+		return ""
+	}
+
+	claims, err := tokenManager.ValidateToken(tokenStr)
+	if err != nil || claims == nil {
+		return ""
+	}
+	return strings.TrimSpace(claims.UserID)
 }
 
 // startHealthServer starts a simple HTTP health check server
@@ -403,4 +481,3 @@ func startHealthServer(port int) {
 		log.Warnf("Health check server failed: %v", err)
 	}
 }
-

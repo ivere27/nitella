@@ -164,7 +164,7 @@ func TestDecryptP2PMessage_WrongKey(t *testing.T) {
 	}
 }
 
-func TestDecryptP2PMessage_UnencryptedPassthrough(t *testing.T) {
+func TestDecryptP2PMessage_RejectsUnencrypted(t *testing.T) {
 	_, privKey, _ := ed25519.GenerateKey(rand.Reader)
 
 	// Create an unencrypted message
@@ -172,14 +172,10 @@ func TestDecryptP2PMessage_UnencryptedPassthrough(t *testing.T) {
 	msg, _ := NewP2PMessage(MessageTypeApprovalRequest, req)
 	data, _ := msg.Marshal()
 
-	// Decrypt should pass through unencrypted messages
-	decrypted, err := DecryptP2PMessage(data, privKey)
-	if err != nil {
-		t.Fatalf("DecryptP2PMessage should handle unencrypted: %v", err)
-	}
-
-	if decrypted.Type != MessageTypeApprovalRequest {
-		t.Errorf("Type should be preserved for unencrypted messages")
+	// Decrypt must reject unencrypted messages
+	_, err := DecryptP2PMessage(data, privKey)
+	if err == nil {
+		t.Fatal("DecryptP2PMessage should reject unencrypted messages")
 	}
 }
 

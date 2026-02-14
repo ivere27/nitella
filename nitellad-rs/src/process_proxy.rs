@@ -1,16 +1,16 @@
+use std::os::unix::io::FromRawFd;
+use std::sync::Arc;
+use std::time::Duration;
 use tokio::process::Command;
+use tokio::sync::RwLock;
 use tonic::transport::{Channel, Endpoint, Uri};
 use tower::service_fn;
-use std::sync::Arc;
-use tokio::sync::RwLock;
-use tracing::{info, error};
-use std::os::unix::io::{FromRawFd};
-use std::time::Duration;
+use tracing::{error, info};
 
 use crate::proto::process::process_control_client::ProcessControlClient;
 use crate::proto::process::*;
 use crate::proto::process::*;
-use crate::proto::proxy::{CreateProxyRequest, ProxyStatus, Rule, ActiveConnection};
+use crate::proto::proxy::{ActiveConnection, CreateProxyRequest, ProxyStatus, Rule};
 
 #[derive(Clone)]
 pub struct ProcessProxyListener {
@@ -40,10 +40,13 @@ impl ProcessProxyListener {
         let exe = std::env::current_exe()?;
         let mut cmd = Command::new(exe);
         cmd.arg("child")
-           .arg("--id").arg(&self.id)
-           .arg("--name").arg(&req.name)
-           .arg("--listen").arg(&req.listen_addr);
-        
+            .arg("--id")
+            .arg(&self.id)
+            .arg("--name")
+            .arg(&req.name)
+            .arg("--listen")
+            .arg(&req.listen_addr);
+
         if !req.default_backend.is_empty() {
             cmd.arg("--backend").arg(&req.default_backend);
         }
@@ -64,20 +67,21 @@ impl ProcessProxyListener {
         let child = cmd.spawn()?;
         let pid = child.id().unwrap_or(0);
         *self.child_pid.write().await = Some(pid);
-        
+
         unsafe { libc::close(child_fd) };
 
         let channel = Endpoint::try_from("http://[::]:50051")?
             .connect_with_connector(service_fn(move |_: Uri| {
-                let s = unsafe { std::os::unix::net::UnixStream::from_raw_fd(libc::dup(parent_fd)) };
+                let s =
+                    unsafe { std::os::unix::net::UnixStream::from_raw_fd(libc::dup(parent_fd)) };
                 let _ = s.set_nonblocking(true);
                 let tokio_stream = tokio::net::UnixStream::from_std(s).unwrap();
                 async move { Ok::<_, std::io::Error>(tokio_stream) }
             }))
             .await?;
-        
+
         let mut client = ProcessControlClient::new(channel);
-        
+
         tokio::time::sleep(Duration::from_millis(500)).await;
 
         let start_req = StartListenerRequest {
@@ -95,7 +99,7 @@ impl ProcessProxyListener {
         }
 
         *self.client.write().await = Some(client);
-        
+
         info!("Started process proxy {} (PID: {:?})", req.name, pid);
         Ok(())
     }
@@ -105,7 +109,7 @@ impl ProcessProxyListener {
         if let Some(client) = client_lock.as_mut() {
             let _ = client.stop_listener(StopListenerRequest {}).await;
         }
-        
+
         let mut pid_lock = self.child_pid.write().await;
         if let Some(pid) = *pid_lock {
             unsafe { libc::kill(pid as i32, libc::SIGTERM) };
@@ -133,10 +137,8 @@ impl ProcessProxyListener {
     pub async fn add_rule(&self, rule: Rule) -> anyhow::Result<()> {
         let mut client_lock = self.client.write().await;
         if let Some(client) = client_lock.as_mut() {
-             client.add_rule(AddRuleRequest {
-                 rule: Some(rule),
-             }).await?;
-             Ok(())
+            client.add_rule(AddRuleRequest { rule: Some(rule) }).await?;
+            Ok(())
         } else {
             Err(anyhow::anyhow!("Child not connected"))
         }
@@ -145,10 +147,8 @@ impl ProcessProxyListener {
     pub async fn remove_rule(&self, rule_id: String) -> anyhow::Result<()> {
         let mut client_lock = self.client.write().await;
         if let Some(client) = client_lock.as_mut() {
-             client.remove_rule(RemoveRuleRequest {
-                 rule_id,
-             }).await?;
-             Ok(())
+            client.remove_rule(RemoveRuleRequest { rule_id }).await?;
+            Ok(())
         } else {
             Err(anyhow::anyhow!("Child not connected"))
         }
@@ -157,7 +157,9 @@ impl ProcessProxyListener {
     pub async fn get_active_connections(&self) -> anyhow::Result<Vec<ActiveConnection>> {
         let mut client_lock = self.client.write().await;
         if let Some(client) = client_lock.as_mut() {
-            let resp = client.get_active_connections(GetActiveConnectionsRequest {}).await?;
+            let resp = client
+                .get_active_connections(GetActiveConnectionsRequest {})
+                .await?;
             Ok(resp.into_inner().connections)
         } else {
             Ok(vec![])
@@ -167,18 +169,22 @@ impl ProcessProxyListener {
     pub async fn close_connection(&self, conn_id: String) -> anyhow::Result<()> {
         let mut client_lock = self.client.write().await;
         if let Some(client) = client_lock.as_mut() {
-             client.close_connection(CloseConnectionRequest { conn_id }).await?;
-             Ok(())
+            client
+                .close_connection(CloseConnectionRequest { conn_id })
+                .await?;
+            Ok(())
         } else {
             Ok(())
         }
     }
-    
+
     pub async fn close_all_connections(&self) -> anyhow::Result<()> {
         let mut client_lock = self.client.write().await;
         if let Some(client) = client_lock.as_mut() {
-             client.close_all_connections(CloseAllConnectionsRequest {}).await?;
-             Ok(())
+            client
+                .close_all_connections(CloseAllConnectionsRequest {})
+                .await?;
+            Ok(())
         } else {
             Ok(())
         }
