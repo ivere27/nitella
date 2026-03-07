@@ -28,13 +28,13 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
-	"math/big"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"encoding/pem"
 	"fmt"
 	"io"
+	"math/big"
 	"net"
 	"net/http"
 	"net/http/cookiejar"
@@ -74,6 +74,7 @@ type hubProcess struct {
 	cmd        *exec.Cmd
 	pid        int
 	grpcAddr   string
+	adminAddr  string
 	httpAddr   string
 	dataDir    string
 	dbPath     string
@@ -171,12 +172,14 @@ func (c *testCluster) startHub() *hubProcess {
 	os.MkdirAll(hubDataDir, 0755)
 
 	grpcPort := getFreePort(c.t)
+	adminPort := getFreePort(c.t)
 	httpPort := getFreePort(c.t)
 
 	hubBin := findBinary(c.t, "hub")
 
 	cmd := exec.Command(hubBin,
 		"--port", fmt.Sprintf("%d", grpcPort),
+		"--admin-port", fmt.Sprintf("%d", adminPort),
 		"--http-port", fmt.Sprintf("%d", httpPort),
 		"--db-path", filepath.Join(hubDataDir, "hub.db"),
 		"--auto-cert",
@@ -190,12 +193,13 @@ func (c *testCluster) startHub() *hubProcess {
 	}
 
 	hub := &hubProcess{
-		cmd:      cmd,
-		pid:      cmd.Process.Pid,
-		grpcAddr: fmt.Sprintf("localhost:%d", grpcPort),
-		httpAddr: fmt.Sprintf("http://localhost:%d", httpPort),
-		dataDir:  hubDataDir,
-		dbPath:   filepath.Join(hubDataDir, "hub.db"),
+		cmd:       cmd,
+		pid:       cmd.Process.Pid,
+		grpcAddr:  fmt.Sprintf("localhost:%d", grpcPort),
+		adminAddr: fmt.Sprintf("localhost:%d", adminPort),
+		httpAddr:  fmt.Sprintf("http://localhost:%d", httpPort),
+		dataDir:   hubDataDir,
+		dbPath:    filepath.Join(hubDataDir, "hub.db"),
 	}
 
 	// Wait for Hub to be ready
@@ -207,7 +211,7 @@ func (c *testCluster) startHub() *hubProcess {
 			if err == nil {
 				hub.hubCAPEM = caPEM
 			}
-			c.t.Logf("Hub started: PID=%d, gRPC=%s, HTTP=%s", hub.pid, hub.grpcAddr, hub.httpAddr)
+			c.t.Logf("Hub started: PID=%d, gRPC=%s, admin=%s, HTTP=%s", hub.pid, hub.grpcAddr, hub.adminAddr, hub.httpAddr)
 			c.hub = hub
 			return hub
 		}
@@ -257,11 +261,13 @@ func (c *testCluster) restartHub() *hubProcess {
 	time.Sleep(500 * time.Millisecond) // Allow port to be released
 
 	grpcPort := getFreePort(c.t)
+	adminPort := getFreePort(c.t)
 	httpPort := getFreePort(c.t)
 	hubBin := findBinary(c.t, "hub")
 
 	cmd := exec.Command(hubBin,
 		"--port", fmt.Sprintf("%d", grpcPort),
+		"--admin-port", fmt.Sprintf("%d", adminPort),
 		"--http-port", fmt.Sprintf("%d", httpPort),
 		"--db-path", savedDBPath,
 		"--auto-cert",
@@ -275,12 +281,13 @@ func (c *testCluster) restartHub() *hubProcess {
 	}
 
 	hub := &hubProcess{
-		cmd:      cmd,
-		pid:      cmd.Process.Pid,
-		grpcAddr: fmt.Sprintf("localhost:%d", grpcPort),
-		httpAddr: fmt.Sprintf("http://localhost:%d", httpPort),
-		dataDir:  savedDataDir,
-		dbPath:   savedDBPath,
+		cmd:       cmd,
+		pid:       cmd.Process.Pid,
+		grpcAddr:  fmt.Sprintf("localhost:%d", grpcPort),
+		adminAddr: fmt.Sprintf("localhost:%d", adminPort),
+		httpAddr:  fmt.Sprintf("http://localhost:%d", httpPort),
+		dataDir:   savedDataDir,
+		dbPath:    savedDBPath,
 	}
 
 	// Wait for Hub to be ready
@@ -290,7 +297,7 @@ func (c *testCluster) restartHub() *hubProcess {
 			if caPEM, err := os.ReadFile(filepath.Join(savedDataDir, "hub_ca.crt")); err == nil {
 				hub.hubCAPEM = caPEM
 			}
-			c.t.Logf("Hub restarted: PID=%d, gRPC=%s", hub.pid, hub.grpcAddr)
+			c.t.Logf("Hub restarted: PID=%d, gRPC=%s, admin=%s", hub.pid, hub.grpcAddr, hub.adminAddr)
 			c.hub = hub
 			return hub
 		}
@@ -1027,8 +1034,8 @@ func TestComprehensive_Security_E2E(t *testing.T) {
 	// Create encrypted payload (simulating what CLI would do)
 	// In real implementation, this would use proper X25519 + AES-GCM encryption
 	encryptedPayload := &common.EncryptedPayload{
-		EphemeralPubkey: make([]byte, 32), // Mock ephemeral pubkey
-		Nonce:           make([]byte, 12), // Mock nonce
+		EphemeralPubkey: make([]byte, 32),         // Mock ephemeral pubkey
+		Nonce:           make([]byte, 12),         // Mock nonce
 		Ciphertext:      []byte(sensitiveCommand), // In real impl, this would be encrypted
 	}
 
@@ -1152,8 +1159,8 @@ func TestComprehensive_RoutingToken_Validation(t *testing.T) {
 		defer cancel()
 
 		_, err := alice.mobileClient.SendCommand(ctx, &hubpb.CommandRequest{
-			NodeId:       aliceNode.nodeID,           // Alice's node
-			RoutingToken: bobNode.routingToken,       // Bob's token
+			NodeId:       aliceNode.nodeID,     // Alice's node
+			RoutingToken: bobNode.routingToken, // Bob's token
 			Encrypted:    testPayload,
 		})
 		if err == nil {
@@ -1175,8 +1182,8 @@ func TestComprehensive_RoutingToken_Validation(t *testing.T) {
 		defer cancel()
 
 		_, err := bob.mobileClient.SendCommand(ctx, &hubpb.CommandRequest{
-			NodeId:       aliceNode.nodeID,           // Alice's node
-			RoutingToken: aliceNode.routingToken,     // Alice's token
+			NodeId:       aliceNode.nodeID,       // Alice's node
+			RoutingToken: aliceNode.routingToken, // Alice's token
 			Encrypted:    testPayload,
 		})
 		// This should fail because even with correct routing token,
@@ -1713,14 +1720,14 @@ func generateSelfSignedCert(t *testing.T) ([]byte, []byte, []byte, error) {
 			Organization: []string{"Test Node"},
 			CommonName:   "localhost",
 		},
-		NotBefore:    time.Now().Add(-1 * time.Hour),
-		NotAfter:     time.Now().Add(time.Hour),
-		KeyUsage:     x509.KeyUsageKeyEncipherment | x509.KeyUsageDigitalSignature,
-		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
-		IPAddresses:  []net.IP{net.ParseIP("127.0.0.1"), net.ParseIP("::1")},
-		DNSNames:     []string{"localhost"},
+		NotBefore:   time.Now().Add(-1 * time.Hour),
+		NotAfter:    time.Now().Add(time.Hour),
+		KeyUsage:    x509.KeyUsageKeyEncipherment | x509.KeyUsageDigitalSignature,
+		ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		IPAddresses: []net.IP{net.ParseIP("127.0.0.1"), net.ParseIP("::1")},
+		DNSNames:    []string{"localhost"},
 	}
-	
+
 	// Set AKI to CA's SKI from the actual cert
 	leafTemplate.AuthorityKeyId = caCert.SubjectKeyId
 

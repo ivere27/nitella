@@ -18,6 +18,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -39,8 +40,9 @@ import (
 
 var (
 	// Server configuration
-	port     = flag.Int("port", 50052, "gRPC server port")
-	httpPort = flag.Int("http-port", 9090, "HTTP health check port")
+	port      = flag.Int("port", 50052, "Public gRPC server port")
+	adminPort = flag.Int("admin-port", 50051, "Admin gRPC server port")
+	httpPort  = flag.Int("http-port", 9090, "HTTP health check port")
 
 	// TLS configuration
 	tlsCert     = flag.String("tls-cert", "", "Path to TLS certificate (required for mTLS)")
@@ -150,11 +152,17 @@ func main() {
 	})
 
 	// Create Hub server
-	// tokenManager is used for both user and admin tokens (can be separated if needed)
+	// JWT signing is shared for now; AdminAuthInterceptor enforces role=admin.
 	hubServer := server.NewHubServer(jwtManager, jwtManager, hubStore, firebaseService, tierCfg)
+	if *adminPort == 0 {
+		log.Fatalf("--admin-port must be non-zero")
+	}
+	if *adminPort == *port {
+		log.Fatalf("--admin-port must differ from --port")
+	}
 
-	// Configure gRPC server options
-	opts := []grpc.ServerOption{
+	// Configure shared gRPC server options.
+	baseOpts := []grpc.ServerOption{
 		grpc.KeepaliveParams(keepalive.ServerParameters{
 			MaxConnectionIdle:     5 * time.Minute,
 			MaxConnectionAge:      30 * time.Minute,
@@ -182,7 +190,7 @@ func main() {
 			log.Infof("Falling back to auto-cert mode")
 			useAutoCert = true
 		} else {
-			opts = append(opts, grpc.Creds(credentials.NewTLS(tlsConfig)))
+			baseOpts = append(baseOpts, grpc.Creds(credentials.NewTLS(tlsConfig)))
 			log.Infof("TLS enabled with certificate: %s", *tlsCert)
 			if *tlsCA != "" {
 				log.Infof("Client certificate verification enabled with CA: %s", *tlsCA)
@@ -213,7 +221,7 @@ func main() {
 		hubServer.SetCertManager(certMgr)
 
 		tlsConfig := certMgr.GetTLSConfig()
-		opts = append(opts, grpc.Creds(credentials.NewTLS(tlsConfig)))
+		baseOpts = append(baseOpts, grpc.Creds(credentials.NewTLS(tlsConfig)))
 		log.Infof("Auto-cert TLS enabled (Hub CA + auto-rotating leaf)")
 
 		// Log Hub CA fingerprint for TOFU
@@ -223,31 +231,47 @@ func main() {
 		}
 	}
 
-	// Add interceptors (order: IP limit -> logging -> auth -> tier limit)
-	opts = append(opts, grpc.ChainUnaryInterceptor(
+	// Create the public gRPC server (order: IP limit -> logging -> auth -> tier limit).
+	publicOpts := append([]grpc.ServerOption{}, baseOpts...)
+	publicOpts = append(publicOpts, grpc.ChainUnaryInterceptor(
 		ipRateLimiter.UnaryInterceptor(),
 		loggingInterceptor,
 		hubServer.AuthInterceptor,
 		tierRateLimiter.UnaryInterceptor(),
 	))
-	opts = append(opts, grpc.ChainStreamInterceptor(
+	publicOpts = append(publicOpts, grpc.ChainStreamInterceptor(
 		ipRateLimiter.StreamInterceptor(),
 		streamLoggingInterceptor(jwtManager),
 		hubServer.StreamAuthInterceptor,
 		tierRateLimiter.StreamInterceptor(),
 	))
 
-	// Create gRPC server
-	grpcServer := grpc.NewServer(opts...)
+	publicServer := grpc.NewServer(publicOpts...)
+	hubServer.RegisterPublicServices(publicServer)
+	log.Infof("Registered public gRPC services: NodeService, MobileService, AuthService, PairingService")
 
-	// Register services
-	hubServer.RegisterServices(grpcServer)
-	log.Infof("Registered gRPC services: NodeService, MobileService, AuthService, PairingService, AdminService")
-
-	// Start listening
-	listener, err := net.Listen("tcp", fmt.Sprintf(":%d", *port))
+	publicListener, err := net.Listen("tcp", fmt.Sprintf(":%d", *port))
 	if err != nil {
 		log.Fatalf("Failed to listen on port %d: %v", *port, err)
+	}
+
+	var adminServer *grpc.Server
+	var adminListener net.Listener
+	serverCount := 2
+	adminOpts := append([]grpc.ServerOption{}, baseOpts...)
+	adminOpts = append(adminOpts, grpc.ChainUnaryInterceptor(
+		ipRateLimiter.UnaryInterceptor(),
+		loggingInterceptor,
+		hubServer.AdminAuthInterceptor,
+	))
+
+	adminServer = grpc.NewServer(adminOpts...)
+	hubServer.RegisterAdminServices(adminServer)
+	log.Infof("Registered admin gRPC services: AdminService")
+
+	adminListener, err = net.Listen("tcp", fmt.Sprintf(":%d", *adminPort))
+	if err != nil {
+		log.Fatalf("Failed to listen on admin port %d: %v", *adminPort, err)
 	}
 
 	// Start health check server
@@ -256,6 +280,8 @@ func main() {
 	// Handle graceful shutdown
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+	servers := []*grpc.Server{publicServer}
+	servers = append(servers, adminServer)
 
 	go func() {
 		sig := <-sigCh
@@ -263,7 +289,15 @@ func main() {
 
 		stopped := make(chan struct{})
 		go func() {
-			grpcServer.GracefulStop()
+			var wg sync.WaitGroup
+			for _, srv := range servers {
+				wg.Add(1)
+				go func(s *grpc.Server) {
+					defer wg.Done()
+					s.GracefulStop()
+				}(srv)
+			}
+			wg.Wait()
 			close(stopped)
 		}()
 
@@ -273,10 +307,14 @@ func main() {
 		select {
 		case sig2 := <-sigCh:
 			log.Warnf("Received signal %v during shutdown, forcing stop", sig2)
-			grpcServer.Stop()
+			for _, srv := range servers {
+				srv.Stop()
+			}
 		case <-timer.C:
 			log.Warnf("Graceful shutdown timed out after %v, forcing stop", *gracefulShutdownTimeout)
-			grpcServer.Stop()
+			for _, srv := range servers {
+				srv.Stop()
+			}
 		case <-stopped:
 			log.Infof("Graceful shutdown completed")
 		}
@@ -293,15 +331,27 @@ func main() {
 		}
 	}()
 
-	// Start serving
-	log.Infof("Hub server listening on :%d", *port)
-	if err := grpcServer.Serve(listener); err != nil {
-		if err == grpc.ErrServerStopped {
-			log.Infof("Hub server stopped")
-			return
+	// Start serving.
+	errCh := make(chan error, serverCount)
+	go func() {
+		log.Infof("Admin gRPC server listening on :%d", *adminPort)
+		errCh <- adminServer.Serve(adminListener)
+	}()
+	go func() {
+		log.Infof("Public gRPC server listening on :%d", *port)
+		errCh <- publicServer.Serve(publicListener)
+	}()
+
+	stoppedServers := 0
+	for stoppedServers < serverCount {
+		err := <-errCh
+		if err == nil || err == grpc.ErrServerStopped {
+			stoppedServers++
+			continue
 		}
 		log.Fatalf("Failed to serve: %v", err)
 	}
+	log.Infof("Hub servers stopped")
 }
 
 // initJWTManager initializes the JWT token manager with Ed25519 keys

@@ -17,7 +17,7 @@ COPY --from=builder /app/hub .
 # Data directory for persistence
 VOLUME /data
 
-EXPOSE 50052 8080
+EXPOSE 50051 50052 8080
 
 ENTRYPOINT ["./hub"]
-CMD ["--port", "50052", "--http-port", "8080", "--db-path", "/data/hub.db", "--auto-cert", "--cert-data-dir", "/data"]
+CMD ["--port", "50052", "--admin-port", "50051", "--http-port", "8080", "--db-path", "/data/hub.db", "--auto-cert", "--cert-data-dir", "/data"]

@@ -196,6 +196,10 @@ func (ts *testServer) adminContext() context.Context {
 	return metadata.AppendToOutgoingContext(context.Background(), "authorization", "Bearer "+token)
 }
 
+func incomingBearerContext(token string) context.Context {
+	return metadata.NewIncomingContext(context.Background(), metadata.Pairs("authorization", "Bearer "+token))
+}
+
 func TestMobileService(t *testing.T) {
 	ts := setupTestServer(t)
 	defer ts.cleanup()
@@ -365,6 +369,52 @@ func TestAdminService(t *testing.T) {
 		}
 		t.Logf("GetSystemStats response: %d users, %d nodes", resp.TotalUsers, resp.TotalNodes)
 	})
+}
+
+func TestAdminAuthInterceptorRequiresAdminRole(t *testing.T) {
+	ts := setupTestServer(t)
+	defer ts.cleanup()
+
+	userToken, err := ts.tokenManager.GenerateMobileToken("user-123", "device-123")
+	if err != nil {
+		t.Fatalf("GenerateMobileToken failed: %v", err)
+	}
+
+	info := &grpc.UnaryServerInfo{FullMethod: "/nitella.hub.AdminService/GetSystemStats"}
+	_, err = ts.hubServer.AdminAuthInterceptor(
+		incomingBearerContext(userToken),
+		&pb.GetSystemStatsRequest{},
+		info,
+		func(ctx context.Context, req interface{}) (interface{}, error) {
+			t.Fatal("handler should not be called for non-admin token")
+			return nil, nil
+		},
+	)
+	if status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("expected PermissionDenied, got %v", err)
+	}
+
+	adminToken, err := ts.tokenManager.GenerateAdminToken("admin-123")
+	if err != nil {
+		t.Fatalf("GenerateAdminToken failed: %v", err)
+	}
+
+	called := false
+	_, err = ts.hubServer.AdminAuthInterceptor(
+		incomingBearerContext(adminToken),
+		&pb.GetSystemStatsRequest{},
+		info,
+		func(ctx context.Context, req interface{}) (interface{}, error) {
+			called = true
+			return &pb.SystemStats{}, nil
+		},
+	)
+	if err != nil {
+		t.Fatalf("admin token should be accepted: %v", err)
+	}
+	if !called {
+		t.Fatal("handler was not called for admin token")
+	}
 }
 
 func TestAuthService(t *testing.T) {

@@ -25,6 +25,7 @@ services:
       dockerfile: test/e2e/Dockerfile.hub
     container_name: nitella-hub
     ports:
+      - "50051:50051"
       - "50052:50052"
       - "8080:8080"
     volumes:
@@ -33,7 +34,7 @@ services:
       - NITELLA_LOG_LEVEL=debug
       - NITELLA_CERT_DNS_NAMES=hub
       - NITELLA_DISABLE_PAIRING_RATE_LIMIT=true
-    command: ["--port", "50052", "--http-port", "8080", "--db-path", "/data/hub.db", "--cert-data-dir", "/data"]
+    command: ["--port", "50052", "--admin-port", "50051", "--http-port", "8080", "--db-path", "/data/hub.db", "--cert-data-dir", "/data"]
     healthcheck:
       test: ["CMD", "nc", "-z", "localhost", "50052"]
       interval: 5s
@@ -207,7 +208,7 @@ services:
       - node3-certs:/certs/node3:ro
       - hub-data:/certs/hub:ro
     environment:
-      - HUB_ADDR=hub:50052
+      - HUB_ADDR=hub:50051
       - HUB_HTTP_ADDR=hub:8080
       - HUB_CA_PATH=/certs/hub/hub_ca.crt
       - NODE1_ADDR=node1:8080
@@ -243,7 +244,7 @@ services:
     volumes:
       - hubctl-data:/data
     environment:
-      - HUB_ADDR=hub:50052
+      - HUB_ADDR=hub:50051
     depends_on:
       hub:
         condition: service_healthy

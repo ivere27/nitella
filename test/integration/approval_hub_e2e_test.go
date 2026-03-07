@@ -270,11 +270,12 @@ type approvalTestCluster struct {
 }
 
 type approvalHubProcess struct {
-	cmd      *exec.Cmd
-	grpcAddr string
-	httpAddr string
-	dataDir  string
-	hubCAPEM []byte
+	cmd       *exec.Cmd
+	grpcAddr  string
+	adminAddr string
+	httpAddr  string
+	dataDir   string
+	hubCAPEM  []byte
 }
 
 type approvalCLIProcess struct {
@@ -337,12 +338,14 @@ func (c *approvalTestCluster) startHub() {
 	os.MkdirAll(hubDataDir, 0755)
 
 	grpcPort := getFreePort(c.t)
+	adminPort := getFreePort(c.t)
 	httpPort := getFreePort(c.t)
 
 	hubBin := findBinary(c.t, "hub")
 
 	cmd := exec.Command(hubBin,
 		"--port", fmt.Sprintf("%d", grpcPort),
+		"--admin-port", fmt.Sprintf("%d", adminPort),
 		"--http-port", fmt.Sprintf("%d", httpPort),
 		"--db-path", filepath.Join(hubDataDir, "hub.db"),
 		"--auto-cert",
@@ -356,10 +359,11 @@ func (c *approvalTestCluster) startHub() {
 	}
 
 	hub := &approvalHubProcess{
-		cmd:      cmd,
-		grpcAddr: fmt.Sprintf("localhost:%d", grpcPort),
-		httpAddr: fmt.Sprintf("http://localhost:%d", httpPort),
-		dataDir:  hubDataDir,
+		cmd:       cmd,
+		grpcAddr:  fmt.Sprintf("localhost:%d", grpcPort),
+		adminAddr: fmt.Sprintf("localhost:%d", adminPort),
+		httpAddr:  fmt.Sprintf("http://localhost:%d", httpPort),
+		dataDir:   hubDataDir,
 	}
 
 	// Wait for Hub to be ready

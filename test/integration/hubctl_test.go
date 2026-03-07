@@ -13,7 +13,6 @@ import (
 	hubpb "github.com/ivere27/nitella/pkg/api/hub"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
-
 )
 
 // ============================================================================
@@ -44,7 +43,10 @@ func TestHubCtl_UserManagement(t *testing.T) {
 	adminClient := hubpb.NewAdminServiceClient(adminConn)
 
 	// Register some test users first
-	authClient := hubpb.NewAuthServiceClient(adminConn)
+	publicConn := connectToHubTLS(t, hub.grpcAddr, hub.hubCAPEM)
+	defer publicConn.Close()
+
+	authClient := hubpb.NewAuthServiceClient(publicConn)
 	for i := 0; i < 3; i++ {
 		cliIdentity := generateCLIIdentity(t)
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -422,19 +424,28 @@ func TestHubCtl_BulkOperations(t *testing.T) {
 	}
 }
 
-func connectToHubAdmin(t *testing.T, hub *hubServer) *grpc.ClientConn {
+func connectToHubTLS(t *testing.T, addr string, caPEM []byte) *grpc.ClientConn {
 	t.Helper()
 	pool := x509.NewCertPool()
-	if !pool.AppendCertsFromPEM(hub.hubCAPEM) {
+	if !pool.AppendCertsFromPEM(caPEM) {
 		t.Fatal("Failed to append Hub CA")
 	}
 	tlsConfig := &tls.Config{
 		RootCAs:    pool,
 		MinVersion: tls.VersionTLS13,
 	}
-	conn, err := grpc.Dial(hub.grpcAddr, grpc.WithTransportCredentials(credentials.NewTLS(tlsConfig)))
+	conn, err := grpc.Dial(addr, grpc.WithTransportCredentials(credentials.NewTLS(tlsConfig)))
 	if err != nil {
 		t.Fatalf("Failed to connect to Hub: %v", err)
 	}
 	return conn
+}
+
+func connectToHubAdmin(t *testing.T, hub *hubServer) *grpc.ClientConn {
+	t.Helper()
+	addr := hub.adminAddr
+	if addr == "" {
+		addr = hub.grpcAddr
+	}
+	return connectToHubTLS(t, addr, hub.hubCAPEM)
 }

@@ -38,17 +38,17 @@ import (
 //
 // ============================================================================
 
-
 // ============================================================================
 // Test Infrastructure
 // ============================================================================
 
 type hubServer struct {
-	cmd      *exec.Cmd
-	grpcAddr string
-	httpAddr string
-	dataDir  string
-	hubCAPEM []byte
+	cmd       *exec.Cmd
+	grpcAddr  string
+	adminAddr string
+	httpAddr  string
+	dataDir   string
+	hubCAPEM  []byte
 }
 
 func startHubServer(t *testing.T) *hubServer {
@@ -61,6 +61,7 @@ func startHubServer(t *testing.T) *hubServer {
 	}
 
 	grpcPort := getFreePort(t)
+	adminPort := getFreePort(t)
 	httpPort := getFreePort(t)
 
 	// Find hub binary
@@ -68,6 +69,7 @@ func startHubServer(t *testing.T) *hubServer {
 
 	cmd := exec.Command(hubBin,
 		"--port", fmt.Sprintf("%d", grpcPort),
+		"--admin-port", fmt.Sprintf("%d", adminPort),
 		"--http-port", fmt.Sprintf("%d", httpPort),
 		"--db-path", filepath.Join(dataDir, "hub.db"),
 		"--auto-cert",
@@ -99,17 +101,18 @@ func startHubServer(t *testing.T) *hubServer {
 
 	// Wait for Hub to be ready
 	hub := &hubServer{
-		cmd:      cmd,
-		grpcAddr: fmt.Sprintf("localhost:%d", grpcPort),
-		httpAddr: fmt.Sprintf("http://localhost:%d", httpPort),
-		dataDir:  dataDir,
-		hubCAPEM: caPEM,
+		cmd:       cmd,
+		grpcAddr:  fmt.Sprintf("localhost:%d", grpcPort),
+		adminAddr: fmt.Sprintf("localhost:%d", adminPort),
+		httpAddr:  fmt.Sprintf("http://localhost:%d", httpPort),
+		dataDir:   dataDir,
+		hubCAPEM:  caPEM,
 	}
 
 	// Wait for health check
 	for i := 0; i < 30; i++ {
 		if resp, err := hub.healthCheck(); err == nil && resp == "OK" {
-			t.Logf("Hub started on gRPC=%s, HTTP=%s", hub.grpcAddr, hub.httpAddr)
+			t.Logf("Hub started on gRPC=%s, admin=%s, HTTP=%s", hub.grpcAddr, hub.adminAddr, hub.httpAddr)
 			return hub
 		}
 		time.Sleep(100 * time.Millisecond)
@@ -271,8 +274,8 @@ func connectToHubWithMTLS(t *testing.T, addr string, caPEM []byte, cli *cliIdent
 			Certificate: [][]byte{clientCertDER},
 			PrivateKey:  clientKey,
 		}},
-		RootCAs:            pool,
-		MinVersion:         tls.VersionTLS13,
+		RootCAs:    pool,
+		MinVersion: tls.VersionTLS13,
 	}
 
 	conn, err := grpc.Dial(addr,
@@ -292,8 +295,8 @@ func connectToHubWithTLS(t *testing.T, addr string, caPEM []byte) *grpc.ClientCo
 	pool.AppendCertsFromPEM(caPEM)
 
 	tlsConfig := &tls.Config{
-		RootCAs:            pool,
-		MinVersion:         tls.VersionTLS13,
+		RootCAs:    pool,
+		MinVersion: tls.VersionTLS13,
 	}
 	conn, err := grpc.Dial(addr, grpc.WithTransportCredentials(credentials.NewTLS(tlsConfig)))
 	if err != nil {
@@ -337,7 +340,6 @@ func contextWithJWT(ctx context.Context, token string) context.Context {
 // ============================================================================
 // Advanced E2E Tests - Multiple Nodes and Real-time Communication
 // ============================================================================
-
 
 // TestHub_CommandRelay tests CLI -> Hub -> Node command relay
 func TestHub_CommandRelay(t *testing.T) {
@@ -623,7 +625,6 @@ func TestHub_HeartbeatAndStatus(t *testing.T) {
 	t.Log("Heartbeat and status test completed")
 }
 
-
 // Helper types for advanced tests
 type registeredNode struct {
 	nodeID     string
@@ -671,8 +672,8 @@ func connectToHubWithNodeCert(t *testing.T, addr string, privateKey ed25519.Priv
 			Certificate: [][]byte{block.Bytes},
 			PrivateKey:  privateKey,
 		}},
-		RootCAs:            pool,
-		MinVersion:         tls.VersionTLS13,
+		RootCAs:    pool,
+		MinVersion: tls.VersionTLS13,
 	}
 
 	conn, err := grpc.Dial(addr,

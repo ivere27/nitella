@@ -52,8 +52,8 @@ echo "Running build in Docker..."
 echo "Building with TAG: $TAG"
 
 # Docker implementation of caching using Named Volumes
-GO_BUILD_CACHE_VOLUME="nitella-go-build-cache"
-GRADLE_CACHE_VOLUME="nitella-gradle-cache"
+GO_BUILD_CACHE_VOLUME="go-build-cache"
+GRADLE_CACHE_VOLUME="gradle-build-cache"
 
 echo "Using Docker Named Volumes for caching:"
 echo "  - Go Build Cache: $GO_BUILD_CACHE_VOLUME"

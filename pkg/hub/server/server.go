@@ -720,7 +720,13 @@ func (s *HubServer) AdminAuthInterceptor(ctx context.Context, req interface{}, i
 		return nil, status.Error(codes.Unauthenticated, "invalid or expired admin token")
 	}
 
+	if claims.Role != "admin" {
+		return nil, status.Error(codes.PermissionDenied, "admin role required")
+	}
+
 	ctx = auth.NewContext(ctx, claims)
+	ctx = context.WithValue(ctx, ctxKeyUserID, claims.UserID)
+	ctx = context.WithValue(ctx, ctxKeyRole, claims.Role)
 	return handler(ctx, req)
 }
 
@@ -907,11 +913,22 @@ func (w *wrappedStream) Context() context.Context {
 	return w.ctx
 }
 
-// RegisterServices registers all Hub gRPC services on the given server
-func (s *HubServer) RegisterServices(grpcServer *grpc.Server) {
+// RegisterPublicServices registers the public Hub gRPC services.
+func (s *HubServer) RegisterPublicServices(grpcServer *grpc.Server) {
 	pb.RegisterNodeServiceServer(grpcServer, s.Node)
 	pb.RegisterMobileServiceServer(grpcServer, s.Mobile)
 	pb.RegisterAuthServiceServer(grpcServer, s.Auth)
 	pb.RegisterPairingServiceServer(grpcServer, s.Pairing)
+}
+
+// RegisterAdminServices registers the admin-only Hub gRPC services.
+func (s *HubServer) RegisterAdminServices(grpcServer *grpc.Server) {
 	pb.RegisterAdminServiceServer(grpcServer, s.Admin)
+}
+
+// RegisterServices registers all Hub gRPC services on the given server.
+// Prefer RegisterPublicServices/RegisterAdminServices for production wiring.
+func (s *HubServer) RegisterServices(grpcServer *grpc.Server) {
+	s.RegisterPublicServices(grpcServer)
+	s.RegisterAdminServices(grpcServer)
 }

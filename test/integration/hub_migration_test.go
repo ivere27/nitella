@@ -46,12 +46,12 @@ import (
 
 // migrationCluster manages two Hub instances for migration testing
 type migrationCluster struct {
-	t        *testing.T
-	hubA     *hubProcess
-	hubB     *hubProcess
-	cli      *cliProcess
-	nodes    []*nodeProcess
-	dataDir  string
+	t       *testing.T
+	hubA    *hubProcess
+	hubB    *hubProcess
+	cli     *cliProcess
+	nodes   []*nodeProcess
+	dataDir string
 }
 
 // newMigrationCluster creates a test cluster for migration tests
@@ -112,12 +112,14 @@ func (c *migrationCluster) startHub(name string) *hubProcess {
 	os.MkdirAll(hubDataDir, 0755)
 
 	grpcPort := c.getFreePort()
+	adminPort := c.getFreePort()
 	httpPort := c.getFreePort()
 
 	hubBin := findBinary(c.t, "hub")
 
 	cmd := exec.Command(hubBin,
 		"--port", fmt.Sprintf("%d", grpcPort),
+		"--admin-port", fmt.Sprintf("%d", adminPort),
 		"--http-port", fmt.Sprintf("%d", httpPort),
 		"--db-path", filepath.Join(hubDataDir, "hub.db"),
 		"--auto-cert",
@@ -131,12 +133,13 @@ func (c *migrationCluster) startHub(name string) *hubProcess {
 	}
 
 	hub := &hubProcess{
-		cmd:      cmd,
-		pid:      cmd.Process.Pid,
-		grpcAddr: fmt.Sprintf("localhost:%d", grpcPort),
-		httpAddr: fmt.Sprintf("http://localhost:%d", httpPort),
-		dataDir:  hubDataDir,
-		dbPath:   filepath.Join(hubDataDir, "hub.db"),
+		cmd:       cmd,
+		pid:       cmd.Process.Pid,
+		grpcAddr:  fmt.Sprintf("localhost:%d", grpcPort),
+		adminAddr: fmt.Sprintf("localhost:%d", adminPort),
+		httpAddr:  fmt.Sprintf("http://localhost:%d", httpPort),
+		dataDir:   hubDataDir,
+		dbPath:    filepath.Join(hubDataDir, "hub.db"),
 	}
 
 	// Wait for Hub to be ready
@@ -557,4 +560,3 @@ func TestHubMigration_FullMigration(t *testing.T) {
 	t.Log("  ✅ Routing tokens accepted by new Hub")
 	t.Log("  ✅ Command relay infrastructure working")
 }
-

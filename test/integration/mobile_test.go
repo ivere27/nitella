@@ -68,11 +68,11 @@ func (b *ThreadSafeBuffer) String() string {
 
 // mobileTestCluster manages processes for mobile integration tests
 type mobileTestCluster struct {
-	t        *testing.T
-	hub      *hubProcess
-	nodes    []*nitelladProcess
-	mobile   *service.MobileLogicService
-	dataDir  string
+	t       *testing.T
+	hub     *hubProcess
+	nodes   []*nitelladProcess
+	mobile  *service.MobileLogicService
+	dataDir string
 }
 
 // nitelladProcess represents a running nitellad instance
@@ -139,12 +139,14 @@ func (c *mobileTestCluster) startHub() *hubProcess {
 	os.MkdirAll(hubDataDir, 0755)
 
 	grpcPort := getFreePort(c.t)
+	adminPort := getFreePort(c.t)
 	httpPort := getFreePort(c.t)
 
 	hubBin := findMobileBinary(c.t, "hub")
 
 	cmd := exec.Command(hubBin,
 		"--port", fmt.Sprintf("%d", grpcPort),
+		"--admin-port", fmt.Sprintf("%d", adminPort),
 		"--http-port", fmt.Sprintf("%d", httpPort),
 		"--db-path", filepath.Join(hubDataDir, "hub.db"),
 		"--auto-cert",
@@ -158,12 +160,13 @@ func (c *mobileTestCluster) startHub() *hubProcess {
 	}
 
 	hub := &hubProcess{
-		cmd:      cmd,
-		pid:      cmd.Process.Pid,
-		grpcAddr: fmt.Sprintf("localhost:%d", grpcPort),
-		httpAddr: fmt.Sprintf("http://localhost:%d", httpPort),
-		dataDir:  hubDataDir,
-		dbPath:   filepath.Join(hubDataDir, "hub.db"),
+		cmd:       cmd,
+		pid:       cmd.Process.Pid,
+		grpcAddr:  fmt.Sprintf("localhost:%d", grpcPort),
+		adminAddr: fmt.Sprintf("localhost:%d", adminPort),
+		httpAddr:  fmt.Sprintf("http://localhost:%d", httpPort),
+		dataDir:   hubDataDir,
+		dbPath:    filepath.Join(hubDataDir, "hub.db"),
 	}
 
 	// Wait for Hub to be ready
@@ -175,7 +178,7 @@ func (c *mobileTestCluster) startHub() *hubProcess {
 			if err == nil {
 				hub.hubCAPEM = caPEM
 			}
-			c.t.Logf("Hub started: PID=%d, gRPC=%s", hub.pid, hub.grpcAddr)
+			c.t.Logf("Hub started: PID=%d, gRPC=%s, admin=%s", hub.pid, hub.grpcAddr, hub.adminAddr)
 			c.hub = hub
 			return hub
 		}
@@ -917,7 +920,7 @@ func TestMobileDirectConnect(t *testing.T) {
 		NodeId: nodeID,
 	})
 	require.NoError(t, err)
-	
+
 	foundProxy := false
 	for _, p := range proxiesResp.Proxies {
 		if p.ProxyId == createdProxyID {
@@ -958,7 +961,7 @@ func TestMobileDirectConnect(t *testing.T) {
 	// 3. Scan logs for approval request (Workaround: ListPendingApprovals is empty on direct nodes)
 	var reqID string
 	re := regexp.MustCompile(`\[Local\] Alert generated \(pending approval\): ([0-9a-fA-F-]+) -`)
-	
+
 	for i := 0; i < 30; i++ {
 		time.Sleep(200 * time.Millisecond)
 

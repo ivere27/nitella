@@ -1338,7 +1338,7 @@ func TestRealWorld_AdminAPIAuth(t *testing.T) {
 	cluster.startHub()
 
 	// Try to access admin API without token - should fail
-	conn, err := grpc.Dial(cluster.hub.grpcAddr,
+	conn, err := grpc.Dial(cluster.hub.adminAddr,
 		grpc.WithTransportCredentials(credentials.NewTLS(getHubTLS(t, cluster))),
 	)
 	if err != nil {
@@ -2756,7 +2756,7 @@ func TestRealWorld_UserDeactivationWithActiveSessions(t *testing.T) {
 
 	// Connect as admin and deactive the user
 	adminConn, err := grpc.Dial(
-		cluster.hub.grpcAddr,
+		cluster.hub.adminAddr,
 		grpc.WithTransportCredentials(credentials.NewTLS(getHubTLS(t, cluster))),
 	)
 	if err != nil {
@@ -3170,7 +3170,7 @@ func TestRealWorld_UserDeletionCascade(t *testing.T) {
 
 	// Connect as admin and delete the user
 	adminConn, err := grpc.Dial(
-		cluster.hub.grpcAddr,
+		cluster.hub.adminAddr,
 		grpc.WithTransportCredentials(credentials.NewTLS(getHubTLS(t, cluster))),
 	)
 	if err != nil {
@@ -3247,7 +3247,7 @@ func TestRealWorld_HubctlCLIOperations(t *testing.T) {
 	hubCAPath := filepath.Join(cluster.hub.dataDir, "hub_ca.crt")
 
 	// Test hubctl stats command
-	cmd := exec.Command(hubctlBin, "stats", "--hub", cluster.hub.grpcAddr, "--tls-ca", hubCAPath)
+	cmd := exec.Command(hubctlBin, "stats", "--hub", cluster.hub.adminAddr, "--tls-ca", hubCAPath)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Logf("hubctl stats: %v\n%s", err, output)
@@ -3256,7 +3256,7 @@ func TestRealWorld_HubctlCLIOperations(t *testing.T) {
 	}
 
 	// Test hubctl users list
-	cmd = exec.Command(hubctlBin, "users", "list", "--hub", cluster.hub.grpcAddr, "--tls-ca", hubCAPath)
+	cmd = exec.Command(hubctlBin, "users", "list", "--hub", cluster.hub.adminAddr, "--tls-ca", hubCAPath)
 	output, err = cmd.CombinedOutput()
 	if err != nil {
 		t.Logf("hubctl users list: %v\n%s", err, output)
@@ -3265,7 +3265,7 @@ func TestRealWorld_HubctlCLIOperations(t *testing.T) {
 	}
 
 	// Test hubctl nodes list
-	cmd = exec.Command(hubctlBin, "nodes", "list", "--hub", cluster.hub.grpcAddr, "--tls-ca", hubCAPath)
+	cmd = exec.Command(hubctlBin, "nodes", "list", "--hub", cluster.hub.adminAddr, "--tls-ca", hubCAPath)
 	output, err = cmd.CombinedOutput()
 	if err != nil {
 		t.Logf("hubctl nodes list: %v\n%s", err, output)

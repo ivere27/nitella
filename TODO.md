@@ -10,6 +10,11 @@
   - Health check server runs on separate port without TLS or authentication
   - **Fix**: Ensure health port is firewalled from public access
 
+- [ ] **Admin Auth Hardening** - `cmd/hub/main.go`, `pkg/hub/server/server.go`
+  - Admin auth still shares the Hub JWT signing path.
+  - Current baseline should enforce `role=admin`, but we still need stronger separation for real admin credentials.
+  - **Fix**: Use a dedicated admin issuer/key (or mTLS) and lock down the admin listener with network policy / allowlist.
+
 - [ ] **Hub JWT Storage Hardening (Later)** - `pkg/service/mobile_logic_service.go:496-517`
   - Current behavior is acceptable for now: Hub JWT is stored in `hub_session.json` with `0600` permissions.
   - Later implementation: add optional OS keychain-backed storage with JSON fallback for headless/CLI environments.
@@ -74,26 +79,6 @@
 
 ---
 
-## Refactoring
-
-- [x] **Relax P2P Approval Logic** - `cmd/nitella/hub_alerts.go:tryP2PApproval`
-  - Removed `via_p2p` metadata check; now sends via P2P if connected regardless of alert source
-
-- [x] **Split pkg/hub/server/server.go**
-  - Split into: `server.go`, `mobile_server.go`, `node_server.go`, `auth_server.go`, `pairing_server.go`, `admin_server.go`
-
-- [x] **Split cmd/nitella/hub.go**
-  - Split into: `hub.go`, `hub_pairing.go`, `hub_alerts.go`, `hub_nodes.go`, `hub_logs.go`
-
-- [x] **Global Variables in cmd/nitella/hub.go**
-  - Encapsulated in `HubCLI` struct; all split files use method receivers
-
-- [x] **Duplicate libnitella.h** - Removed root copy
-
-- [x] **Dart File in Go Directory** - Removed `pkg/api/local/nitella_local_ffi.pb.dart`
-
----
-
 ## Production Readiness
 
 - [ ] **Structured Logging**: Migrate from `pkg/log` text logs to structured JSON logs (using `log/slog` or `zap`)
@@ -110,7 +95,7 @@ For 100K+ users or multi-Hub deployments:
 - [ ] **ClientCA Pool Optimization** - `pkg/hub/certmanager/certmanager.go`
   - Current: All CLI CAs loaded into memory (~1KB per user, ~100MB at 100K users)
   - Option A: TTL-based eviction for inactive CAs (reload from DB on demand)
-  - Option B: Store CA fingerprint in node cert → lookup single CA per verification
+  - Option B: Store CA fingerprint in node cert -> lookup single CA per verification
 
 - [ ] **Shard userStreams** - `pkg/hub/server/server.go`
   - Current: Single RWMutex for all user streams
@@ -122,3 +107,13 @@ For 100K+ users or multi-Hub deployments:
   - For multi-Hub: Use Redis for shared pending alerts state
   - Considerations: Alerts are ephemeral (5 min expiry), ~1KB each, no persistence needed
   - Implementation: Replace `map[string]*PendingAlert` with Redis hash + TTL
+
+---
+
+## Security Notes Summary
+
+- [ ] Harden admin auth: dedicated admin credentials, network restrictions, and strict admin-only authorization.
+- [ ] Redesign pairing so the Hub never sees the PAKE secret and cannot MITM the exchange.
+- [ ] Bind routing-token operations to the authenticated owner; add rotation/revocation and reject arbitrary tokens.
+- [ ] Lock down node registration/pairing flows with invite enforcement, expiry checks, trusted CA validation, and revocation on delete.
+- [ ] Stop exposing secrets in logs and plaintext local storage; restrict debug endpoints and offline pairing UI exposure.
