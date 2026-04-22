@@ -1,4 +1,6 @@
 use crate::proto::common::GeoInfo;
+use crate::proto::geoip::geo_ip_service_client::GeoIpServiceClient;
+use crate::proto::geoip::LookupRequest;
 use anyhow::{Context, Result};
 use maxminddb::Reader;
 use sqlx::{sqlite::SqlitePoolOptions, Pool, Row, Sqlite};
@@ -7,8 +9,9 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::fs;
-use tokio::sync::RwLock;
-use tracing::{debug, error, info};
+use tokio::sync::{Mutex, RwLock};
+use tonic::transport::{Channel, ClientTlsConfig, Endpoint};
+use tracing::{debug, error, info, warn};
 
 type MmapReader = Reader<memmap2::Mmap>;
 const DEFAULT_REMOTE_LOOKUP_TIMEOUT_MS: u64 = 3000;
@@ -22,7 +25,9 @@ pub struct L2Cache {
 impl L2Cache {
     pub async fn new(path: &str, ttl_hours: i32) -> Result<Self> {
         if let Some(parent) = Path::new(path).parent() {
-            fs::create_dir_all(parent).await?;
+            if !parent.as_os_str().is_empty() {
+                fs::create_dir_all(parent).await?;
+            }
         }
         if !Path::new(path).exists() {
             fs::File::create(path).await?;
@@ -127,6 +132,7 @@ struct GeoIPState {
 pub struct GeoIPService {
     state: Arc<RwLock<GeoIPState>>,
     http_client: reqwest::Client,
+    remote_grpc: Option<Arc<Mutex<GeoIpServiceClient<Channel>>>>,
 }
 
 impl GeoIPService {
@@ -139,12 +145,23 @@ impl GeoIPService {
         strategy_str: Option<String>,
         remote_timeout_ms: u64,
     ) -> Result<Self> {
+        let has_local_db_args = city_path
+            .as_deref()
+            .map(|path| !path.is_empty())
+            .unwrap_or(false)
+            || isp_path
+                .as_deref()
+                .map(|path| !path.is_empty())
+                .unwrap_or(false);
+
         let mut city_reader = None;
         if let Some(path) = city_path {
             if !path.is_empty() {
                 info!("Loading GeoIP City/Country DB: {}", path);
-                let reader = Reader::open_mmap(path).context("Failed to open City DB")?;
-                city_reader = Some(Arc::new(reader));
+                match Reader::open_mmap(&path) {
+                    Ok(reader) => city_reader = Some(Arc::new(reader)),
+                    Err(e) => warn!("Failed to open GeoIP City DB {}: {}", path, e),
+                }
             }
         }
 
@@ -152,8 +169,10 @@ impl GeoIPService {
         if let Some(path) = isp_path {
             if !path.is_empty() {
                 info!("Loading GeoIP ISP DB: {}", path);
-                let reader = Reader::open_mmap(path).context("Failed to open ISP DB")?;
-                isp_reader = Some(Arc::new(reader));
+                match Reader::open_mmap(&path) {
+                    Ok(reader) => isp_reader = Some(Arc::new(reader)),
+                    Err(e) => warn!("Failed to open GeoIP ISP DB {}: {}", path, e),
+                }
             }
         }
 
@@ -187,8 +206,15 @@ impl GeoIPService {
             ]
         };
 
-        let remote_providers = if let Some(addr) = remote_url {
-            vec![normalize_provider_template(&addr)]
+        let remote_grpc = if let Some(addr) = remote_url.as_deref().filter(|addr| !addr.is_empty())
+        {
+            Some(Arc::new(Mutex::new(connect_remote_geoip(addr).await?)))
+        } else {
+            None
+        };
+
+        let remote_providers = if remote_grpc.is_some() || has_local_db_args {
+            Vec::new()
         } else {
             vec![
                 "https://ipwhois.app/json/%s".to_string(),
@@ -214,6 +240,7 @@ impl GeoIPService {
         Ok(Self {
             state: Arc::new(RwLock::new(state)),
             http_client: reqwest::Client::new(),
+            remote_grpc,
         })
     }
 
@@ -226,6 +253,28 @@ impl GeoIPService {
         ip_str: &str,
         remote_timeout: Option<Duration>,
     ) -> GeoInfo {
+        if let Some(client) = &self.remote_grpc {
+            let remote_timeout = match remote_timeout {
+                Some(timeout) => timeout,
+                None => self.state.read().await.remote_timeout,
+            };
+            let lookup = async {
+                let mut client = client.lock().await;
+                client
+                    .lookup(LookupRequest {
+                        ip: ip_str.to_string(),
+                    })
+                    .await
+                    .map(|resp| resp.into_inner())
+            };
+            match tokio::time::timeout(remote_timeout, lookup).await {
+                Ok(Ok(info)) => return info,
+                Ok(Err(e)) => warn!("Remote GeoIP lookup failed for {}: {}", ip_str, e),
+                Err(_) => warn!("Remote GeoIP lookup timed out for {}", ip_str),
+            }
+            return GeoInfo::default();
+        }
+
         // Clone state to avoid holding lock during async remote call
         let state = { self.state.read().await.clone() };
         let remote_timeout = remote_timeout.unwrap_or(state.remote_timeout);
@@ -267,12 +316,12 @@ impl GeoIPService {
     fn lookup_local(&self, state: &GeoIPState, ip_str: &str) -> Option<GeoInfo> {
         let ip: IpAddr = ip_str.parse().ok()?;
         let mut info = GeoInfo::default();
+        info.source = "local-db".to_string();
         let mut found = false;
 
         if let Some(reader) = &state.city_reader {
             match reader.lookup::<maxminddb::geoip2::City>(ip) {
                 Ok(city) => {
-                    info.source = "local-city".to_string();
                     if let Some(c) = city.country {
                         if let Some(iso) = c.iso_code {
                             info.country = iso.to_string();
@@ -313,7 +362,6 @@ impl GeoIPService {
                 }
                 Err(_) => {
                     if let Ok(country) = reader.lookup::<maxminddb::geoip2::Country>(ip) {
-                        info.source = "local-country".to_string();
                         if let Some(c) = country.country {
                             if let Some(iso) = c.iso_code {
                                 info.country = iso.to_string();
@@ -327,17 +375,38 @@ impl GeoIPService {
         }
 
         if let Some(reader) = &state.isp_reader {
+            let mut isp_found = false;
             if let Ok(isp) = reader.lookup::<maxminddb::geoip2::Isp>(ip) {
                 if let Some(n) = isp.isp {
                     info.isp = n.to_string();
+                    isp_found = true;
                 }
                 if let Some(o) = isp.organization {
                     info.org = o.to_string();
+                    isp_found = true;
                 }
                 if let Some(a) = isp.autonomous_system_organization {
                     info.r#as = a.to_string();
+                    isp_found = true;
                 }
-                found = true;
+                found = found || isp_found;
+            }
+
+            if !isp_found {
+                if let Ok(asn) = reader.lookup::<maxminddb::geoip2::Asn>(ip) {
+                    if let Some(a) = asn.autonomous_system_organization {
+                        info.r#as = a.to_string();
+                        info.org = a.to_string();
+                        isp_found = true;
+                    } else if let Some(n) = asn.autonomous_system_number {
+                        info.r#as = n.to_string();
+                        isp_found = true;
+                    }
+                }
+
+                if isp_found {
+                    found = true;
+                }
             }
         }
 
@@ -359,22 +428,13 @@ impl GeoIPService {
             debug!("GeoIP Remote lookup: {}", url);
             match tokio::time::timeout(timeout, self.http_client.get(&url).send()).await {
                 Ok(Ok(resp)) => {
+                    if !resp.status().is_success() {
+                        continue;
+                    }
                     if let Ok(json) = resp.json::<serde_json::Value>().await {
-                        let mut info = GeoInfo::default();
-                        info.source = "remote".to_string();
-                        if let Some(s) = json.get("countryCode").and_then(|v| v.as_str()) {
-                            info.country_code = s.to_string();
+                        if let Some(info) = geo_info_from_remote_json(&json) {
+                            return Some(info);
                         }
-                        if let Some(s) = json.get("country").and_then(|v| v.as_str()) {
-                            info.country = s.to_string();
-                        }
-                        if let Some(s) = json.get("city").and_then(|v| v.as_str()) {
-                            info.city = s.to_string();
-                        }
-                        if let Some(s) = json.get("isp").and_then(|v| v.as_str()) {
-                            info.isp = s.to_string();
-                        }
-                        return Some(info);
                     }
                 }
                 _ => {}
@@ -394,6 +454,14 @@ impl GeoIPService {
         state.remote_providers = vec![normalize_provider_template(&url)];
     }
 
+    pub async fn set_remote_urls(&self, urls: Vec<String>) {
+        let mut state = self.state.write().await;
+        state.remote_providers = urls
+            .into_iter()
+            .map(|url| normalize_provider_template(&url))
+            .collect();
+    }
+
     pub async fn set_strategy(&self, strategy: Vec<String>) {
         let mut state = self.state.write().await;
         state.strategy = strategy;
@@ -408,8 +476,10 @@ impl GeoIPService {
         if let Some(path) = &city_path {
             if !path.is_empty() {
                 info!("Reloading GeoIP City/Country DB: {}", path);
-                let reader = Reader::open_mmap(path).context("Failed to open City DB")?;
-                new_city_reader = Some(Arc::new(reader));
+                match Reader::open_mmap(path) {
+                    Ok(reader) => new_city_reader = Some(Arc::new(reader)),
+                    Err(e) => warn!("Failed to open GeoIP City DB {}: {}", path, e),
+                }
             }
         }
 
@@ -417,18 +487,16 @@ impl GeoIPService {
         if let Some(path) = &isp_path {
             if !path.is_empty() {
                 info!("Reloading GeoIP ISP DB: {}", path);
-                let reader = Reader::open_mmap(path).context("Failed to open ISP DB")?;
-                new_isp_reader = Some(Arc::new(reader));
+                match Reader::open_mmap(path) {
+                    Ok(reader) => new_isp_reader = Some(Arc::new(reader)),
+                    Err(e) => warn!("Failed to open GeoIP ISP DB {}: {}", path, e),
+                }
             }
         }
 
         let mut state = self.state.write().await;
-        if new_city_reader.is_some() {
-            state.city_reader = new_city_reader;
-        }
-        if new_isp_reader.is_some() {
-            state.isp_reader = new_isp_reader;
-        }
+        state.city_reader = new_city_reader;
+        state.isp_reader = new_isp_reader;
         Ok(())
     }
 
@@ -484,11 +552,122 @@ impl GeoIPService {
     }
 }
 
+async fn connect_remote_geoip(addr: &str) -> Result<GeoIpServiceClient<Channel>> {
+    let endpoint = if addr.starts_with("http://") || addr.starts_with("https://") {
+        addr.to_string()
+    } else {
+        format!("https://{}", addr)
+    };
+    info!("Connecting to external GeoIP gRPC service at {}", addr);
+    let channel = Endpoint::from_shared(endpoint)?
+        .tls_config(ClientTlsConfig::new())?
+        .connect()
+        .await
+        .context("Failed to connect to GeoIP gRPC service")?;
+    Ok(GeoIpServiceClient::new(channel))
+}
+
+fn geo_info_from_remote_json(json: &serde_json::Value) -> Option<GeoInfo> {
+    if remote_json_failed(json) {
+        return None;
+    }
+
+    let mut info = GeoInfo::default();
+    info.source = "remote".to_string();
+    info.country = json_string(json, &["country", "country_name", "countryName"]);
+    info.country_code = json_string(json, &["countryCode", "country_code", "country_iso_code"]);
+    info.region = json_string(json, &["region", "region_code", "regionName"]);
+    info.region_name = json_string(json, &["regionName", "region_name", "region"]);
+    info.city = json_string(json, &["city", "city_name", "cityName"]);
+    info.zip = json_string(json, &["zip", "postal", "postal_code", "zipCode"]);
+    info.timezone = json_string(
+        json,
+        &[
+            "timezone",
+            "time_zone",
+            "timezone_id",
+            "timeZone",
+            "timezone.id",
+            "time_zone.id",
+        ],
+    );
+    info.latitude = json_f64(json, &["lat", "latitude"]);
+    info.longitude = json_f64(json, &["lon", "longitude"]);
+    info.isp = json_string(json, &["isp", "connection.isp"]);
+    info.org = json_string(json, &["org", "connection.org"]);
+    info.r#as = json_string(json, &["as", "as_org", "asn", "connection.asn"]);
+
+    if info.country_code.is_empty() && info.country.is_empty() && info.city.is_empty() {
+        return None;
+    }
+
+    Some(info)
+}
+
+fn remote_json_failed(json: &serde_json::Value) -> bool {
+    json_path(json, "status")
+        .and_then(|v| v.as_str())
+        .map(|status| status.eq_ignore_ascii_case("fail"))
+        .unwrap_or(false)
+        || json_path(json, "success")
+            .and_then(|v| v.as_bool())
+            .map(|success| !success)
+            .unwrap_or(false)
+}
+
+fn json_string(json: &serde_json::Value, paths: &[&str]) -> String {
+    paths
+        .iter()
+        .find_map(|path| json_path(json, path).and_then(value_to_string))
+        .unwrap_or_default()
+}
+
+fn json_f64(json: &serde_json::Value, paths: &[&str]) -> f64 {
+    paths
+        .iter()
+        .find_map(|path| json_path(json, path).and_then(value_to_f64))
+        .unwrap_or_default()
+}
+
+fn json_path<'a>(json: &'a serde_json::Value, path: &str) -> Option<&'a serde_json::Value> {
+    let mut current = json;
+    for part in path.split('.') {
+        current = current.get(part)?;
+    }
+    Some(current)
+}
+
+fn value_to_string(value: &serde_json::Value) -> Option<String> {
+    if let Some(s) = value.as_str() {
+        if !s.is_empty() {
+            return Some(s.to_string());
+        }
+        return None;
+    }
+    if let Some(n) = value.as_i64() {
+        return Some(n.to_string());
+    }
+    if let Some(n) = value.as_u64() {
+        return Some(n.to_string());
+    }
+    value.as_f64().map(|n| n.to_string())
+}
+
+fn value_to_f64(value: &serde_json::Value) -> Option<f64> {
+    if let Some(n) = value.as_f64() {
+        return Some(n);
+    }
+    value.as_str()?.parse::<f64>().ok()
+}
+
 fn normalize_provider_template(provider: &str) -> String {
+    let provider = provider.trim_end_matches('/');
     if provider.contains("%s") {
         provider.to_string()
+    } else if provider.contains("{ip}") {
+        provider.replace("{ip}", "%s")
     } else {
-        format!("{}/%s", provider.trim_end_matches('/'))
+        format!("{provider}/%s")
     }
 }
 
@@ -514,7 +693,10 @@ fn is_non_public_ip(ip_str: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{is_non_public_ip, normalize_provider_template};
+    use super::{
+        geo_info_from_remote_json, is_non_public_ip, normalize_provider_template, GeoIPService,
+    };
+    use serde_json::json;
 
     #[test]
     fn normalize_provider_template_handles_base_and_template() {
@@ -526,6 +708,10 @@ mod tests {
             normalize_provider_template("https://example.com/json/%s"),
             "https://example.com/json/%s"
         );
+        assert_eq!(
+            normalize_provider_template("https://example.com/json/{ip}"),
+            "https://example.com/json/%s"
+        );
     }
 
     #[test]
@@ -535,6 +721,86 @@ mod tests {
         assert!(is_non_public_ip("192.168.1.20"));
         assert!(is_non_public_ip("::1"));
         assert!(!is_non_public_ip("8.8.8.8"));
+    }
+
+    #[tokio::test]
+    async fn default_remote_providers_match_go_cli_mode() {
+        let embedded = GeoIPService::new(None, None, None, None, 24, None, 3000)
+            .await
+            .unwrap();
+        assert_eq!(embedded.state.read().await.remote_providers.len(), 2);
+
+        let local_configured = GeoIPService::new(
+            Some("/no/such/GeoLite2-City.mmdb".to_string()),
+            None,
+            None,
+            None,
+            24,
+            None,
+            3000,
+        )
+        .await
+        .unwrap();
+        assert!(local_configured
+            .state
+            .read()
+            .await
+            .remote_providers
+            .is_empty());
+    }
+
+    #[tokio::test]
+    async fn reload_local_db_warns_and_clears_on_bad_paths() {
+        let service = GeoIPService::new(None, None, None, None, 24, None, 3000)
+            .await
+            .unwrap();
+
+        service
+            .reload_local_db(Some("/no/such/GeoLite2-City.mmdb".to_string()), None)
+            .await
+            .unwrap();
+
+        let state = service.state.read().await;
+        assert!(state.city_reader.is_none());
+        assert!(state.isp_reader.is_none());
+    }
+
+    #[test]
+    fn remote_json_parser_handles_common_provider_shapes() {
+        let ipwhois = json!({
+            "country": "United States",
+            "country_code": "US",
+            "city": "Mountain View",
+            "connection": {
+                "isp": "Example ISP",
+                "org": "Example Org",
+                "asn": 15169
+            }
+        });
+        let parsed = geo_info_from_remote_json(&ipwhois).unwrap();
+        assert_eq!(parsed.country_code, "US");
+        assert_eq!(parsed.isp, "Example ISP");
+        assert_eq!(parsed.r#as, "15169");
+
+        let free_ip_api = json!({
+            "countryName": "Japan",
+            "countryCode": "JP",
+            "cityName": "Tokyo",
+            "latitude": "35.6895",
+            "longitude": 139.6917
+        });
+        let parsed = geo_info_from_remote_json(&free_ip_api).unwrap();
+        assert_eq!(parsed.country, "Japan");
+        assert_eq!(parsed.city, "Tokyo");
+        assert_eq!(parsed.latitude, 35.6895);
+        assert_eq!(parsed.longitude, 139.6917);
+    }
+
+    #[test]
+    fn remote_json_parser_rejects_failures_and_empty_payloads() {
+        assert!(geo_info_from_remote_json(&json!({"status": "fail"})).is_none());
+        assert!(geo_info_from_remote_json(&json!({"success": false})).is_none());
+        assert!(geo_info_from_remote_json(&json!({"isp": "only isp"})).is_none());
     }
 }
 

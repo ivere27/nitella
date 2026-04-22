@@ -38,8 +38,11 @@ pub mod manager;
 pub mod pairing_offline;
 pub mod process_proxy;
 pub mod proxy;
+pub mod ratelimit;
 pub mod rules;
 pub mod server;
+#[cfg(target_os = "linux")]
+pub mod splice;
 pub mod stats;
 pub mod synurang;
 

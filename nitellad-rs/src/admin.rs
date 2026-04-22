@@ -1,5 +1,7 @@
 use sha2::Digest;
+use std::collections::HashMap;
 use std::sync::Arc;
+use std::sync::Mutex;
 use tokio::sync::broadcast;
 use tokio::sync::mpsc;
 use tokio::sync::RwLock;
@@ -9,7 +11,7 @@ use tracing::{error, info, warn};
 use uuid::Uuid;
 
 use crate::crypto;
-use crate::proto::common::{EncryptedPayload, SecureCommandPayload};
+use crate::proto::common::{ApprovalRetentionMode, SecureCommandPayload};
 use crate::proto::hub::{CommandResult, CommandType, EncryptedCommandPayload};
 use crate::proto::process::{event, Event};
 use ed25519_dalek::{SigningKey, VerifyingKey};
@@ -20,15 +22,22 @@ use crate::proto::proxy::proxy_control_service_server::ProxyControlService;
 use crate::proto::proxy::*;
 use crate::rules::RuleEngine;
 
+const REPLAY_WINDOW_SECONDS: i64 = 60;
+const REPLAY_CACHE_EXPIRY_SECONDS: i64 = 300;
+const MAX_REPLAY_CACHE_SIZE: usize = 10_000;
+const DEFAULT_APPROVAL_DURATION_SECONDS: i64 = 300;
+
 pub struct AdminServer {
     manager: Arc<ProxyManager>,
     #[allow(dead_code)]
     #[allow(dead_code)]
     global_rules: Arc<RwLock<RuleEngine>>,
     signing_key: SigningKey,
+    #[allow(dead_code)]
     verifying_key: VerifyingKey,
     fingerprint: String,
     event_tx: broadcast::Sender<Event>, // Added event_tx
+    replay_cache: Mutex<HashMap<String, i64>>,
 }
 
 impl AdminServer {
@@ -50,7 +59,43 @@ impl AdminServer {
             verifying_key,
             fingerprint,
             event_tx,
+            replay_cache: Mutex::new(HashMap::new()),
         }
+    }
+
+    fn validate_replay(&self, payload: &SecureCommandPayload) -> Result<(), String> {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs() as i64;
+
+        if payload.timestamp < now - REPLAY_WINDOW_SECONDS
+            || payload.timestamp > now + REPLAY_WINDOW_SECONDS
+        {
+            return Err("timestamp out of range".to_string());
+        }
+
+        let mut cache = self
+            .replay_cache
+            .lock()
+            .map_err(|_| "replay cache unavailable".to_string())?;
+        cache.retain(|_, ts| now - *ts <= REPLAY_CACHE_EXPIRY_SECONDS);
+        if cache.contains_key(&payload.request_id) {
+            return Err("duplicate request".to_string());
+        }
+        if cache.len() >= MAX_REPLAY_CACHE_SIZE {
+            cache.clear();
+        }
+        cache.insert(payload.request_id.clone(), now);
+        Ok(())
+    }
+
+    fn send_command_error(message: &str) -> Response<SendCommandResponse> {
+        Response::new(SendCommandResponse {
+            encrypted: None,
+            status: "ERROR".to_string(),
+            error_message: message.to_string(),
+        })
     }
 }
 
@@ -62,31 +107,62 @@ impl ProxyControlService for AdminServer {
     ) -> Result<Response<SendCommandResponse>, Status> {
         info!("Admin: Received SendCommand request");
         let req = request.into_inner();
-        let enc_payload = req
-            .encrypted
-            .ok_or(Status::invalid_argument("Missing encrypted payload"))?;
         let viewer_pk_bytes = req.viewer_pubkey;
 
-        let viewer_pk = VerifyingKey::from_bytes(
-            viewer_pk_bytes
-                .as_slice()
-                .try_into()
-                .map_err(|_| Status::invalid_argument("Invalid viewer key"))?,
-        )
-        .map_err(|_| Status::invalid_argument("Invalid viewer key"))?;
+        let viewer_pk = match viewer_pk_bytes.as_slice().try_into() {
+            Ok(bytes) => match VerifyingKey::from_bytes(bytes) {
+                Ok(key) => key,
+                Err(_) => {
+                    return Ok(Self::send_command_error(
+                        "viewer_pubkey must be 32 bytes Ed25519",
+                    ));
+                }
+            },
+            Err(_) => {
+                return Ok(Self::send_command_error(
+                    "viewer_pubkey must be 32 bytes Ed25519",
+                ));
+            }
+        };
+
+        let enc_payload = match req.encrypted {
+            Some(payload) => payload,
+            None => return Ok(Self::send_command_error("encrypted payload is required")),
+        };
 
         // Decrypt
-        let decrypted = crypto::decrypt(&enc_payload, &self.signing_key)
-            .map_err(|e| Status::internal(format!("Decryption failed: {}", e)))?;
+        let decrypted = match crypto::decrypt(&enc_payload, &self.signing_key) {
+            Ok(data) => data,
+            Err(e) => {
+                warn!("Admin: decryption failed: {}", e);
+                return Ok(Self::send_command_error("decryption failed"));
+            }
+        };
 
-        let secure_cmd = SecureCommandPayload::decode(decrypted.as_slice()).map_err(|e| {
-            Status::invalid_argument(format!("Invalid SecureCommandPayload: {}", e))
-        })?;
+        let secure_cmd = match SecureCommandPayload::decode(decrypted.as_slice()) {
+            Ok(payload) => payload,
+            Err(e) => {
+                warn!("Admin: invalid secure payload: {}", e);
+                return Ok(Self::send_command_error("invalid secure payload"));
+            }
+        };
 
-        let cmd_payload =
-            EncryptedCommandPayload::decode(secure_cmd.data.as_slice()).map_err(|e| {
-                Status::invalid_argument(format!("Invalid EncryptedCommandPayload: {}", e))
-            })?;
+        if let Err(err_msg) = self.validate_replay(&secure_cmd) {
+            warn!("Admin: replay protection rejected command: {}", err_msg);
+            return Ok(Response::new(SendCommandResponse {
+                encrypted: None,
+                status: "ERROR".to_string(),
+                error_message: err_msg,
+            }));
+        }
+
+        let cmd_payload = match EncryptedCommandPayload::decode(secure_cmd.data.as_slice()) {
+            Ok(payload) => payload,
+            Err(e) => {
+                warn!("Admin: invalid command payload: {}", e);
+                return Ok(Self::send_command_error("invalid command payload"));
+            }
+        };
 
         let (status, err_msg, data) = self
             .dispatch_command(cmd_payload.r#type, cmd_payload.payload)
@@ -101,18 +177,23 @@ impl ProxyControlService for AdminServer {
         // Encrypt response
         let result_bytes = result.encode_to_vec();
 
-        let encrypted_resp = crypto::encrypt(
+        let encrypted_resp = match crypto::encrypt(
             &result_bytes,
             &viewer_pk,
             &self.signing_key,
             &self.fingerprint,
-        )
-        .map_err(|e| Status::internal(format!("Encryption failed: {}", e)))?;
+        ) {
+            Ok(payload) => payload,
+            Err(e) => {
+                warn!("Admin: failed to encrypt response: {}", e);
+                return Ok(Self::send_command_error("failed to encrypt response"));
+            }
+        };
 
         Ok(Response::new(SendCommandResponse {
             encrypted: Some(encrypted_resp),
             status,
-            error_message: err_msg,
+            error_message: String::new(),
         }))
     }
 
@@ -210,6 +291,9 @@ impl ProxyControlService for AdminServer {
 
         tokio::spawn(async move {
             let mut interval = tokio::time::interval(std::time::Duration::from_secs(interval_secs));
+            let mut prev_bytes_in = 0;
+            let mut prev_bytes_out = 0;
+            let mut prev_timestamp = 0;
             loop {
                 interval.tick().await;
 
@@ -227,12 +311,26 @@ impl ProxyControlService for AdminServer {
                     bytes_out += s.bytes_out;
                 }
 
-                let resp = StatsSummaryResponse {
-                    total_connections: total_conns,
-                    total_bytes_in: bytes_in,
-                    total_bytes_out: bytes_out,
-                    active_connections: active_conns,
-                    proxy_count: statuses.len() as i32,
+                let now = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs() as i64;
+                let mut bytes_in_rate = 0;
+                let mut bytes_out_rate = 0;
+                if prev_timestamp > 0 {
+                    let elapsed = now - prev_timestamp;
+                    if elapsed > 0 {
+                        bytes_in_rate = (bytes_in - prev_bytes_in) / elapsed;
+                        bytes_out_rate = (bytes_out - prev_bytes_out) / elapsed;
+                    }
+                }
+
+                let resp = MetricsSample {
+                    timestamp: now,
+                    active_conns,
+                    total_conns,
+                    bytes_in_rate,
+                    bytes_out_rate,
                     ..Default::default()
                 };
 
@@ -242,7 +340,7 @@ impl ProxyControlService for AdminServer {
                     Ok(encrypted) => {
                         let stream_payload = EncryptedStreamPayload {
                             encrypted: Some(encrypted),
-                            payload_type: "StatsSummaryResponse".to_string(), // Matches Go implementation
+                            payload_type: "MetricsSample".to_string(),
                         };
                         if tx.send(Ok(stream_payload)).await.is_err() {
                             break;
@@ -252,6 +350,9 @@ impl ProxyControlService for AdminServer {
                         error!("Failed to encrypt metrics: {}", e);
                     }
                 }
+                prev_bytes_in = bytes_in;
+                prev_bytes_out = bytes_out;
+                prev_timestamp = now;
             }
         });
 
@@ -272,7 +373,8 @@ impl AdminServer {
             CommandType::DisableProxy => self.handle_disable_proxy(payload).await,
             CommandType::UpdateProxy => self.handle_update_proxy(payload).await,
             CommandType::RestartListeners => self.handle_restart_listeners().await,
-            CommandType::Status | CommandType::GetMetrics => self.handle_status().await,
+            CommandType::Status => self.handle_status().await,
+            CommandType::GetMetrics | CommandType::StatsControl => self.handle_get_metrics().await,
             CommandType::ListRules => self.handle_list_rules(payload).await,
             CommandType::AddRule => self.handle_add_rule(payload).await,
             CommandType::RemoveRule => self.handle_remove_rule(payload).await,
@@ -285,7 +387,7 @@ impl AdminServer {
             CommandType::CloseConnection => self.handle_close_connection(payload).await,
             CommandType::CloseAllConnections => self.handle_close_all_connections(payload).await,
             CommandType::ResolveApproval => self.handle_resolve_approval(payload).await,
-            CommandType::ListActiveApprovals => self.handle_list_active_approvals().await,
+            CommandType::ListActiveApprovals => self.handle_list_active_approvals(payload).await,
             CommandType::CancelApproval => self.handle_cancel_approval(payload).await,
             CommandType::ConfigureGeoip => self.handle_configure_geoip(payload).await,
             CommandType::GetGeoipStatus => self.handle_get_geoip_status(payload).await,
@@ -320,7 +422,7 @@ impl AdminServer {
                             error_message: e.to_string(),
                             proxy_id: "".to_string(),
                         };
-                        ("ERROR".to_string(), e.to_string(), resp.encode_to_vec())
+                        ("OK".to_string(), "".to_string(), resp.encode_to_vec())
                     }
                 }
             }
@@ -336,7 +438,9 @@ impl AdminServer {
         match DeleteProxyRequest::decode(payload.as_slice()) {
             Ok(req) => {
                 info!("Admin: DeleteProxy {}", req.proxy_id);
-                match self.manager.delete_proxy(&req.proxy_id).await {
+                // Match Go's direct Admin API: DeleteProxy disables the proxy
+                // but preserves its model for a later EnableProxy.
+                match self.manager.disable_proxy(&req.proxy_id).await {
                     Ok(_) => {
                         let resp = DeleteProxyResponse {
                             success: true,
@@ -349,7 +453,7 @@ impl AdminServer {
                             success: false,
                             error_message: e.to_string(),
                         };
-                        ("ERROR".to_string(), e.to_string(), resp.encode_to_vec())
+                        ("OK".to_string(), "".to_string(), resp.encode_to_vec())
                     }
                 }
             }
@@ -371,7 +475,11 @@ impl AdminServer {
         match EnableProxyRequest::decode(payload.as_slice()) {
             Ok(req) => {
                 if let Err(e) = self.manager.enable_proxy(&req.proxy_id).await {
-                    return ("ERROR".to_string(), e.to_string(), vec![]);
+                    let resp = EnableProxyResponse {
+                        success: false,
+                        error_message: e.to_string(),
+                    };
+                    return ("OK".to_string(), "".to_string(), resp.encode_to_vec());
                 }
                 let resp = EnableProxyResponse {
                     success: true,
@@ -391,7 +499,11 @@ impl AdminServer {
         match DisableProxyRequest::decode(payload.as_slice()) {
             Ok(req) => {
                 if let Err(e) = self.manager.disable_proxy(&req.proxy_id).await {
-                    return ("ERROR".to_string(), e.to_string(), vec![]);
+                    let resp = DisableProxyResponse {
+                        success: false,
+                        error_message: e.to_string(),
+                    };
+                    return ("OK".to_string(), "".to_string(), resp.encode_to_vec());
                 }
                 let resp = DisableProxyResponse {
                     success: true,
@@ -417,7 +529,13 @@ impl AdminServer {
                     };
                     ("OK".to_string(), "".to_string(), resp.encode_to_vec())
                 }
-                Err(e) => ("ERROR".to_string(), e.to_string(), vec![]),
+                Err(e) => {
+                    let resp = UpdateProxyResponse {
+                        success: false,
+                        error_message: e.to_string(),
+                    };
+                    ("OK".to_string(), "".to_string(), resp.encode_to_vec())
+                }
             },
             Err(e) => (
                 "ERROR".to_string(),
@@ -438,6 +556,14 @@ impl AdminServer {
     }
 
     async fn handle_status(&self) -> (String, String, Vec<u8>) {
+        self.stats_summary_response().await
+    }
+
+    async fn handle_get_metrics(&self) -> (String, String, Vec<u8>) {
+        self.stats_summary_response().await
+    }
+
+    async fn stats_summary_response(&self) -> (String, String, Vec<u8>) {
         let statuses = self.manager.list_proxies().await;
 
         let mut total_conns: i64 = 0;
@@ -465,6 +591,7 @@ impl AdminServer {
             total_bytes_out: bytes_out,
             active_connections: active_conns,
             proxy_count: statuses.len() as i32,
+            timestamp: Some(prost_types::Timestamp::from(std::time::SystemTime::now())),
             ..Default::default()
         };
 
@@ -499,14 +626,17 @@ impl AdminServer {
                     if rule.id.is_empty() {
                         rule.id = Uuid::new_v4().to_string();
                     }
-                    let rule_id = rule.id.clone();
                     match self.manager.add_rule(&req.proxy_id, rule.clone()).await {
-                        Ok(_) => {
+                        Ok(created_rule) => {
                             info!(
                                 "Admin: Added rule {} ({}) to proxy {}",
-                                rule.name, rule_id, req.proxy_id
+                                created_rule.name, created_rule.id, req.proxy_id
                             );
-                            ("OK".to_string(), "".to_string(), rule.encode_to_vec())
+                            (
+                                "OK".to_string(),
+                                "".to_string(),
+                                created_rule.encode_to_vec(),
+                            )
                         }
                         Err(e) => ("ERROR".to_string(), e.to_string(), vec![]),
                     }
@@ -730,14 +860,28 @@ impl AdminServer {
                     req.req_id, allowed, req.retention_mode, req.duration_seconds
                 );
 
+                let mut retention_mode = ApprovalRetentionMode::try_from(req.retention_mode)
+                    .unwrap_or(ApprovalRetentionMode::Cache);
+                if retention_mode == ApprovalRetentionMode::Unspecified {
+                    retention_mode = ApprovalRetentionMode::Cache;
+                }
+                let mut duration_seconds = req.duration_seconds;
+                if retention_mode == ApprovalRetentionMode::Cache && duration_seconds <= 0 {
+                    duration_seconds = DEFAULT_APPROVAL_DURATION_SECONDS;
+                }
+                if retention_mode == ApprovalRetentionMode::ConnectionOnly && duration_seconds < 0 {
+                    duration_seconds = 0;
+                }
+
                 let resolved = self
                     .manager
                     .approval_manager
                     .resolve_with_retention(
                         &req.req_id,
                         allowed,
-                        req.duration_seconds,
-                        req.retention_mode,
+                        duration_seconds,
+                        &req.reason,
+                        retention_mode as i32,
                     )
                     .await;
                 if resolved {
@@ -766,12 +910,30 @@ impl AdminServer {
         }
     }
 
-    async fn handle_list_active_approvals(&self) -> (String, String, Vec<u8>) {
+    async fn handle_list_active_approvals(&self, payload: Vec<u8>) -> (String, String, Vec<u8>) {
+        let req = if payload.is_empty() {
+            ListActiveApprovalsRequest::default()
+        } else {
+            match ListActiveApprovalsRequest::decode(payload.as_slice()) {
+                Ok(req) => req,
+                Err(e) => {
+                    return (
+                        "ERROR".to_string(),
+                        format!("Invalid request: {}", e),
+                        vec![],
+                    );
+                }
+            }
+        };
         let entries = self.manager.approval_manager.list_active().await;
         info!("Admin: List active approvals: {} entries", entries.len());
 
         let approvals: Vec<ActiveApproval> = entries
             .into_iter()
+            .filter(|e| {
+                (req.proxy_id.is_empty() || e.proxy_id == req.proxy_id)
+                    && (req.source_ip.is_empty() || e.source_ip == req.source_ip)
+            })
             .map(|e| ActiveApproval {
                 key: e.key,
                 source_ip: e.source_ip,
@@ -791,9 +953,9 @@ impl AdminServer {
                 geo_country: e.geo_country,
                 geo_city: e.geo_city,
                 geo_isp: e.geo_isp,
-                tls_session_id: "".to_string(),
+                tls_session_id: e.tls_session_id,
                 blocked_count: e.blocked_count,
-                conn_ids: vec![],
+                conn_ids: e.conn_ids,
             })
             .collect();
 
@@ -805,13 +967,28 @@ impl AdminServer {
         match CancelApprovalRequest::decode(payload.as_slice()) {
             Ok(req) => {
                 info!("Admin: Cancel approval: {}", req.key);
-                let success = self.manager.cancel_approval(&req.key).await;
+                let (success, connections_closed) = self
+                    .manager
+                    .cancel_approval_with_close(&req.key, req.close_connections)
+                    .await;
                 let resp = CancelApprovalResponse {
                     success,
-                    error_message: "".to_string(),
-                    connections_closed: 0,
+                    error_message: if success {
+                        "".to_string()
+                    } else {
+                        "Approval not found".to_string()
+                    },
+                    connections_closed,
                 };
-                ("OK".to_string(), "".to_string(), resp.encode_to_vec())
+                if success {
+                    ("OK".to_string(), "".to_string(), resp.encode_to_vec())
+                } else {
+                    (
+                        "ERROR".to_string(),
+                        "Approval not found".to_string(),
+                        resp.encode_to_vec(),
+                    )
+                }
             }
             Err(e) => (
                 "ERROR".to_string(),
@@ -825,11 +1002,13 @@ impl AdminServer {
         match LookupIpRequest::decode(payload.as_slice()) {
             Ok(req) => {
                 info!("Admin: Lookup IP: {}", req.ip);
+                let start = std::time::Instant::now();
                 let info = self.manager.lookup_ip(&req.ip).await;
+                let elapsed = start.elapsed().as_millis() as i64;
                 let resp = LookupIpResponse {
                     geo: Some(info),
-                    cached: false,
-                    lookup_time_ms: 0,
+                    cached: elapsed < 5,
+                    lookup_time_ms: elapsed,
                 };
                 ("OK".to_string(), "".to_string(), resp.encode_to_vec())
             }
@@ -856,33 +1035,28 @@ impl AdminServer {
                     Some(req.isp_db_path)
                 };
 
-                let mut remote_url = if !req.provider.is_empty() {
-                    let url = match req.provider.as_str() {
-                        "ip-api" => "http://ip-api.com/json/{ip}".to_string(),
-                        "ipinfo" => {
-                            if !req.api_key.is_empty() {
-                                format!("https://ipinfo.io/{{ip}}?token={}", req.api_key)
-                            } else {
-                                "https://ipinfo.io/{ip}".to_string()
-                            }
-                        }
-                        // Fallback: assume custom URL or provider name to use as-is (though {ip} replacement is needed)
-                        custom => custom.to_string(),
-                    };
-                    Some(url)
+                let remote_urls = if req.mode == 1 {
+                    Some(
+                        req.provider
+                            .split(',')
+                            .map(str::trim)
+                            .filter(|provider| !provider.is_empty())
+                            .map(ToString::to_string)
+                            .collect::<Vec<_>>(),
+                    )
                 } else {
                     None
                 };
 
                 let strategy = match req.mode {
-                    0 => Some("local,remote".to_string()), // MODE_LOCAL_DB
-                    1 => Some("remote,local".to_string()), // MODE_REMOTE_API
+                    0 => Some("l1,local".to_string()),  // MODE_LOCAL_DB
+                    1 => Some("l1,remote".to_string()), // MODE_REMOTE_API
                     _ => None,
                 };
 
                 match self
                     .manager
-                    .configure_geoip(city_db, isp_db, remote_url, strategy)
+                    .configure_geoip(city_db, isp_db, remote_urls, strategy)
                     .await
                 {
                     Ok(_) => {
@@ -905,37 +1079,387 @@ impl AdminServer {
 
     async fn handle_get_geoip_status(&self, _payload: Vec<u8>) -> (String, String, Vec<u8>) {
         let status = self.manager.get_geoip_status().await;
-
-        let mode = if status.strategy.contains(&"remote".to_string())
-            && status.strategy.contains(&"local".to_string())
-        {
-            "hybrid".to_string()
-        } else if status.strategy.contains(&"remote".to_string()) {
-            "remote".to_string()
-        } else if status.strategy.contains(&"local".to_string()) {
-            "local".to_string()
-        } else {
-            "disabled".to_string()
-        };
-
         let resp = GetGeoIpStatusResponse {
             enabled: status.enabled,
-            mode,
-            city_db_path: if status.city_db_loaded {
-                "Loaded".to_string()
+            mode: if status.enabled {
+                "embedded".to_string()
             } else {
-                "".to_string()
+                "disabled".to_string()
             },
-            isp_db_path: if status.isp_db_loaded {
-                "Loaded".to_string()
+            city_db_path: String::new(),
+            isp_db_path: String::new(),
+            provider: String::new(),
+            strategy: if status.enabled {
+                vec![
+                    "l1".to_string(),
+                    "l2".to_string(),
+                    "local".to_string(),
+                    "remote".to_string(),
+                ]
             } else {
-                "".to_string()
+                vec![]
             },
-            provider: status.remote_providers.first().cloned().unwrap_or_default(),
-            strategy: status.strategy,
             cache_hits: 0,
             cache_misses: 0,
         };
         ("OK".to_string(), "".to_string(), resp.encode_to_vec())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::approval::ApprovalManager;
+    use crate::geoip::GeoIPService;
+    use crate::proto::common::EncryptedPayload;
+    use crate::stats::StatsService;
+    use base64::{engine::general_purpose, Engine as _};
+
+    fn signing_key(seed: u8) -> SigningKey {
+        SigningKey::from_bytes(&[seed; 32])
+    }
+
+    async fn test_admin_server(signing_key: SigningKey) -> AdminServer {
+        let geoip = Arc::new(
+            GeoIPService::new(None, None, None, None, 24, None, 3000)
+                .await
+                .unwrap(),
+        );
+        let global_rules = Arc::new(RwLock::new(RuleEngine::new(vec![])));
+        let approval_manager = Arc::new(ApprovalManager::new());
+        let (event_tx, _) = broadcast::channel(16);
+        let stats = Arc::new(StatsService::new(event_tx.clone()));
+        let manager = Arc::new(ProxyManager::new(
+            geoip,
+            global_rules.clone(),
+            stats,
+            None,
+            false,
+            approval_manager,
+        ));
+        let verifying_key = signing_key.verifying_key();
+        AdminServer::new(manager, global_rules, signing_key, verifying_key, event_tx)
+    }
+
+    fn encrypted_status_request(
+        node_key: &SigningKey,
+        viewer_key: &SigningKey,
+        request_id: &str,
+    ) -> SendCommandRequest {
+        encrypted_command_request(
+            node_key,
+            viewer_key,
+            request_id,
+            CommandType::Status as i32,
+            vec![],
+        )
+    }
+
+    fn encrypted_command_request(
+        node_key: &SigningKey,
+        viewer_key: &SigningKey,
+        request_id: &str,
+        command_type: i32,
+        payload: Vec<u8>,
+    ) -> SendCommandRequest {
+        let cmd = EncryptedCommandPayload {
+            r#type: command_type,
+            payload,
+        };
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64;
+        let secure = SecureCommandPayload {
+            request_id: request_id.to_string(),
+            timestamp: now,
+            data: cmd.encode_to_vec(),
+        };
+        let encrypted = crypto::encrypt(
+            &secure.encode_to_vec(),
+            &node_key.verifying_key(),
+            viewer_key,
+            "viewer",
+        )
+        .unwrap();
+        SendCommandRequest {
+            viewer_pubkey: viewer_key.verifying_key().as_bytes().to_vec(),
+            encrypted: Some(encrypted),
+        }
+    }
+
+    #[tokio::test]
+    async fn send_command_invalid_viewer_key_returns_go_style_error_response() {
+        let server = test_admin_server(signing_key(1)).await;
+        let resp = server
+            .send_command(Request::new(SendCommandRequest {
+                viewer_pubkey: vec![1, 2, 3],
+                encrypted: None,
+            }))
+            .await
+            .unwrap()
+            .into_inner();
+
+        assert_eq!(resp.status, "ERROR");
+        assert_eq!(resp.error_message, "viewer_pubkey must be 32 bytes Ed25519");
+        assert!(resp.encrypted.is_none());
+    }
+
+    #[tokio::test]
+    async fn send_command_missing_encrypted_payload_returns_go_style_error_response() {
+        let server = test_admin_server(signing_key(1)).await;
+        let viewer = signing_key(2);
+        let resp = server
+            .send_command(Request::new(SendCommandRequest {
+                viewer_pubkey: viewer.verifying_key().as_bytes().to_vec(),
+                encrypted: None,
+            }))
+            .await
+            .unwrap()
+            .into_inner();
+
+        assert_eq!(resp.status, "ERROR");
+        assert_eq!(resp.error_message, "encrypted payload is required");
+        assert!(resp.encrypted.is_none());
+    }
+
+    #[tokio::test]
+    async fn send_command_decryption_failure_returns_go_style_error_response() {
+        let server = test_admin_server(signing_key(1)).await;
+        let viewer = signing_key(2);
+        let resp = server
+            .send_command(Request::new(SendCommandRequest {
+                viewer_pubkey: viewer.verifying_key().as_bytes().to_vec(),
+                encrypted: Some(EncryptedPayload::default()),
+            }))
+            .await
+            .unwrap()
+            .into_inner();
+
+        assert_eq!(resp.status, "ERROR");
+        assert_eq!(resp.error_message, "decryption failed");
+        assert!(resp.encrypted.is_none());
+    }
+
+    #[tokio::test]
+    async fn send_command_replay_duplicate_returns_go_style_error_response() {
+        let node = signing_key(1);
+        let viewer = signing_key(2);
+        let server = test_admin_server(node.clone()).await;
+        let req = encrypted_status_request(&node, &viewer, "duplicate-request");
+
+        let first = server
+            .send_command(Request::new(req.clone()))
+            .await
+            .unwrap()
+            .into_inner();
+        assert_eq!(first.status, "OK");
+        assert!(first.encrypted.is_some());
+
+        let second = server
+            .send_command(Request::new(req))
+            .await
+            .unwrap()
+            .into_inner();
+        assert_eq!(second.status, "ERROR");
+        assert_eq!(second.error_message, "duplicate request");
+        assert!(second.encrypted.is_none());
+    }
+
+    #[tokio::test]
+    async fn send_command_empty_request_id_is_replay_checked() {
+        let node = signing_key(1);
+        let viewer = signing_key(2);
+        let server = test_admin_server(node.clone()).await;
+        let req = encrypted_status_request(&node, &viewer, "");
+
+        let first = server
+            .send_command(Request::new(req.clone()))
+            .await
+            .unwrap()
+            .into_inner();
+        assert_eq!(first.status, "OK");
+        assert!(first.encrypted.is_some());
+
+        let second = server
+            .send_command(Request::new(req))
+            .await
+            .unwrap()
+            .into_inner();
+        assert_eq!(second.status, "ERROR");
+        assert_eq!(second.error_message, "duplicate request");
+        assert!(second.encrypted.is_none());
+    }
+
+    #[tokio::test]
+    async fn send_command_dispatch_error_stays_inside_encrypted_result() {
+        let node = signing_key(1);
+        let viewer = signing_key(2);
+        let server = test_admin_server(node.clone()).await;
+        let req = encrypted_command_request(
+            &node,
+            &viewer,
+            "dispatch-error",
+            CommandType::CloseConnection as i32,
+            CloseConnectionRequest {
+                proxy_id: "missing-proxy".to_string(),
+                conn_id: "missing-conn".to_string(),
+            }
+            .encode_to_vec(),
+        );
+
+        let resp = server
+            .send_command(Request::new(req))
+            .await
+            .unwrap()
+            .into_inner();
+        assert_eq!(resp.status, "ERROR");
+        assert_eq!(resp.error_message, "");
+
+        let encrypted = resp.encrypted.as_ref().unwrap();
+        let plaintext = crypto::decrypt(encrypted, &viewer).unwrap();
+        let result = CommandResult::decode(plaintext.as_slice()).unwrap();
+        assert_eq!(result.status, "ERROR");
+        assert!(!result.error_message.is_empty());
+    }
+
+    #[tokio::test]
+    async fn stats_control_dispatch_returns_metrics_summary() {
+        let server = test_admin_server(signing_key(1)).await;
+        let (status, error_message, payload) = server
+            .dispatch_command(CommandType::StatsControl as i32, vec![])
+            .await;
+
+        assert_eq!(status, "OK");
+        assert_eq!(error_message, "");
+        let summary = StatsSummaryResponse::decode(payload.as_slice()).unwrap();
+        assert_eq!(summary.proxy_count, 0);
+        assert_eq!(summary.active_connections, 0);
+    }
+
+    #[derive(serde::Deserialize)]
+    struct AdminCryptoCompatFixture {
+        node_seed: String,
+        viewer_seed: String,
+        request: AdminCryptoCompatRequest,
+    }
+
+    #[derive(serde::Deserialize)]
+    struct AdminCryptoCompatRequest {
+        viewer_pubkey: String,
+        encrypted: AdminCryptoCompatEncryptedPayload,
+    }
+
+    #[derive(serde::Serialize)]
+    struct AdminCryptoCompatResponse {
+        status: String,
+        error_message: String,
+        encrypted: Option<AdminCryptoCompatEncryptedPayload>,
+    }
+
+    #[derive(serde::Deserialize, serde::Serialize)]
+    struct AdminCryptoCompatEncryptedPayload {
+        ephemeral_pubkey: String,
+        nonce: String,
+        ciphertext: String,
+        sender_fingerprint: String,
+        signature: String,
+        algorithm: i32,
+    }
+
+    impl AdminCryptoCompatEncryptedPayload {
+        fn to_proto(&self) -> EncryptedPayload {
+            EncryptedPayload {
+                ephemeral_pubkey: decode_compat_b64(&self.ephemeral_pubkey),
+                nonce: decode_compat_b64(&self.nonce),
+                ciphertext: decode_compat_b64(&self.ciphertext),
+                sender_fingerprint: self.sender_fingerprint.clone(),
+                signature: decode_compat_b64(&self.signature),
+                algorithm: self.algorithm,
+            }
+        }
+
+        fn from_proto(payload: &EncryptedPayload) -> Self {
+            Self {
+                ephemeral_pubkey: encode_compat_b64(&payload.ephemeral_pubkey),
+                nonce: encode_compat_b64(&payload.nonce),
+                ciphertext: encode_compat_b64(&payload.ciphertext),
+                sender_fingerprint: payload.sender_fingerprint.clone(),
+                signature: encode_compat_b64(&payload.signature),
+                algorithm: payload.algorithm,
+            }
+        }
+    }
+
+    fn decode_compat_b64(encoded: &str) -> Vec<u8> {
+        general_purpose::STANDARD.decode(encoded).unwrap()
+    }
+
+    fn encode_compat_b64(data: &[u8]) -> String {
+        general_purpose::STANDARD.encode(data)
+    }
+
+    fn decode_compat_seed(encoded: &str) -> [u8; 32] {
+        decode_compat_b64(encoded).try_into().unwrap()
+    }
+
+    #[tokio::test]
+    async fn admin_crypto_compat_fixture_go_request_rust_response() {
+        let fixture_path = match std::env::var("NITELLA_ADMIN_COMPAT_FIXTURE") {
+            Ok(path) => path,
+            Err(_) => return,
+        };
+        let response_path = std::env::var("NITELLA_ADMIN_COMPAT_RESPONSE").ok();
+
+        let fixture_json = std::fs::read_to_string(&fixture_path).unwrap();
+        let fixture: AdminCryptoCompatFixture = serde_json::from_str(&fixture_json).unwrap();
+
+        let node_key = SigningKey::from_bytes(&decode_compat_seed(&fixture.node_seed));
+        let viewer_key = SigningKey::from_bytes(&decode_compat_seed(&fixture.viewer_seed));
+        let request_encrypted = fixture.request.encrypted.to_proto();
+
+        crypto::verify_signature(&request_encrypted, &viewer_key.verifying_key()).unwrap();
+
+        let request = SendCommandRequest {
+            viewer_pubkey: decode_compat_b64(&fixture.request.viewer_pubkey),
+            encrypted: Some(request_encrypted),
+        };
+        assert_eq!(
+            request.viewer_pubkey,
+            viewer_key.verifying_key().as_bytes().to_vec()
+        );
+
+        let server = test_admin_server(node_key.clone()).await;
+        let response = server
+            .send_command(Request::new(request))
+            .await
+            .unwrap()
+            .into_inner();
+
+        assert_eq!(response.status, "OK", "{}", response.error_message);
+        let encrypted_response = response.encrypted.as_ref().unwrap();
+        crypto::verify_signature(encrypted_response, &node_key.verifying_key()).unwrap();
+
+        let plaintext = crypto::decrypt(encrypted_response, &viewer_key).unwrap();
+        let result = CommandResult::decode(plaintext.as_slice()).unwrap();
+        assert_eq!(result.status, "OK");
+        assert_eq!(result.error_message, "");
+
+        let stats = StatsSummaryResponse::decode(result.response_payload.as_slice()).unwrap();
+        assert_eq!(stats.proxy_count, 0);
+        assert_eq!(stats.active_connections, 0);
+
+        if let Some(path) = response_path {
+            let response_fixture = AdminCryptoCompatResponse {
+                status: response.status,
+                error_message: response.error_message,
+                encrypted: response
+                    .encrypted
+                    .as_ref()
+                    .map(AdminCryptoCompatEncryptedPayload::from_proto),
+            };
+            let response_json = serde_json::to_string_pretty(&response_fixture).unwrap();
+            std::fs::write(path, format!("{}\n", response_json)).unwrap();
+        }
     }
 }

@@ -151,25 +151,8 @@ func (s *MobileLogicService) AddNodeDirect(ctx context.Context, req *pb.AddNodeD
 		nodeName = req.Address
 	}
 	nodeID := fmt.Sprintf("direct-%s", sanitizeNodeID(req.Address))
-
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	// Check if already exists
-	if _, exists := s.nodes[nodeID]; exists {
-		conn.Close()
-		return &pb.AddNodeDirectResponse{
-			Success: false,
-			Error:   "node already exists with this address",
-		}, nil
-	}
-
-	// Initialize direct store if needed
-	if s.directNodes == nil {
-		s.directNodes = newDirectNodeStore()
-	}
-
-	// Store connection
+	proxyCount := int32(len(proxiesResp.Proxies))
+	now := timestamppb.Now()
 	directClient := &directNodeClient{
 		conn:      conn,
 		client:    client,
@@ -179,27 +162,72 @@ func (s *MobileLogicService) AddNodeDirect(ctx context.Context, req *pb.AddNodeD
 		lastCheck: time.Now(),
 		isOnline:  true,
 	}
-	s.directNodes.add(nodeID, directClient)
 
-	// Register with controller for unified SendCommand routing
-	nodePubKey, _ := extractNodePubKey(req.CaPem)
-	if s.ctrl != nil && nodePubKey != nil {
-		s.ctrl.SetLocalConnection(nodeID, &core.LocalConnection{
-			Client:     client,
-			Token:      req.Token,
-			NodePubKey: nodePubKey,
-		})
+	s.mu.Lock()
+	if existing, exists := s.nodes[nodeID]; exists {
+		if existing.ConnType != pb.NodeConnectionType_NODE_CONNECTION_TYPE_DIRECT {
+			s.mu.Unlock()
+			conn.Close()
+			return &pb.AddNodeDirectResponse{
+				Success: false,
+				Error:   "node already exists with this address",
+			}, nil
+		}
+
+		// One-shot local CLI invocations re-register the same direct address on
+		// each process start. Refresh the live connection and metadata instead
+		// of failing as a duplicate.
+		if s.directNodes == nil {
+			s.directNodes = newDirectNodeStore()
+		}
+		s.directNodes.remove(nodeID)
+		s.directNodes.add(nodeID, directClient)
+
+		if req.Name != "" {
+			existing.Name = req.Name
+		}
+		existing.Online = true
+		existing.LastSeen = now
+		if existing.PairedAt == nil {
+			existing.PairedAt = now
+		}
+		existing.ConnType = pb.NodeConnectionType_NODE_CONNECTION_TYPE_DIRECT
+		existing.DirectAddress = req.Address
+		existing.DirectToken = req.Token
+		existing.DirectCaPem = req.CaPem
+		existing.ProxyCount = proxyCount
+		existing.EmojiHash = calculateEmojiHash(req.CaPem)
+		node := proto.Clone(existing).(*pb.NodeInfo)
+		s.mu.Unlock()
+
+		s.registerDirectController(nodeID, client, req.Token, req.CaPem)
+		if err := s.saveDirectNodeMetadata(nodeID, node); err != nil {
+			if s.debugMode {
+				log.Printf("warning: failed to save direct node metadata: %v\n", err)
+			}
+		}
+
+		return &pb.AddNodeDirectResponse{
+			Success: true,
+			Node:    node,
+		}, nil
 	}
 
-	// Create node info
-	proxyCount := int32(len(proxiesResp.Proxies))
+	// Initialize direct store if needed
+	if s.directNodes == nil {
+		s.directNodes = newDirectNodeStore()
+	}
 
+	// Store connection
+	s.directNodes.add(nodeID, directClient)
+
+	// Create node info
 	node := &pb.NodeInfo{
 		NodeId:        nodeID,
 		Name:          nodeName,
 		Online:        true,
-		PairedAt:      timestamppb.Now(),
-		LastSeen:      timestamppb.Now(),
+		PairedAt:      now,
+		LastSeen:      now,
 		ConnType:      pb.NodeConnectionType_NODE_CONNECTION_TYPE_DIRECT,
 		DirectAddress: req.Address,
 		DirectToken:   req.Token,
@@ -210,9 +238,13 @@ func (s *MobileLogicService) AddNodeDirect(ctx context.Context, req *pb.AddNodeD
 
 	// Save to memory
 	s.nodes[nodeID] = node
+	nodeForResponse := proto.Clone(node).(*pb.NodeInfo)
+	s.mu.Unlock()
+
+	s.registerDirectController(nodeID, client, req.Token, req.CaPem)
 
 	// Persist direct node metadata
-	if err := s.saveDirectNodeMetadata(nodeID, node); err != nil {
+	if err := s.saveDirectNodeMetadata(nodeID, nodeForResponse); err != nil {
 		if s.debugMode {
 			log.Printf("warning: failed to save direct node metadata: %v\n", err)
 		}
@@ -220,8 +252,19 @@ func (s *MobileLogicService) AddNodeDirect(ctx context.Context, req *pb.AddNodeD
 
 	return &pb.AddNodeDirectResponse{
 		Success: true,
-		Node:    node,
+		Node:    nodeForResponse,
 	}, nil
+}
+
+func (s *MobileLogicService) registerDirectController(nodeID string, client pbProxy.ProxyControlServiceClient, token, caPEM string) {
+	nodePubKey, _ := extractNodePubKey(caPEM)
+	if s.ctrl != nil && nodePubKey != nil {
+		s.ctrl.SetLocalConnection(nodeID, &core.LocalConnection{
+			Client:     client,
+			Token:      token,
+			NodePubKey: nodePubKey,
+		})
+	}
 }
 
 // TestDirectConnection tests connectivity to a nitellad admin API.

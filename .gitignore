@@ -54,6 +54,7 @@ Thumbs.db
 
 # GeoIP databases (download separately)
 *.mmdb
+!testdata/geoip/*.mmdb
 
 # Config with secrets
 config_prod.yaml

@@ -2,35 +2,39 @@ use crate::cert_utils;
 use crate::cpace::{CPaceSession, ROLE_NODE};
 use crate::crypto;
 use crate::manager::ProxyManager;
-use crate::proto::common::{Alert, EncryptedPayload, SecureCommandPayload};
+use crate::proto::common::{
+    Alert, ApprovalRetentionMode, EncryptedPayload, MockPreset, SecureCommandPayload,
+};
 use crate::proto::hub::node_service_client::NodeServiceClient;
 use crate::proto::hub::pairing_service_client::PairingServiceClient;
 use crate::proto::hub::EncryptedCommandPayload;
 use crate::proto::hub::{
     CommandResponse, CommandResult, EncryptedLogEntry, EncryptedMetrics, HeartbeatRequest, Metrics,
-    NodeStatus, PakeMessage, ReceiveCommandsRequest, SignalMessage,
+    NodeStatus, PakeMessage, ReceiveCommandsRequest, SignalMessage, StreamRevocationsRequest,
 };
 use crate::proto::process::{event, Event};
 use crate::proto::proxy::{
     ActiveApproval, AddRuleRequest, AllowIpRequest, AppliedProxyStatus, ApplyProxyRequest,
-    ApplyProxyResponse, BlockIpRequest, CancelApprovalRequest, CloseAllConnectionsRequest,
-    CloseAllConnectionsResponse, CloseConnectionRequest, CloseConnectionResponse,
-    CreateProxyRequest, DeleteProxyRequest, DeleteProxyResponse, DisableProxyRequest,
-    DisableProxyResponse, EnableProxyRequest, EnableProxyResponse, GetActiveConnectionsRequest,
-    GetActiveConnectionsResponse, GetAppliedProxiesResponse, ListActiveApprovalsResponse,
-    ListProxiesResponse, ListRulesRequest, ListRulesResponse, LookupIpRequest, ProxyStatus,
-    ReloadRulesRequest, ReloadRulesResponse, RemoveGlobalRuleRequest, RemoveRuleRequest,
-    ResolveApprovalRequest, RestartListenersResponse, StatsSummaryResponse, UpdateProxyRequest,
-    UpdateProxyResponse,
+    ApplyProxyResponse, BlockIpRequest, CancelApprovalRequest, CancelApprovalResponse,
+    ClientAuthType, CloseAllConnectionsRequest, CloseAllConnectionsResponse,
+    CloseConnectionRequest, CloseConnectionResponse, CreateProxyRequest, CreateProxyResponse,
+    DeleteProxyRequest, DeleteProxyResponse, DisableProxyRequest, DisableProxyResponse,
+    EnableProxyRequest, EnableProxyResponse, GetActiveConnectionsRequest,
+    GetActiveConnectionsResponse, GetAppliedProxiesResponse, ListActiveApprovalsRequest,
+    ListActiveApprovalsResponse, ListProxiesResponse, ListRulesRequest, ListRulesResponse,
+    LookupIpRequest, ProxyStatus, RateLimitConfig, ReloadRulesRequest, ReloadRulesResponse,
+    RemoveGlobalRuleRequest, RemoveRuleRequest, RestartListenersResponse, Rule,
+    StatsSummaryResponse, UpdateProxyRequest, UpdateProxyResponse,
 };
 use anyhow::{anyhow, Result};
-use ed25519_dalek::{SigningKey, VerifyingKey};
+use base64::{engine::general_purpose, Engine as _};
+use ed25519_dalek::{Signer, SigningKey, VerifyingKey};
 use sha2::Digest;
 use std::collections::HashMap;
 use std::path::Path;
 use std::str::FromStr;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::fs;
 use tokio::sync::{broadcast, mpsc, RwLock};
 use tokio::time;
@@ -54,8 +58,9 @@ use webrtc::ice_transport::ice_candidate::RTCIceCandidateInit;
 use webrtc::ice_transport::ice_server::RTCIceServer;
 use webrtc::peer_connection::configuration::RTCConfiguration;
 use webrtc::peer_connection::peer_connection_state::RTCPeerConnectionState;
-use webrtc::peer_connection::sdp::sdp_type::RTCSdpType;
 use webrtc::peer_connection::sdp::session_description::RTCSessionDescription;
+
+const DEFAULT_APPROVAL_DURATION_SECONDS: i64 = 300;
 
 #[derive(Clone)]
 pub struct HubInterceptor {
@@ -76,9 +81,1881 @@ impl Interceptor for HubInterceptor {
     }
 }
 
+#[derive(Debug)]
+struct P2PAuthMessage {
+    message_type: String,
+    challenge: Vec<u8>,
+    public_key: Vec<u8>,
+}
+
+#[derive(Debug, Deserialize)]
+struct P2PWireMessage {
+    #[serde(rename = "type")]
+    message_type: String,
+    #[serde(default)]
+    request_id: String,
+    payload: serde_json::Value,
+}
+
+#[derive(Debug, Deserialize)]
+struct P2PEncryptedPayloadJson {
+    #[serde(deserialize_with = "deserialize_base64")]
+    ephemeral_pubkey: Vec<u8>,
+    #[serde(deserialize_with = "deserialize_base64")]
+    nonce: Vec<u8>,
+    #[serde(deserialize_with = "deserialize_base64")]
+    ciphertext: Vec<u8>,
+}
+
+#[derive(Debug, Deserialize)]
+struct P2PCommandPayloadJson {
+    command_type: i32,
+    #[serde(deserialize_with = "deserialize_base64")]
+    data: Vec<u8>,
+}
+
+fn parse_p2p_auth_message(data: &[u8]) -> Option<P2PAuthMessage> {
+    let value: serde_json::Value = serde_json::from_slice(data).ok()?;
+    let message_type = value.get("type")?.as_str()?.to_string();
+    if !matches!(
+        message_type.as_str(),
+        "auth_challenge" | "auth_response" | "auth_success" | "auth_failed"
+    ) {
+        return None;
+    }
+    Some(P2PAuthMessage {
+        message_type,
+        challenge: decode_json_base64_field(&value, "challenge").unwrap_or_default(),
+        public_key: decode_json_base64_field(&value, "public_key").unwrap_or_default(),
+    })
+}
+
+fn decrypt_p2p_command_message(
+    data: &[u8],
+    signing_key: &SigningKey,
+) -> Result<(String, i32, Vec<u8>)> {
+    let wrapper: P2PWireMessage = serde_json::from_slice(data)?;
+    if wrapper.message_type != "encrypted" {
+        anyhow::bail!(
+            "expected encrypted P2P message, got {}",
+            wrapper.message_type
+        );
+    }
+
+    let encrypted: P2PEncryptedPayloadJson = serde_json::from_value(wrapper.payload)?;
+    let payload = EncryptedPayload {
+        ephemeral_pubkey: encrypted.ephemeral_pubkey,
+        nonce: encrypted.nonce,
+        ciphertext: encrypted.ciphertext,
+        sender_fingerprint: String::new(),
+        signature: vec![],
+        algorithm: 0,
+    };
+    let plaintext = crypto::decrypt(&payload, signing_key)?;
+    let inner: P2PWireMessage = serde_json::from_slice(&plaintext)?;
+    if inner.message_type != "command" {
+        anyhow::bail!("expected command P2P message, got {}", inner.message_type);
+    }
+    let command: P2PCommandPayloadJson = serde_json::from_value(inner.payload)?;
+    Ok((inner.request_id, command.command_type, command.data))
+}
+
+fn encrypt_p2p_command_response(
+    request_id: &str,
+    result: &CommandResult,
+    peer_key: &VerifyingKey,
+    signing_key: &SigningKey,
+    node_fingerprint: &str,
+) -> Result<Vec<u8>> {
+    let response_payload = serde_json::json!({
+        "request_id": request_id,
+        "status": result.status,
+        "error": result.error_message,
+        "data": general_purpose::STANDARD.encode(&result.response_payload),
+    });
+    let inner = serde_json::json!({
+        "type": "command_response",
+        "timestamp": unix_timestamp(),
+        "nonce": p2p_nonce(),
+        "request_id": request_id,
+        "payload": response_payload,
+    });
+    let encrypted = crypto::encrypt(
+        inner.to_string().as_bytes(),
+        peer_key,
+        signing_key,
+        node_fingerprint,
+    )?;
+    let encrypted_payload = serde_json::json!({
+        "ephemeral_pubkey": general_purpose::STANDARD.encode(&encrypted.ephemeral_pubkey),
+        "nonce": general_purpose::STANDARD.encode(&encrypted.nonce),
+        "ciphertext": general_purpose::STANDARD.encode(&encrypted.ciphertext),
+        "inner_type": "command_response",
+    });
+    let wrapper = serde_json::json!({
+        "type": "encrypted",
+        "timestamp": unix_timestamp(),
+        "nonce": p2p_nonce(),
+        "payload": encrypted_payload,
+    });
+    Ok(serde_json::to_vec(&wrapper)?)
+}
+
+fn decode_json_base64_field(value: &serde_json::Value, key: &str) -> Result<Vec<u8>> {
+    let Some(raw) = value.get(key).and_then(|v| v.as_str()) else {
+        return Ok(vec![]);
+    };
+    Ok(general_purpose::STANDARD.decode(raw)?)
+}
+
+fn deserialize_base64<'de, D>(deserializer: D) -> std::result::Result<Vec<u8>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let raw = String::deserialize(deserializer)?;
+    general_purpose::STANDARD
+        .decode(raw)
+        .map_err(serde::de::Error::custom)
+}
+
+fn verifying_key_from_slice(bytes: &[u8]) -> Result<VerifyingKey> {
+    let key: [u8; 32] = bytes
+        .try_into()
+        .map_err(|_| anyhow!("invalid P2P public key length: {}", bytes.len()))?;
+    VerifyingKey::from_bytes(&key).map_err(|e| anyhow!("invalid P2P public key: {}", e))
+}
+
+fn sdp_from_signal_payload(payload: &str) -> String {
+    serde_json::from_str::<serde_json::Value>(payload)
+        .ok()
+        .and_then(|value| {
+            value
+                .get("sdp")
+                .and_then(|sdp| sdp.as_str())
+                .map(str::to_string)
+        })
+        .unwrap_or_else(|| payload.to_string())
+}
+
+async fn load_p2p_signing_key(data_dir: &str) -> Result<SigningKey> {
+    let key_path = Path::new(data_dir).join("node.key");
+    let key_pem = fs::read_to_string(&key_path).await?;
+    SigningKey::from_pkcs8_pem(&key_pem)
+        .map_err(|e| anyhow!("Failed to parse P2P private key: {}", e))
+}
+
+fn unix_timestamp() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs() as i64
+}
+
+fn p2p_nonce() -> String {
+    uuid::Uuid::new_v4().simple().to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::approval::ApprovalManager;
+    use crate::geoip::GeoIPService;
+    use crate::proto::common::{ActionType, ConditionType, Operator};
+    use crate::proto::proxy::{
+        Condition, GetGeoIpStatusResponse, ListActiveApprovalsRequest, ListGlobalRulesResponse,
+        LookupIpResponse, RateLimitConfig, RemoveGlobalRuleResponse, Rule,
+    };
+    use crate::rules::RuleEngine;
+    use crate::stats::StatsService;
+    use serde::Serialize;
+    use serde_json::{json, Value};
+    use std::sync::atomic::AtomicU64;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::{TcpListener, TcpStream};
+    use tokio::sync::broadcast;
+
+    async fn test_hub_client() -> HubClient {
+        let geoip = Arc::new(
+            GeoIPService::new(None, None, None, None, 24, None, 3000)
+                .await
+                .unwrap(),
+        );
+        let global_rules = Arc::new(RwLock::new(RuleEngine::new(vec![])));
+        let approval_manager = Arc::new(ApprovalManager::new());
+        let (event_tx, _) = broadcast::channel(16);
+        let stats = Arc::new(StatsService::new(event_tx));
+        let manager = Arc::new(ProxyManager::new(
+            geoip,
+            global_rules,
+            stats,
+            None,
+            false,
+            approval_manager,
+        ));
+        let data_dir = std::env::temp_dir()
+            .join(format!("nitellad-rs-hub-test-{}", uuid::Uuid::new_v4()))
+            .to_string_lossy()
+            .to_string();
+
+        HubClient::new(
+            "127.0.0.1:1".to_string(),
+            data_dir,
+            "test-node".to_string(),
+            manager,
+            None,
+            None,
+            None,
+        )
+    }
+
+    fn create_proxy_payload(name: &str) -> Vec<u8> {
+        CreateProxyRequest {
+            name: name.to_string(),
+            listen_addr: "127.0.0.1:0".to_string(),
+            default_action: ActionType::Allow as i32,
+            ..Default::default()
+        }
+        .encode_to_vec()
+    }
+
+    fn create_proxy_payload_with_backend(name: &str, backend: &str) -> Vec<u8> {
+        CreateProxyRequest {
+            name: name.to_string(),
+            listen_addr: "127.0.0.1:0".to_string(),
+            default_backend: backend.to_string(),
+            default_action: ActionType::Allow as i32,
+            ..Default::default()
+        }
+        .encode_to_vec()
+    }
+
+    #[tokio::test]
+    async fn hub_create_proxy_returns_create_proxy_response() {
+        let hub = test_hub_client().await;
+
+        let (status, err, payload) = hub
+            .handle_create_proxy(create_proxy_payload("create"))
+            .await;
+
+        assert_eq!(status, "OK");
+        assert!(err.is_empty());
+        let resp = CreateProxyResponse::decode(payload.as_slice()).unwrap();
+        assert!(resp.success);
+        assert!(!resp.proxy_id.is_empty());
+
+        hub.manager.delete_proxy(&resp.proxy_id).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn hub_proxy_update_only_checks_applied_registry() {
+        let hub = test_hub_client().await;
+        {
+            let mut applied = hub.applied_proxies.write().await;
+            applied.insert(
+                "applied-proxy".to_string(),
+                AppliedProxy {
+                    proxy_id: "applied-proxy".to_string(),
+                    revision_num: 7,
+                    config_hash: "hash".to_string(),
+                    applied_at: chrono::Utc::now().timestamp(),
+                    status: "active".to_string(),
+                    error_msg: None,
+                    listener_ids: vec![],
+                },
+            );
+        }
+
+        let (status, err, payload) = hub
+            .handle_proxy_update(
+                UpdateProxyRequest {
+                    proxy_id: "applied-proxy".to_string(),
+                    default_backend: "127.0.0.1:9".to_string(),
+                    ..Default::default()
+                }
+                .encode_to_vec(),
+            )
+            .await;
+
+        assert_eq!(status, "OK");
+        assert!(err.is_empty());
+        let resp = UpdateProxyResponse::decode(payload.as_slice()).unwrap();
+        assert!(resp.success);
+        assert!(hub
+            .manager
+            .get_proxy_status("applied-proxy")
+            .await
+            .is_none());
+    }
+
+    #[tokio::test]
+    async fn hub_block_ip_rejects_invalid_ip_or_cidr() {
+        let hub = test_hub_client().await;
+
+        let (status, err, payload) = hub
+            .handle_block_ip(
+                BlockIpRequest {
+                    ip: "not-an-ip".to_string(),
+                    duration_seconds: 0,
+                    reason: String::new(),
+                }
+                .encode_to_vec(),
+            )
+            .await;
+
+        assert_eq!(status, "ERROR");
+        assert!(err.contains("invalid IP address"));
+        assert!(payload.is_empty());
+    }
+
+    #[tokio::test]
+    async fn hub_legacy_apply_proxy_returns_proxy_status_and_unapplies() {
+        let hub = test_hub_client().await;
+
+        let (status, err, payload) = hub.handle_apply_proxy(create_proxy_payload("apply")).await;
+
+        assert_eq!(status, "OK");
+        assert!(err.is_empty());
+        let proxy_status = ProxyStatus::decode(payload.as_slice()).unwrap();
+        assert!(proxy_status.running);
+        assert!(!proxy_status.proxy_id.is_empty());
+
+        let (status, err, payload) = hub
+            .handle_unapply_proxy(
+                DeleteProxyRequest {
+                    proxy_id: proxy_status.proxy_id.clone(),
+                }
+                .encode_to_vec(),
+            )
+            .await;
+
+        assert_eq!(status, "OK");
+        assert!(err.is_empty());
+        let delete_resp = DeleteProxyResponse::decode(payload.as_slice()).unwrap();
+        assert!(delete_resp.success);
+        assert!(hub
+            .manager
+            .get_proxy_status(&proxy_status.proxy_id)
+            .await
+            .is_none());
+    }
+
+    #[tokio::test]
+    async fn hub_add_rule_returns_marshaled_rule_with_generated_id() {
+        let hub = test_hub_client().await;
+        let (_, _, payload) = hub.handle_create_proxy(create_proxy_payload("rules")).await;
+        let proxy = CreateProxyResponse::decode(payload.as_slice()).unwrap();
+
+        let rule = Rule {
+            name: "generated-id".to_string(),
+            enabled: true,
+            action: ActionType::Allow as i32,
+            ..Default::default()
+        };
+        let req = AddRuleRequest {
+            proxy_id: proxy.proxy_id.clone(),
+            rule: Some(rule),
+        };
+
+        let (status, err, payload) = hub.handle_add_rule(req.encode_to_vec()).await;
+
+        assert_eq!(status, "OK");
+        assert!(err.is_empty());
+        let created = Rule::decode(payload.as_slice()).unwrap();
+        assert_eq!(created.name, "generated-id");
+        assert!(!created.id.is_empty());
+
+        hub.manager.delete_proxy(&proxy.proxy_id).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn hub_create_proxy_bind_failure_returns_ok_with_failed_response() {
+        let occupied = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let occupied_addr = occupied.local_addr().unwrap().to_string();
+        let hub = test_hub_client().await;
+        let payload = CreateProxyRequest {
+            name: "occupied".to_string(),
+            listen_addr: occupied_addr,
+            default_action: ActionType::Allow as i32,
+            ..Default::default()
+        }
+        .encode_to_vec();
+
+        let (status, err, payload) = hub.handle_create_proxy(payload).await;
+
+        assert_eq!(status, "OK");
+        assert!(err.is_empty());
+        let resp = CreateProxyResponse::decode(payload.as_slice()).unwrap();
+        assert!(!resp.success);
+        assert!(!resp.error_message.is_empty());
+    }
+
+    #[tokio::test]
+    async fn hub_unapply_missing_proxy_returns_ok_with_failed_response() {
+        let hub = test_hub_client().await;
+        let payload = DeleteProxyRequest {
+            proxy_id: "missing".to_string(),
+        }
+        .encode_to_vec();
+
+        let (status, err, payload) = hub.handle_unapply_proxy(payload).await;
+
+        assert_eq!(status, "OK");
+        assert!(err.is_empty());
+        let resp = DeleteProxyResponse::decode(payload.as_slice()).unwrap();
+        assert!(!resp.success);
+        assert_eq!(resp.error_message, "proxy not applied");
+    }
+
+    #[tokio::test]
+    async fn p2p_static_dispatch_routes_lifecycle_commands() {
+        let hub = test_hub_client().await;
+
+        let create = HubClient::static_dispatch(
+            command_types::CREATE_PROXY,
+            create_proxy_payload("p2p-create"),
+            &hub.manager,
+            &hub.applied_proxies,
+            &hub.data_dir,
+        )
+        .await;
+
+        assert_eq!(create.status, "OK");
+        assert!(create.error_message.is_empty());
+        let create_resp = CreateProxyResponse::decode(create.response_payload.as_slice()).unwrap();
+        assert!(create_resp.success);
+        assert!(!create_resp.proxy_id.is_empty());
+
+        let list = HubClient::static_dispatch(
+            command_types::LIST_PROXIES,
+            vec![],
+            &hub.manager,
+            &hub.applied_proxies,
+            &hub.data_dir,
+        )
+        .await;
+
+        assert_eq!(list.status, "OK");
+        let list_resp = ListProxiesResponse::decode(list.response_payload.as_slice()).unwrap();
+        assert!(list_resp
+            .proxies
+            .iter()
+            .any(|p| p.proxy_id == create_resp.proxy_id));
+
+        let delete = HubClient::static_dispatch(
+            command_types::DELETE_PROXY,
+            DeleteProxyRequest {
+                proxy_id: create_resp.proxy_id.clone(),
+            }
+            .encode_to_vec(),
+            &hub.manager,
+            &hub.applied_proxies,
+            &hub.data_dir,
+        )
+        .await;
+
+        assert_eq!(delete.status, "OK");
+        let delete_resp = DeleteProxyResponse::decode(delete.response_payload.as_slice()).unwrap();
+        assert!(delete_resp.success);
+        assert!(
+            !hub.manager
+                .get_proxy_status(&create_resp.proxy_id)
+                .await
+                .unwrap()
+                .running
+        );
+
+        hub.manager
+            .delete_proxy(&create_resp.proxy_id)
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn p2p_static_dispatch_routes_applied_proxy_commands() {
+        let hub = test_hub_client().await;
+
+        let apply = HubClient::static_dispatch(
+            command_types::APPLY_PROXY,
+            create_proxy_payload("p2p-apply"),
+            &hub.manager,
+            &hub.applied_proxies,
+            &hub.data_dir,
+        )
+        .await;
+
+        assert_eq!(apply.status, "OK");
+        assert!(apply.error_message.is_empty());
+        let proxy_status = ProxyStatus::decode(apply.response_payload.as_slice()).unwrap();
+        assert!(proxy_status.running);
+        assert!(!proxy_status.proxy_id.is_empty());
+
+        let applied = HubClient::static_dispatch(
+            command_types::GET_APPLIED,
+            vec![],
+            &hub.manager,
+            &hub.applied_proxies,
+            &hub.data_dir,
+        )
+        .await;
+
+        assert_eq!(applied.status, "OK");
+        let applied_resp =
+            GetAppliedProxiesResponse::decode(applied.response_payload.as_slice()).unwrap();
+        assert!(applied_resp
+            .proxies
+            .iter()
+            .any(|p| p.proxy_id == proxy_status.proxy_id));
+
+        let unapply = HubClient::static_dispatch(
+            command_types::UNAPPLY_PROXY,
+            DeleteProxyRequest {
+                proxy_id: proxy_status.proxy_id.clone(),
+            }
+            .encode_to_vec(),
+            &hub.manager,
+            &hub.applied_proxies,
+            &hub.data_dir,
+        )
+        .await;
+
+        assert_eq!(unapply.status, "OK");
+        let delete_resp = DeleteProxyResponse::decode(unapply.response_payload.as_slice()).unwrap();
+        assert!(delete_resp.success);
+        assert!(hub
+            .manager
+            .get_proxy_status(&proxy_status.proxy_id)
+            .await
+            .is_none());
+    }
+
+    #[derive(Default)]
+    struct CompatIds {
+        direct_proxy: String,
+        applied_proxy: String,
+        rule: String,
+        reload_rule: String,
+        extended_rule: String,
+    }
+
+    #[derive(Serialize)]
+    struct CompatCase {
+        name: String,
+        command: String,
+        status: String,
+        error_message: String,
+        payload_type: String,
+        payload: Value,
+    }
+
+    impl CompatCase {
+        fn new(
+            name: &str,
+            cmd_type: i32,
+            result: &CommandResult,
+            payload_type: &str,
+            payload: Value,
+        ) -> Self {
+            Self {
+                name: name.to_string(),
+                command: command_name_compat(cmd_type).to_string(),
+                status: result.status.clone(),
+                error_message: result.error_message.clone(),
+                payload_type: payload_type.to_string(),
+                payload,
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn compat_harness_dump_rust() {
+        let Ok(out_path) = std::env::var("NITELLA_COMPAT_DUMP") else {
+            return;
+        };
+
+        let hub = test_hub_client().await;
+        let mut ids = CompatIds::default();
+        let mut cases = Vec::new();
+
+        cases.push(
+            rust_compat_stats_case(&hub, "status_empty", command_types::STATUS, vec![], &ids).await,
+        );
+
+        let create = rust_compat_dispatch(
+            &hub,
+            command_types::CREATE_PROXY,
+            create_proxy_payload("compat-direct"),
+        )
+        .await;
+        let create_resp = CreateProxyResponse::decode(create.response_payload.as_slice()).unwrap();
+        assert!(!create_resp.proxy_id.is_empty());
+        ids.direct_proxy = create_resp.proxy_id.clone();
+        cases.push(CompatCase::new(
+            "create_proxy",
+            command_types::CREATE_PROXY,
+            &create,
+            "CreateProxyResponse",
+            normalize_create_proxy_response_compat(&create_resp, &ids),
+        ));
+
+        cases.push(
+            rust_compat_stats_case(
+                &hub,
+                "status_after_create",
+                command_types::STATUS,
+                vec![],
+                &ids,
+            )
+            .await,
+        );
+        cases.push(
+            rust_compat_stats_case(
+                &hub,
+                "metrics_after_create",
+                command_types::GET_METRICS,
+                vec![],
+                &ids,
+            )
+            .await,
+        );
+        cases.push(
+            rust_compat_stats_case(
+                &hub,
+                "stats_control_after_create",
+                command_types::STATS_CONTROL,
+                vec![],
+                &ids,
+            )
+            .await,
+        );
+        cases.push(rust_compat_list_proxies_case(&hub, "list_after_create", &ids).await);
+
+        let add_rule_req = AddRuleRequest {
+            proxy_id: ids.direct_proxy.clone(),
+            rule: Some(Rule {
+                name: "allow-local".to_string(),
+                priority: 100,
+                enabled: true,
+                action: ActionType::Allow as i32,
+                conditions: vec![Condition {
+                    r#type: ConditionType::SourceIp as i32,
+                    op: Operator::Eq as i32,
+                    value: "127.0.0.1".to_string(),
+                    negate: false,
+                }],
+                rate_limit: Some(RateLimitConfig {
+                    max_connections: 2,
+                    interval_seconds: 10,
+                    auto_block: true,
+                    block_duration_seconds: 30,
+                    block_steps_seconds: vec![30, 60],
+                    count_only_failures: true,
+                    failure_duration_threshold: 3,
+                }),
+                ..Default::default()
+            }),
+        };
+        let add_rule =
+            rust_compat_dispatch(&hub, command_types::ADD_RULE, add_rule_req.encode_to_vec()).await;
+        let added_rule = Rule::decode(add_rule.response_payload.as_slice()).unwrap();
+        assert!(!added_rule.id.is_empty());
+        ids.rule = added_rule.id.clone();
+        cases.push(CompatCase::new(
+            "add_rule",
+            command_types::ADD_RULE,
+            &add_rule,
+            "Rule",
+            normalize_rule_compat(&added_rule, &ids),
+        ));
+
+        let list_rules = rust_compat_dispatch(
+            &hub,
+            command_types::LIST_RULES,
+            ListRulesRequest {
+                proxy_id: ids.direct_proxy.clone(),
+            }
+            .encode_to_vec(),
+        )
+        .await;
+        let list_rules_resp =
+            ListRulesResponse::decode(list_rules.response_payload.as_slice()).unwrap();
+        cases.push(CompatCase::new(
+            "list_rules",
+            command_types::LIST_RULES,
+            &list_rules,
+            "ListRulesResponse",
+            normalize_list_rules_response_compat(&list_rules_resp, &ids),
+        ));
+
+        let disable = rust_compat_dispatch(
+            &hub,
+            command_types::DISABLE_PROXY,
+            DisableProxyRequest {
+                proxy_id: ids.direct_proxy.clone(),
+            }
+            .encode_to_vec(),
+        )
+        .await;
+        let disable_resp =
+            DisableProxyResponse::decode(disable.response_payload.as_slice()).unwrap();
+        cases.push(CompatCase::new(
+            "disable_proxy",
+            command_types::DISABLE_PROXY,
+            &disable,
+            "DisableProxyResponse",
+            normalize_disable_proxy_response_compat(&disable_resp),
+        ));
+        cases.push(rust_compat_list_proxies_case(&hub, "list_after_disable", &ids).await);
+
+        let enable = rust_compat_dispatch(
+            &hub,
+            command_types::ENABLE_PROXY,
+            EnableProxyRequest {
+                proxy_id: ids.direct_proxy.clone(),
+            }
+            .encode_to_vec(),
+        )
+        .await;
+        let enable_resp = EnableProxyResponse::decode(enable.response_payload.as_slice()).unwrap();
+        cases.push(CompatCase::new(
+            "enable_proxy",
+            command_types::ENABLE_PROXY,
+            &enable,
+            "EnableProxyResponse",
+            normalize_enable_proxy_response_compat(&enable_resp),
+        ));
+        cases.push(rust_compat_list_proxies_case(&hub, "list_after_enable", &ids).await);
+
+        let update = rust_compat_dispatch(
+            &hub,
+            command_types::UPDATE_PROXY,
+            UpdateProxyRequest {
+                proxy_id: ids.direct_proxy.clone(),
+                default_backend: "127.0.0.1:9".to_string(),
+                ..Default::default()
+            }
+            .encode_to_vec(),
+        )
+        .await;
+        let update_resp = UpdateProxyResponse::decode(update.response_payload.as_slice()).unwrap();
+        cases.push(CompatCase::new(
+            "update_proxy_backend",
+            command_types::UPDATE_PROXY,
+            &update,
+            "UpdateProxyResponse",
+            normalize_update_proxy_response_compat(&update_resp),
+        ));
+
+        ids.reload_rule = "compat-reload-rule".to_string();
+        ids.extended_rule = "compat-extended-rule".to_string();
+        let reload = rust_compat_dispatch(
+            &hub,
+            command_types::RELOAD_RULES,
+            ReloadRulesRequest {
+                rules: vec![
+                    Rule {
+                        id: ids.reload_rule.clone(),
+                        name: "reload-block".to_string(),
+                        priority: 200,
+                        enabled: true,
+                        action: ActionType::Block as i32,
+                        conditions: vec![Condition {
+                            r#type: ConditionType::SourceIp as i32,
+                            op: Operator::Eq as i32,
+                            value: "10.0.0.1".to_string(),
+                            negate: false,
+                        }],
+                        ..Default::default()
+                    },
+                    Rule {
+                        id: ids.extended_rule.clone(),
+                        name: "extended-cidr-negated-rate".to_string(),
+                        priority: 150,
+                        enabled: true,
+                        action: ActionType::Allow as i32,
+                        expression: "SourceIP(`10.10.0.0/16`) && !GeoISP(`Example ISP`)"
+                            .to_string(),
+                        conditions: vec![
+                            Condition {
+                                r#type: ConditionType::SourceIp as i32,
+                                op: Operator::Cidr as i32,
+                                value: "10.10.0.0/16".to_string(),
+                                negate: false,
+                            },
+                            Condition {
+                                r#type: ConditionType::GeoIsp as i32,
+                                op: Operator::Contains as i32,
+                                value: "Example ISP".to_string(),
+                                negate: true,
+                            },
+                            Condition {
+                                r#type: ConditionType::TlsCn as i32,
+                                op: Operator::Eq as i32,
+                                value: "node.example".to_string(),
+                                negate: false,
+                            },
+                        ],
+                        rate_limit: Some(RateLimitConfig {
+                            max_connections: 3,
+                            interval_seconds: 15,
+                            auto_block: true,
+                            block_duration_seconds: 45,
+                            ..Default::default()
+                        }),
+                        ..Default::default()
+                    },
+                ],
+            }
+            .encode_to_vec(),
+        )
+        .await;
+        let reload_resp = ReloadRulesResponse::decode(reload.response_payload.as_slice()).unwrap();
+        cases.push(CompatCase::new(
+            "reload_rules",
+            command_types::RELOAD_RULES,
+            &reload,
+            "ReloadRulesResponse",
+            normalize_reload_rules_response_compat(&reload_resp),
+        ));
+        cases.push(rust_compat_list_rules_case(&hub, "list_rules_after_reload", &ids).await);
+
+        let restart = rust_compat_dispatch(&hub, command_types::RESTART_LISTENERS, vec![]).await;
+        let restart_resp =
+            RestartListenersResponse::decode(restart.response_payload.as_slice()).unwrap();
+        cases.push(CompatCase::new(
+            "restart_listeners",
+            command_types::RESTART_LISTENERS,
+            &restart,
+            "RestartListenersResponse",
+            normalize_restart_listeners_response_compat(&restart_resp),
+        ));
+        cases.push(rust_compat_list_proxies_case(&hub, "list_after_restart", &ids).await);
+
+        let get_conns = rust_compat_dispatch(
+            &hub,
+            command_types::GET_ACTIVE_CONNECTIONS,
+            GetActiveConnectionsRequest {
+                proxy_id: ids.direct_proxy.clone(),
+                ..Default::default()
+            }
+            .encode_to_vec(),
+        )
+        .await;
+        let get_conns_resp =
+            GetActiveConnectionsResponse::decode(get_conns.response_payload.as_slice()).unwrap();
+        cases.push(CompatCase::new(
+            "get_active_connections_empty",
+            command_types::GET_ACTIVE_CONNECTIONS,
+            &get_conns,
+            "GetActiveConnectionsResponse",
+            normalize_get_active_connections_response_compat(&get_conns_resp),
+        ));
+
+        let close_all = rust_compat_dispatch(
+            &hub,
+            command_types::CLOSE_ALL_CONNECTIONS,
+            CloseAllConnectionsRequest {
+                proxy_id: ids.direct_proxy.clone(),
+            }
+            .encode_to_vec(),
+        )
+        .await;
+        let close_all_resp =
+            CloseAllConnectionsResponse::decode(close_all.response_payload.as_slice()).unwrap();
+        cases.push(CompatCase::new(
+            "close_all_connections_empty",
+            command_types::CLOSE_ALL_CONNECTIONS,
+            &close_all,
+            "CloseAllConnectionsResponse",
+            normalize_close_all_connections_response_compat(&close_all_resp),
+        ));
+
+        let close = rust_compat_dispatch(
+            &hub,
+            command_types::CLOSE_CONNECTION,
+            CloseConnectionRequest {
+                proxy_id: ids.direct_proxy.clone(),
+                ..Default::default()
+            }
+            .encode_to_vec(),
+        )
+        .await;
+        cases.push(CompatCase::new(
+            "close_connection_missing_conn_id",
+            command_types::CLOSE_CONNECTION,
+            &close,
+            "Empty",
+            normalize_empty_payload_compat(&close.response_payload),
+        ));
+
+        let close_unknown = rust_compat_dispatch(
+            &hub,
+            command_types::CLOSE_CONNECTION,
+            CloseConnectionRequest {
+                proxy_id: ids.direct_proxy.clone(),
+                conn_id: "missing-conn".to_string(),
+            }
+            .encode_to_vec(),
+        )
+        .await;
+        cases.push(CompatCase::new(
+            "close_connection_unknown_conn_id",
+            command_types::CLOSE_CONNECTION,
+            &close_unknown,
+            "Empty",
+            normalize_empty_payload_compat(&close_unknown.response_payload),
+        ));
+
+        let live_backend_addr = rust_compat_start_echo_backend().await;
+        let live_create = rust_compat_dispatch(
+            &hub,
+            command_types::CREATE_PROXY,
+            create_proxy_payload_with_backend("compat-live", &live_backend_addr),
+        )
+        .await;
+        let live_create_resp =
+            CreateProxyResponse::decode(live_create.response_payload.as_slice()).unwrap();
+        assert!(!live_create_resp.proxy_id.is_empty());
+        cases.push(CompatCase::new(
+            "create_live_proxy",
+            command_types::CREATE_PROXY,
+            &live_create,
+            "CreateProxyResponse",
+            normalize_create_proxy_response_compat(&live_create_resp, &ids),
+        ));
+
+        let live_status = hub
+            .manager
+            .get_proxy_status(&live_create_resp.proxy_id)
+            .await
+            .unwrap();
+        let mut live_stream = rust_compat_connect_and_roundtrip(&live_status.listen_addr).await;
+        rust_compat_wait_for_connections(&hub, &live_create_resp.proxy_id, 1).await;
+
+        let live_conns = rust_compat_dispatch(
+            &hub,
+            command_types::GET_ACTIVE_CONNECTIONS,
+            GetActiveConnectionsRequest {
+                proxy_id: live_create_resp.proxy_id.clone(),
+                ..Default::default()
+            }
+            .encode_to_vec(),
+        )
+        .await;
+        let live_conns_resp =
+            GetActiveConnectionsResponse::decode(live_conns.response_payload.as_slice()).unwrap();
+        assert!(!live_conns_resp.connections.is_empty());
+        let live_conn_id = live_conns_resp.connections[0].id.clone();
+        cases.push(CompatCase::new(
+            "get_active_connections_live",
+            command_types::GET_ACTIVE_CONNECTIONS,
+            &live_conns,
+            "GetActiveConnectionsResponse",
+            normalize_active_connections_detailed_compat(&live_conns_resp),
+        ));
+
+        let close_live = rust_compat_dispatch(
+            &hub,
+            command_types::CLOSE_CONNECTION,
+            CloseConnectionRequest {
+                proxy_id: live_create_resp.proxy_id.clone(),
+                conn_id: live_conn_id,
+            }
+            .encode_to_vec(),
+        )
+        .await;
+        let close_live_resp =
+            CloseConnectionResponse::decode(close_live.response_payload.as_slice()).unwrap();
+        cases.push(CompatCase::new(
+            "close_connection_live",
+            command_types::CLOSE_CONNECTION,
+            &close_live,
+            "CloseConnectionResponse",
+            normalize_close_connection_response_compat(&close_live_resp),
+        ));
+        rust_compat_wait_for_connections(&hub, &live_create_resp.proxy_id, 0).await;
+        let _ = live_stream.shutdown().await;
+
+        let live_after_close = rust_compat_dispatch(
+            &hub,
+            command_types::GET_ACTIVE_CONNECTIONS,
+            GetActiveConnectionsRequest {
+                proxy_id: live_create_resp.proxy_id.clone(),
+                ..Default::default()
+            }
+            .encode_to_vec(),
+        )
+        .await;
+        let live_after_close_resp =
+            GetActiveConnectionsResponse::decode(live_after_close.response_payload.as_slice())
+                .unwrap();
+        cases.push(CompatCase::new(
+            "get_active_connections_after_close_live",
+            command_types::GET_ACTIVE_CONNECTIONS,
+            &live_after_close,
+            "GetActiveConnectionsResponse",
+            normalize_get_active_connections_response_compat(&live_after_close_resp),
+        ));
+        hub.manager
+            .delete_proxy(&live_create_resp.proxy_id)
+            .await
+            .unwrap();
+
+        cases.push(
+            rust_compat_list_active_approvals_case(&hub, "list_active_approvals_empty").await,
+        );
+
+        const APPROVAL_SOURCE_IP: &str = "192.0.2.44";
+        const APPROVAL_RULE_ID: &str = "compat-approval-rule";
+        let approval_bytes_in = Arc::new(AtomicU64::new(11));
+        let approval_bytes_out = Arc::new(AtomicU64::new(17));
+        hub.manager
+            .approval_manager
+            .add_to_cache_with_geo(
+                APPROVAL_SOURCE_IP,
+                APPROVAL_RULE_ID,
+                &ids.direct_proxy,
+                "",
+                true,
+                3600,
+                "US",
+                "New York",
+                "Compat ISP",
+            )
+            .await;
+        hub.manager
+            .approval_manager
+            .set_conn_id(
+                APPROVAL_SOURCE_IP,
+                APPROVAL_RULE_ID,
+                "",
+                "compat-approval-conn",
+                approval_bytes_in,
+                approval_bytes_out,
+            )
+            .await;
+        cases.push(
+            rust_compat_list_active_approvals_detailed_case(
+                &hub,
+                "list_active_approvals_seeded",
+                &ids,
+                ListActiveApprovalsRequest::default(),
+            )
+            .await,
+        );
+        cases.push(
+            rust_compat_list_active_approvals_detailed_case(
+                &hub,
+                "list_active_approvals_filter_source",
+                &ids,
+                ListActiveApprovalsRequest {
+                    source_ip: APPROVAL_SOURCE_IP.to_string(),
+                    ..Default::default()
+                },
+            )
+            .await,
+        );
+        cases.push(
+            rust_compat_list_active_approvals_detailed_case(
+                &hub,
+                "list_active_approvals_filter_miss",
+                &ids,
+                ListActiveApprovalsRequest {
+                    source_ip: "198.51.100.200".to_string(),
+                    ..Default::default()
+                },
+            )
+            .await,
+        );
+
+        let cancel_seed = rust_compat_dispatch(
+            &hub,
+            command_types::CANCEL_APPROVAL,
+            CancelApprovalRequest {
+                key: format!("{}\0{}", APPROVAL_SOURCE_IP, APPROVAL_RULE_ID),
+                close_connections: false,
+            }
+            .encode_to_vec(),
+        )
+        .await;
+        let cancel_seed_resp =
+            CancelApprovalResponse::decode(cancel_seed.response_payload.as_slice()).unwrap();
+        cases.push(CompatCase::new(
+            "cancel_approval_seeded",
+            command_types::CANCEL_APPROVAL,
+            &cancel_seed,
+            "CancelApprovalResponse",
+            normalize_cancel_approval_response_compat(&cancel_seed_resp),
+        ));
+        cases.push(
+            rust_compat_list_active_approvals_case(
+                &hub,
+                "list_active_approvals_after_cancel_seeded",
+            )
+            .await,
+        );
+
+        let cancel = rust_compat_dispatch(
+            &hub,
+            command_types::CANCEL_APPROVAL,
+            CancelApprovalRequest {
+                key: "bad-key".to_string(),
+                close_connections: false,
+            }
+            .encode_to_vec(),
+        )
+        .await;
+        let cancel_resp =
+            CancelApprovalResponse::decode(cancel.response_payload.as_slice()).unwrap();
+        cases.push(CompatCase::new(
+            "cancel_approval_invalid_key",
+            command_types::CANCEL_APPROVAL,
+            &cancel,
+            "CancelApprovalResponse",
+            normalize_cancel_approval_response_compat(&cancel_resp),
+        ));
+
+        cases.push(rust_compat_get_geoip_status_case(&hub, "get_geoip_status_initial").await);
+
+        let lookup = rust_compat_dispatch(
+            &hub,
+            command_types::LOOKUP_IP,
+            LookupIpRequest {
+                ip: "127.0.0.1".to_string(),
+            }
+            .encode_to_vec(),
+        )
+        .await;
+        let lookup_resp = LookupIpResponse::decode(lookup.response_payload.as_slice()).unwrap();
+        cases.push(CompatCase::new(
+            "lookup_ip_loopback",
+            command_types::LOOKUP_IP,
+            &lookup,
+            "LookupIPResponse",
+            normalize_lookup_ip_response_compat(&lookup_resp),
+        ));
+
+        let block = rust_compat_dispatch(
+            &hub,
+            command_types::BLOCK_IP,
+            BlockIpRequest {
+                ip: "203.0.113.7".to_string(),
+                duration_seconds: 60,
+                ..Default::default()
+            }
+            .encode_to_vec(),
+        )
+        .await;
+        cases.push(CompatCase::new(
+            "block_ip",
+            command_types::BLOCK_IP,
+            &block,
+            "Empty",
+            normalize_empty_payload_compat(&block.response_payload),
+        ));
+        cases.push(rust_compat_list_global_rules_case(&hub, "list_global_rules_after_block").await);
+
+        let allow = rust_compat_dispatch(
+            &hub,
+            command_types::ALLOW_IP,
+            AllowIpRequest {
+                ip: "198.51.100.9".to_string(),
+                duration_seconds: 120,
+            }
+            .encode_to_vec(),
+        )
+        .await;
+        cases.push(CompatCase::new(
+            "allow_ip",
+            command_types::ALLOW_IP,
+            &allow,
+            "Empty",
+            normalize_empty_payload_compat(&allow.response_payload),
+        ));
+        cases.push(rust_compat_list_global_rules_case(&hub, "list_global_rules_after_allow").await);
+
+        let remove_global = rust_compat_dispatch(
+            &hub,
+            command_types::REMOVE_GLOBAL_RULE,
+            RemoveGlobalRuleRequest {
+                rule_id: "global-block-203.0.113.7".to_string(),
+            }
+            .encode_to_vec(),
+        )
+        .await;
+        let remove_global_resp =
+            RemoveGlobalRuleResponse::decode(remove_global.response_payload.as_slice()).unwrap();
+        cases.push(CompatCase::new(
+            "remove_global_rule",
+            command_types::REMOVE_GLOBAL_RULE,
+            &remove_global,
+            "RemoveGlobalRuleResponse",
+            normalize_remove_global_rule_response_compat(&remove_global_resp),
+        ));
+        cases
+            .push(rust_compat_list_global_rules_case(&hub, "list_global_rules_after_remove").await);
+
+        let delete = rust_compat_dispatch(
+            &hub,
+            command_types::DELETE_PROXY,
+            DeleteProxyRequest {
+                proxy_id: ids.direct_proxy.clone(),
+            }
+            .encode_to_vec(),
+        )
+        .await;
+        let delete_resp = DeleteProxyResponse::decode(delete.response_payload.as_slice()).unwrap();
+        cases.push(CompatCase::new(
+            "delete_proxy",
+            command_types::DELETE_PROXY,
+            &delete,
+            "DeleteProxyResponse",
+            normalize_delete_proxy_response_compat(&delete_resp),
+        ));
+        cases.push(rust_compat_list_proxies_case(&hub, "list_after_delete", &ids).await);
+
+        let apply_req = ApplyProxyRequest {
+            proxy_id: "compat-template-proxy".to_string(),
+            revision_num: 7,
+            config_yaml: r#"entryPoints:
+  main:
+    address: 127.0.0.1:0
+    defaultAction: allow
+tcp:
+  routers:
+    main:
+      entryPoints: [main]
+      service: backend
+  services:
+    backend:
+      address: 127.0.0.1:9
+"#
+            .to_string(),
+            config_hash: "compat-template-hash".to_string(),
+        };
+        let apply =
+            rust_compat_dispatch(&hub, command_types::APPLY_PROXY, apply_req.encode_to_vec()).await;
+        let apply_resp = ApplyProxyResponse::decode(apply.response_payload.as_slice()).unwrap();
+        ids.applied_proxy = apply_req.proxy_id.clone();
+        cases.push(CompatCase::new(
+            "apply_proxy_template",
+            command_types::APPLY_PROXY,
+            &apply,
+            "ApplyProxyResponse",
+            normalize_apply_proxy_response_compat(&apply_resp),
+        ));
+
+        cases.push(rust_compat_get_applied_case(&hub, "get_applied_after_apply", &ids).await);
+
+        let unapply = rust_compat_dispatch(
+            &hub,
+            command_types::UNAPPLY_PROXY,
+            DeleteProxyRequest {
+                proxy_id: ids.applied_proxy.clone(),
+            }
+            .encode_to_vec(),
+        )
+        .await;
+        let unapply_resp =
+            DeleteProxyResponse::decode(unapply.response_payload.as_slice()).unwrap();
+        cases.push(CompatCase::new(
+            "unapply_proxy",
+            command_types::UNAPPLY_PROXY,
+            &unapply,
+            "DeleteProxyResponse",
+            normalize_delete_proxy_response_compat(&unapply_resp),
+        ));
+        cases.push(rust_compat_get_applied_case(&hub, "get_applied_after_unapply", &ids).await);
+
+        if !ids.direct_proxy.is_empty() {
+            let _ = hub.manager.delete_proxy(&ids.direct_proxy).await;
+        }
+
+        let json = serde_json::to_string_pretty(&cases).unwrap() + "\n";
+        std::fs::write(out_path, json).unwrap();
+    }
+
+    async fn rust_compat_dispatch(
+        hub: &HubClient,
+        cmd_type: i32,
+        payload: Vec<u8>,
+    ) -> CommandResult {
+        HubClient::static_dispatch(
+            cmd_type,
+            payload,
+            &hub.manager,
+            &hub.applied_proxies,
+            &hub.data_dir,
+        )
+        .await
+    }
+
+    async fn rust_compat_stats_case(
+        hub: &HubClient,
+        name: &str,
+        cmd_type: i32,
+        payload: Vec<u8>,
+        _ids: &CompatIds,
+    ) -> CompatCase {
+        let result = rust_compat_dispatch(hub, cmd_type, payload).await;
+        let resp = StatsSummaryResponse::decode(result.response_payload.as_slice()).unwrap();
+        CompatCase::new(
+            name,
+            cmd_type,
+            &result,
+            "StatsSummaryResponse",
+            normalize_stats_summary_compat(&resp),
+        )
+    }
+
+    async fn rust_compat_list_proxies_case(
+        hub: &HubClient,
+        name: &str,
+        ids: &CompatIds,
+    ) -> CompatCase {
+        let result = rust_compat_dispatch(hub, command_types::LIST_PROXIES, vec![]).await;
+        let resp = ListProxiesResponse::decode(result.response_payload.as_slice()).unwrap();
+        CompatCase::new(
+            name,
+            command_types::LIST_PROXIES,
+            &result,
+            "ListProxiesResponse",
+            normalize_list_proxies_response_compat(&resp, ids),
+        )
+    }
+
+    async fn rust_compat_get_applied_case(
+        hub: &HubClient,
+        name: &str,
+        ids: &CompatIds,
+    ) -> CompatCase {
+        let result = rust_compat_dispatch(hub, command_types::GET_APPLIED, vec![]).await;
+        let resp = GetAppliedProxiesResponse::decode(result.response_payload.as_slice()).unwrap();
+        CompatCase::new(
+            name,
+            command_types::GET_APPLIED,
+            &result,
+            "GetAppliedProxiesResponse",
+            normalize_get_applied_response_compat(&resp, ids),
+        )
+    }
+
+    async fn rust_compat_list_rules_case(
+        hub: &HubClient,
+        name: &str,
+        ids: &CompatIds,
+    ) -> CompatCase {
+        let result = rust_compat_dispatch(
+            hub,
+            command_types::LIST_RULES,
+            ListRulesRequest {
+                proxy_id: ids.direct_proxy.clone(),
+            }
+            .encode_to_vec(),
+        )
+        .await;
+        let resp = ListRulesResponse::decode(result.response_payload.as_slice()).unwrap();
+        CompatCase::new(
+            name,
+            command_types::LIST_RULES,
+            &result,
+            "ListRulesResponse",
+            normalize_list_rules_response_compat(&resp, ids),
+        )
+    }
+
+    async fn rust_compat_list_global_rules_case(hub: &HubClient, name: &str) -> CompatCase {
+        let result = rust_compat_dispatch(hub, command_types::LIST_GLOBAL_RULES, vec![]).await;
+        let resp = ListGlobalRulesResponse::decode(result.response_payload.as_slice()).unwrap();
+        CompatCase::new(
+            name,
+            command_types::LIST_GLOBAL_RULES,
+            &result,
+            "ListGlobalRulesResponse",
+            normalize_list_global_rules_response_compat(&resp),
+        )
+    }
+
+    async fn rust_compat_list_active_approvals_case(hub: &HubClient, name: &str) -> CompatCase {
+        let result = rust_compat_dispatch(
+            hub,
+            command_types::LIST_ACTIVE_APPROVALS,
+            ListActiveApprovalsRequest::default().encode_to_vec(),
+        )
+        .await;
+        let resp = ListActiveApprovalsResponse::decode(result.response_payload.as_slice()).unwrap();
+        CompatCase::new(
+            name,
+            command_types::LIST_ACTIVE_APPROVALS,
+            &result,
+            "ListActiveApprovalsResponse",
+            normalize_list_active_approvals_response_compat(&resp),
+        )
+    }
+
+    async fn rust_compat_list_active_approvals_detailed_case(
+        hub: &HubClient,
+        name: &str,
+        ids: &CompatIds,
+        req: ListActiveApprovalsRequest,
+    ) -> CompatCase {
+        let result = rust_compat_dispatch(
+            hub,
+            command_types::LIST_ACTIVE_APPROVALS,
+            req.encode_to_vec(),
+        )
+        .await;
+        let resp = ListActiveApprovalsResponse::decode(result.response_payload.as_slice()).unwrap();
+        CompatCase::new(
+            name,
+            command_types::LIST_ACTIVE_APPROVALS,
+            &result,
+            "ListActiveApprovalsResponse",
+            normalize_list_active_approvals_detailed_compat(&resp, ids),
+        )
+    }
+
+    async fn rust_compat_get_geoip_status_case(hub: &HubClient, name: &str) -> CompatCase {
+        let result = rust_compat_dispatch(hub, command_types::GET_GEOIP_STATUS, vec![]).await;
+        let resp = GetGeoIpStatusResponse::decode(result.response_payload.as_slice()).unwrap();
+        CompatCase::new(
+            name,
+            command_types::GET_GEOIP_STATUS,
+            &result,
+            "GetGeoIPStatusResponse",
+            normalize_get_geoip_status_response_compat(&resp),
+        )
+    }
+
+    async fn rust_compat_start_echo_backend() -> String {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap().to_string();
+        tokio::spawn(async move {
+            loop {
+                let Ok((socket, _)) = listener.accept().await else {
+                    return;
+                };
+                tokio::spawn(async move {
+                    let (mut reader, mut writer) = socket.into_split();
+                    let _ = tokio::io::copy(&mut reader, &mut writer).await;
+                });
+            }
+        });
+        addr
+    }
+
+    async fn rust_compat_connect_and_roundtrip(addr: &str) -> TcpStream {
+        let mut stream = TcpStream::connect(addr).await.unwrap();
+        stream.write_all(b"ping").await.unwrap();
+        let mut buf = [0u8; 4];
+        stream.read_exact(&mut buf).await.unwrap();
+        assert_eq!(&buf, b"ping");
+        stream
+    }
+
+    async fn rust_compat_wait_for_connections(hub: &HubClient, proxy_id: &str, want: usize) {
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(2);
+        loop {
+            let got = hub
+                .manager
+                .get_active_connections(Some(proxy_id.to_string()))
+                .await
+                .len();
+            if got == want {
+                return;
+            }
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "timed out waiting for {want} active connections on {proxy_id}, got {got}"
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    }
+
+    fn normalize_stats_summary_compat(resp: &StatsSummaryResponse) -> Value {
+        json!({
+            "total_connections": resp.total_connections,
+            "active_connections": resp.active_connections,
+            "total_bytes_in": resp.total_bytes_in,
+            "total_bytes_out": resp.total_bytes_out,
+            "proxy_count": resp.proxy_count,
+        })
+    }
+
+    fn normalize_create_proxy_response_compat(
+        resp: &CreateProxyResponse,
+        ids: &CompatIds,
+    ) -> Value {
+        json!({
+            "success": resp.success,
+            "error_message": resp.error_message,
+            "proxy_id": canonical_proxy_id_compat(&resp.proxy_id, ids),
+        })
+    }
+
+    fn normalize_delete_proxy_response_compat(resp: &DeleteProxyResponse) -> Value {
+        json!({
+            "success": resp.success,
+            "error_message": resp.error_message,
+        })
+    }
+
+    fn normalize_disable_proxy_response_compat(resp: &DisableProxyResponse) -> Value {
+        json!({
+            "success": resp.success,
+            "error_message": resp.error_message,
+        })
+    }
+
+    fn normalize_enable_proxy_response_compat(resp: &EnableProxyResponse) -> Value {
+        json!({
+            "success": resp.success,
+            "error_message": resp.error_message,
+        })
+    }
+
+    fn normalize_update_proxy_response_compat(resp: &UpdateProxyResponse) -> Value {
+        json!({
+            "success": resp.success,
+            "error_message": resp.error_message,
+        })
+    }
+
+    fn normalize_reload_rules_response_compat(resp: &ReloadRulesResponse) -> Value {
+        json!({
+            "success": resp.success,
+            "rules_loaded": resp.rules_loaded,
+            "error_message": resp.error_message,
+        })
+    }
+
+    fn normalize_restart_listeners_response_compat(resp: &RestartListenersResponse) -> Value {
+        json!({
+            "success": resp.success,
+            "restarted_count": resp.restarted_count,
+            "error_message": resp.error_message,
+        })
+    }
+
+    fn normalize_get_active_connections_response_compat(
+        resp: &GetActiveConnectionsResponse,
+    ) -> Value {
+        json!({ "connections": resp.connections.len() })
+    }
+
+    fn normalize_close_all_connections_response_compat(
+        resp: &CloseAllConnectionsResponse,
+    ) -> Value {
+        json!({
+            "success": resp.success,
+            "error_message": resp.error_message,
+        })
+    }
+
+    fn normalize_close_connection_response_compat(resp: &CloseConnectionResponse) -> Value {
+        json!({
+            "success": resp.success,
+            "error_message": resp.error_message,
+        })
+    }
+
+    fn normalize_active_connections_detailed_compat(resp: &GetActiveConnectionsResponse) -> Value {
+        let mut connections: Vec<Value> = resp
+            .connections
+            .iter()
+            .map(|conn| {
+                json!({
+                    "source_ip": conn.source_ip,
+                    "dest_addr": if conn.dest_addr.is_empty() { "" } else { "<dest_addr>" },
+                    "bytes_in_positive": conn.bytes_in > 0,
+                    "bytes_out_positive": conn.bytes_out > 0,
+                })
+            })
+            .collect();
+        connections.sort_by_key(|conn| conn["source_ip"].as_str().unwrap_or_default().to_string());
+        json!({
+            "connections": resp.connections.len(),
+            "items": connections,
+        })
+    }
+
+    fn normalize_list_active_approvals_response_compat(
+        resp: &ListActiveApprovalsResponse,
+    ) -> Value {
+        json!({ "approvals": resp.approvals.len() })
+    }
+
+    fn normalize_list_active_approvals_detailed_compat(
+        resp: &ListActiveApprovalsResponse,
+        ids: &CompatIds,
+    ) -> Value {
+        let mut approvals: Vec<Value> = resp
+            .approvals
+            .iter()
+            .map(|approval| {
+                json!({
+                    "source_ip": approval.source_ip,
+                    "rule_id": approval.rule_id,
+                    "proxy_id": canonical_proxy_id_compat(&approval.proxy_id, ids),
+                    "allowed": approval.allowed,
+                    "bytes_in": approval.bytes_in,
+                    "bytes_out": approval.bytes_out,
+                    "geo_country": approval.geo_country,
+                    "geo_city": approval.geo_city,
+                    "geo_isp": approval.geo_isp,
+                    "blocked_count": approval.blocked_count,
+                    "conn_ids": approval.conn_ids.len(),
+                })
+            })
+            .collect();
+        approvals.sort_by_key(|approval| {
+            format!(
+                "{}\0{}",
+                approval["source_ip"].as_str().unwrap_or_default(),
+                approval["rule_id"].as_str().unwrap_or_default()
+            )
+        });
+        json!({
+            "approvals": resp.approvals.len(),
+            "items": approvals,
+        })
+    }
+
+    fn normalize_cancel_approval_response_compat(resp: &CancelApprovalResponse) -> Value {
+        json!({
+            "success": resp.success,
+            "error_message": resp.error_message,
+            "connections_closed": resp.connections_closed,
+        })
+    }
+
+    fn normalize_get_geoip_status_response_compat(resp: &GetGeoIpStatusResponse) -> Value {
+        json!({
+            "enabled": resp.enabled,
+            "mode": resp.mode,
+            "city_db_path": resp.city_db_path,
+            "isp_db_path": resp.isp_db_path,
+            "provider": resp.provider,
+            "strategy": resp.strategy,
+        })
+    }
+
+    fn normalize_lookup_ip_response_compat(resp: &LookupIpResponse) -> Value {
+        let geo = resp.geo.as_ref();
+        json!({
+            "cached": resp.cached,
+            "country": geo.map(|g| g.country.as_str()).unwrap_or(""),
+            "city": geo.map(|g| g.city.as_str()).unwrap_or(""),
+            "isp": geo.map(|g| g.isp.as_str()).unwrap_or(""),
+            "country_code": geo.map(|g| g.country_code.as_str()).unwrap_or(""),
+            "source": geo.map(|g| g.source.as_str()).unwrap_or(""),
+        })
+    }
+
+    fn normalize_remove_global_rule_response_compat(resp: &RemoveGlobalRuleResponse) -> Value {
+        json!({
+            "success": resp.success,
+            "error_message": resp.error_message,
+        })
+    }
+
+    fn normalize_empty_payload_compat(raw: &[u8]) -> Value {
+        json!({ "len": raw.len() })
+    }
+
+    fn normalize_apply_proxy_response_compat(resp: &ApplyProxyResponse) -> Value {
+        json!({
+            "success": resp.success,
+            "error_message": resp.error_message,
+        })
+    }
+
+    fn normalize_list_proxies_response_compat(
+        resp: &ListProxiesResponse,
+        ids: &CompatIds,
+    ) -> Value {
+        let mut proxies: Vec<Value> = resp
+            .proxies
+            .iter()
+            .map(|proxy| normalize_proxy_status_compat(proxy, ids))
+            .collect();
+        proxies.sort_by_key(|proxy| proxy["proxy_id"].as_str().unwrap_or_default().to_string());
+        json!({ "proxies": proxies })
+    }
+
+    fn normalize_proxy_status_compat(resp: &ProxyStatus, ids: &CompatIds) -> Value {
+        let listen_addr = if resp.listen_addr.is_empty() {
+            ""
+        } else {
+            "<listen_addr>"
+        };
+        json!({
+            "proxy_id": canonical_proxy_id_compat(&resp.proxy_id, ids),
+            "running": resp.running,
+            "listen_addr": listen_addr,
+            "default_backend": resp.default_backend,
+            "default_action": resp.default_action,
+            "default_mock": resp.default_mock,
+            "fallback_action": resp.fallback_action,
+            "fallback_mock": resp.fallback_mock,
+        })
+    }
+
+    fn normalize_list_rules_response_compat(resp: &ListRulesResponse, ids: &CompatIds) -> Value {
+        let mut rules: Vec<Value> = resp
+            .rules
+            .iter()
+            .map(|rule| normalize_rule_compat(rule, ids))
+            .collect();
+        rules.sort_by_key(|rule| rule["id"].as_str().unwrap_or_default().to_string());
+        json!({ "rules": rules })
+    }
+
+    fn normalize_rule_compat(rule: &Rule, ids: &CompatIds) -> Value {
+        let mut conditions: Vec<Value> = rule
+            .conditions
+            .iter()
+            .map(|condition| {
+                json!({
+                    "type": condition.r#type,
+                    "op": condition.op,
+                    "value": condition.value,
+                    "negate": condition.negate,
+                })
+            })
+            .collect();
+        conditions
+            .sort_by_key(|condition| condition["value"].as_str().unwrap_or_default().to_string());
+
+        json!({
+            "id": canonical_rule_id_compat(&rule.id, ids),
+            "name": rule.name,
+            "priority": rule.priority,
+            "enabled": rule.enabled,
+            "action": rule.action,
+            "target_backend": rule.target_backend,
+            "expression": rule.expression,
+            "conditions": conditions,
+            "rate_limit": normalize_rate_limit_compat(rule.rate_limit.as_ref()),
+        })
+    }
+
+    fn normalize_rate_limit_compat(rate_limit: Option<&RateLimitConfig>) -> Value {
+        match rate_limit {
+            Some(rate_limit) => json!({
+                "max_connections": rate_limit.max_connections,
+                "interval_seconds": rate_limit.interval_seconds,
+                "auto_block": rate_limit.auto_block,
+                "block_duration_seconds": rate_limit.block_duration_seconds,
+                "block_steps_seconds": rate_limit.block_steps_seconds,
+                "count_only_failures": rate_limit.count_only_failures,
+                "failure_duration_threshold": rate_limit.failure_duration_threshold,
+            }),
+            None => Value::Null,
+        }
+    }
+
+    fn normalize_get_applied_response_compat(
+        resp: &GetAppliedProxiesResponse,
+        ids: &CompatIds,
+    ) -> Value {
+        let mut proxies: Vec<Value> = resp
+            .proxies
+            .iter()
+            .map(|proxy| {
+                json!({
+                    "proxy_id": canonical_proxy_id_compat(&proxy.proxy_id, ids),
+                    "revision_num": proxy.revision_num,
+                    "status": proxy.status,
+                    "error_message": proxy.error_message,
+                })
+            })
+            .collect();
+        proxies.sort_by_key(|proxy| proxy["proxy_id"].as_str().unwrap_or_default().to_string());
+        json!({ "proxies": proxies })
+    }
+
+    fn normalize_list_global_rules_response_compat(resp: &ListGlobalRulesResponse) -> Value {
+        let mut rules: Vec<Value> = resp
+            .rules
+            .iter()
+            .map(|rule| {
+                json!({
+                    "id": rule.id,
+                    "name": rule.name,
+                    "source_ip": rule.source_ip,
+                    "action": rule.action,
+                    "expires": rule.expires_at.is_some(),
+                })
+            })
+            .collect();
+        rules.sort_by_key(|rule| rule["id"].as_str().unwrap_or_default().to_string());
+        json!({ "rules": rules })
+    }
+
+    fn canonical_proxy_id_compat(id: &str, ids: &CompatIds) -> String {
+        if id.is_empty() {
+            String::new()
+        } else if id == ids.direct_proxy {
+            "<direct-proxy>".to_string()
+        } else if id == ids.applied_proxy {
+            "<applied-proxy>".to_string()
+        } else {
+            "<proxy>".to_string()
+        }
+    }
+
+    fn canonical_rule_id_compat(id: &str, ids: &CompatIds) -> String {
+        if id.is_empty() {
+            String::new()
+        } else if id == ids.reload_rule {
+            "<reload-rule>".to_string()
+        } else if id == ids.extended_rule {
+            "<extended-rule>".to_string()
+        } else {
+            "<rule>".to_string()
+        }
+    }
+
+    fn command_name_compat(cmd_type: i32) -> &'static str {
+        match cmd_type {
+            command_types::ADD_RULE => "COMMAND_TYPE_ADD_RULE",
+            command_types::REMOVE_RULE => "COMMAND_TYPE_REMOVE_RULE",
+            command_types::GET_ACTIVE_CONNECTIONS => "COMMAND_TYPE_GET_ACTIVE_CONNECTIONS",
+            command_types::CLOSE_CONNECTION => "COMMAND_TYPE_CLOSE_CONNECTION",
+            command_types::CLOSE_ALL_CONNECTIONS => "COMMAND_TYPE_CLOSE_ALL_CONNECTIONS",
+            command_types::STATS_CONTROL => "COMMAND_TYPE_STATS_CONTROL",
+            command_types::LIST_PROXIES => "COMMAND_TYPE_LIST_PROXIES",
+            command_types::LIST_RULES => "COMMAND_TYPE_LIST_RULES",
+            command_types::STATUS => "COMMAND_TYPE_STATUS",
+            command_types::GET_METRICS => "COMMAND_TYPE_GET_METRICS",
+            command_types::APPLY_PROXY => "COMMAND_TYPE_APPLY_PROXY",
+            command_types::UNAPPLY_PROXY => "COMMAND_TYPE_UNAPPLY_PROXY",
+            command_types::GET_APPLIED => "COMMAND_TYPE_GET_APPLIED",
+            command_types::PROXY_UPDATE => "COMMAND_TYPE_PROXY_UPDATE",
+            command_types::RESOLVE_APPROVAL => "COMMAND_TYPE_RESOLVE_APPROVAL",
+            command_types::CREATE_PROXY => "COMMAND_TYPE_CREATE_PROXY",
+            command_types::DELETE_PROXY => "COMMAND_TYPE_DELETE_PROXY",
+            command_types::ENABLE_PROXY => "COMMAND_TYPE_ENABLE_PROXY",
+            command_types::DISABLE_PROXY => "COMMAND_TYPE_DISABLE_PROXY",
+            command_types::UPDATE_PROXY => "COMMAND_TYPE_UPDATE_PROXY",
+            command_types::RESTART_LISTENERS => "COMMAND_TYPE_RESTART_LISTENERS",
+            command_types::RELOAD_RULES => "COMMAND_TYPE_RELOAD_RULES",
+            command_types::BLOCK_IP => "COMMAND_TYPE_BLOCK_IP",
+            command_types::ALLOW_IP => "COMMAND_TYPE_ALLOW_IP",
+            command_types::LIST_GLOBAL_RULES => "COMMAND_TYPE_LIST_GLOBAL_RULES",
+            command_types::REMOVE_GLOBAL_RULE => "COMMAND_TYPE_REMOVE_GLOBAL_RULE",
+            command_types::CONFIGURE_GEOIP => "COMMAND_TYPE_CONFIGURE_GEOIP",
+            command_types::GET_GEOIP_STATUS => "COMMAND_TYPE_GET_GEOIP_STATUS",
+            command_types::LOOKUP_IP => "COMMAND_TYPE_LOOKUP_IP",
+            command_types::LIST_ACTIVE_APPROVALS => "COMMAND_TYPE_LIST_ACTIVE_APPROVALS",
+            command_types::CANCEL_APPROVAL => "COMMAND_TYPE_CANCEL_APPROVAL",
+            _ => "COMMAND_TYPE_UNSPECIFIED",
+        }
+    }
+}
+
 /// Command type constants from hub_common.proto
 mod command_types {
-    pub const UNSPECIFIED: i32 = 0;
     pub const ADD_RULE: i32 = 2;
     pub const REMOVE_RULE: i32 = 3;
     pub const GET_ACTIVE_CONNECTIONS: i32 = 4;
@@ -110,6 +1987,150 @@ mod command_types {
     pub const LOOKUP_IP: i32 = 62;
     pub const LIST_ACTIVE_APPROVALS: i32 = 70;
     pub const CANCEL_APPROVAL: i32 = 71;
+}
+
+fn string_to_mock_preset(s: &str) -> i32 {
+    match s.to_lowercase().as_str() {
+        "ssh-secure" => MockPreset::SshSecure as i32,
+        "ssh-tarpit" => MockPreset::SshTarpit as i32,
+        "http-403" => MockPreset::Http403 as i32,
+        "http-404" => MockPreset::Http404 as i32,
+        "http-401" => MockPreset::Http401 as i32,
+        "redis-secure" => MockPreset::RedisSecure as i32,
+        "mysql-secure" => MockPreset::MysqlSecure as i32,
+        "mysql-tarpit" => MockPreset::MysqlTarpit as i32,
+        "rdp-secure" => MockPreset::RdpSecure as i32,
+        "telnet-secure" => MockPreset::TelnetSecure as i32,
+        "raw-tarpit" => MockPreset::RawTarpit as i32,
+        _ => MockPreset::Unspecified as i32,
+    }
+}
+
+struct TemplateSecurity {
+    cert_pem: String,
+    key_pem: String,
+    ca_pem: String,
+    client_auth_type: i32,
+}
+
+fn resolve_template_entrypoint_tls(ep: &crate::config::EntryPoint) -> TemplateSecurity {
+    let Some(tls) = &ep.tls else {
+        return TemplateSecurity {
+            cert_pem: String::new(),
+            key_pem: String::new(),
+            ca_pem: String::new(),
+            client_auth_type: ClientAuthType::ClientAuthNone as i32,
+        };
+    };
+
+    let cert_pem = read_template_tls_file(&tls.cert_file, "entrypoint TLS certificate");
+    let key_pem = read_template_tls_file(&tls.key_file, "entrypoint TLS private key");
+    let ca_pem = read_template_tls_file(&tls.client_ca, "entrypoint TLS client CA");
+    let client_auth_type = match tls.client_auth.to_lowercase().as_str() {
+        "none" => ClientAuthType::ClientAuthNone as i32,
+        "optional" | "request" => ClientAuthType::ClientAuthRequest as i32,
+        "require" | "required" | "mtls" => ClientAuthType::ClientAuthRequire as i32,
+        "" | "auto" => {
+            if ca_pem.is_empty() {
+                ClientAuthType::ClientAuthNone as i32
+            } else {
+                ClientAuthType::ClientAuthRequest as i32
+            }
+        }
+        other => {
+            warn!(
+                "Unknown template entrypoint TLS clientAuth {:?}; using none",
+                other
+            );
+            ClientAuthType::ClientAuthNone as i32
+        }
+    };
+
+    TemplateSecurity {
+        cert_pem,
+        key_pem,
+        ca_pem,
+        client_auth_type,
+    }
+}
+
+fn read_template_tls_file(path: &str, label: &str) -> String {
+    if path.is_empty() {
+        return String::new();
+    }
+    match std::fs::read_to_string(path) {
+        Ok(data) => data,
+        Err(e) => {
+            warn!("Failed to read {} {}: {}", label, path, e);
+            String::new()
+        }
+    }
+}
+
+fn proxy_name_prefix(proxy_id: &str) -> &str {
+    proxy_id.get(..8).unwrap_or(proxy_id)
+}
+
+async fn add_yaml_default_rule(
+    manager: &Arc<ProxyManager>,
+    proxy_id: &str,
+    action: i32,
+    default_mock: i32,
+    rate_limit: RateLimitConfig,
+) {
+    let normalized_action = if action == crate::proto::common::ActionType::Unspecified as i32 {
+        crate::proto::common::ActionType::Allow as i32
+    } else {
+        action
+    };
+    let rule = Rule {
+        id: uuid::Uuid::new_v4().to_string(),
+        name: "__default".to_string(),
+        priority: -1000,
+        enabled: true,
+        action: normalized_action,
+        rate_limit: Some(rate_limit),
+        mock_response: if normalized_action == crate::proto::common::ActionType::Mock as i32 {
+            Some(crate::proto::proxy::MockConfig {
+                preset: default_mock,
+                ..Default::default()
+            })
+        } else {
+            None
+        },
+        ..Default::default()
+    };
+    if let Err(e) = manager.add_rule(proxy_id, rule).await {
+        warn!(
+            "Failed to add YAML rate-limited default rule to proxy {}: {}",
+            proxy_id, e
+        );
+    }
+}
+
+async fn add_yaml_middleware_rules(
+    manager: &Arc<ProxyManager>,
+    proxy_id: &str,
+    middleware_mocks: Vec<(String, crate::config::MockConfig)>,
+    router_priority: i32,
+) {
+    for (name, mock) in middleware_mocks {
+        let rule = Rule {
+            id: uuid::Uuid::new_v4().to_string(),
+            name: format!("__middleware:{}", name),
+            priority: router_priority,
+            enabled: true,
+            action: crate::proto::common::ActionType::Mock as i32,
+            mock_response: Some(crate::config::mock_config_to_proto(&mock)),
+            ..Default::default()
+        };
+        if let Err(e) = manager.add_rule(proxy_id, rule).await {
+            warn!(
+                "Failed to add YAML middleware rule {} to proxy {}: {}",
+                name, proxy_id, e
+            );
+        }
+    }
 }
 
 /// Derive emoji fingerprint from data (matches Go's pairing.DeriveFingerprint)
@@ -235,7 +2256,9 @@ impl HubClient {
         if let Some(code) = &pairing_code {
             self.pair(code).await?;
         } else if !self.has_identity().await {
-            return Err(anyhow!("Node not paired. Provide --pair <code>"));
+            return Err(anyhow!(
+                "node not paired - run with --pair <code> or --pair-offline first"
+            ));
         }
 
         // Load applied proxies from disk
@@ -290,6 +2313,11 @@ impl HubClient {
             let hb_node = self.node_name.clone();
             let start = self.start_time;
             tokio::spawn(Self::heartbeat_loop(hb_client, hb_node, start));
+
+            // Revocation Task
+            let rev_client = client.clone();
+            let rev_node = self.node_name.clone();
+            tokio::spawn(Self::stream_revocations_loop(rev_client, rev_node));
 
             // P2P Signaling Task
             if self.p2p_enabled {
@@ -457,6 +2485,43 @@ impl HubClient {
                 }
                 Err(e) => error!("[Hub] Heartbeat failed: {}", e),
             }
+        }
+    }
+
+    async fn stream_revocations_loop(
+        mut client: NodeServiceClient<InterceptedService<Channel, HubInterceptor>>,
+        node_name: String,
+    ) {
+        loop {
+            match client
+                .stream_revocations(StreamRevocationsRequest {
+                    node_id: node_name.clone(),
+                })
+                .await
+            {
+                Ok(resp) => {
+                    let mut stream = resp.into_inner();
+                    info!("[Hub] Revocation stream established");
+                    loop {
+                        match stream.message().await {
+                            Ok(Some(event)) => {
+                                warn!(
+                                    "[Hub] Certificate revocation received: serial={} fingerprint={} reason={}",
+                                    event.serial_number, event.fingerprint, event.reason
+                                );
+                            }
+                            Ok(None) => break,
+                            Err(e) => {
+                                warn!("[Hub] Revocation stream error: {}", e);
+                                break;
+                            }
+                        }
+                    }
+                }
+                Err(e) => warn!("[Hub] Failed to start revocation stream: {}", e),
+            }
+
+            time::sleep(Duration::from_secs(30)).await;
         }
     }
 
@@ -701,7 +2766,7 @@ impl HubClient {
         }
 
         let channel = Channel::from_shared(addr)?
-            .tls_config(tls.domain_name("localhost"))?
+            .tls_config(tls)?
             .connect_timeout(Duration::from_secs(10))
             .connect()
             .await?;
@@ -709,19 +2774,24 @@ impl HubClient {
         Ok(channel)
     }
 
+    async fn build_node_service_client(
+        &self,
+    ) -> Result<NodeServiceClient<InterceptedService<Channel, HubInterceptor>>> {
+        let channel = self.build_channel().await?;
+        let interceptor = HubInterceptor {
+            user_id: self.user_id.clone(),
+        };
+        Ok(NodeServiceClient::with_interceptor(channel, interceptor))
+    }
+
     async fn connect(&mut self) -> Result<()> {
-        let channel = match self.build_channel().await {
-            Ok(c) => c,
+        let service = match self.build_node_service_client().await {
+            Ok(client) => client,
             Err(e) => {
                 error!("[Hub] Connect failed details: {:?}", e);
                 return Err(anyhow!("Transport error: {}", e));
             }
         };
-
-        let interceptor = HubInterceptor {
-            user_id: self.user_id.clone(),
-        };
-        let service = NodeServiceClient::with_interceptor(channel, interceptor);
 
         self.client = Some(service);
         info!("Connected to Hub at {}", self.hub_addr);
@@ -789,15 +2859,14 @@ impl HubClient {
         // Ensure data dir exists
         fs::create_dir_all(&self.data_dir).await?;
 
-        // 1. Generate Node Key & CSR
-        info!("Generating node identity...");
-        let (key_pem, key_pair) = cert_utils::generate_node_key()?;
+        // 1. Load or generate Node Key & CSR. Go reuses node.key when present.
+        info!("Preparing node identity...");
+        let (_key_pem, key_pair) =
+            cert_utils::load_or_generate_node_key(Path::new(&self.data_dir)).await?;
         let csr_pem = cert_utils::generate_csr(key_pair, &self.node_name)?;
 
-        // Save Private Key immediately
-        fs::write(Path::new(&self.data_dir).join("node.key"), &key_pem).await?;
-
         // 2. Resolve Hub CA (TOFU if needed) — matches Go's ensureHubCA()
+        self.verify_cached_hub_ca_for_pairing().await;
         let hub_ca_pem = self.ensure_hub_ca().await?;
 
         // 3. Connect to Hub for pairing (server-TLS only, NO client cert)
@@ -809,8 +2878,7 @@ impl HubClient {
         }
 
         let tls = ClientTlsConfig::new()
-            .ca_certificate(tonic::transport::Certificate::from_pem(&hub_ca_pem))
-            .domain_name("localhost");
+            .ca_certificate(tonic::transport::Certificate::from_pem(&hub_ca_pem));
 
         info!("[Pairing] Connecting to Hub at {}...", addr);
         let channel = tokio::time::timeout(
@@ -933,7 +3001,12 @@ impl HubClient {
             return Err(anyhow!("CLI rejected pairing: {}", cert_msg.error_message));
         }
         let cert_pem_bytes = session.decrypt(&cert_msg.encrypted_payload, &cert_msg.nonce)?;
-        fs::write(Path::new(&self.data_dir).join("node.crt"), &cert_pem_bytes).await?;
+        cert_utils::write_cert_pem(
+            &Path::new(&self.data_dir).join("node.crt"),
+            &cert_pem_bytes,
+            0o600,
+        )
+        .await?;
 
         // 10. Recv Encrypted CA
         let ca_msg = resp_stream
@@ -941,7 +3014,12 @@ impl HubClient {
             .await?
             .ok_or(anyhow!("Stream closed"))?;
         let ca_pem_bytes = session.decrypt(&ca_msg.encrypted_payload, &ca_msg.nonce)?;
-        fs::write(Path::new(&self.data_dir).join("cli_ca.crt"), &ca_pem_bytes).await?;
+        cert_utils::write_cert_pem(
+            &Path::new(&self.data_dir).join("cli_ca.crt"),
+            &ca_pem_bytes,
+            0o644,
+        )
+        .await?;
 
         // 11. Save NodeID (CommonName) from certificate
         if let Ok(cert_str) = std::str::from_utf8(&cert_pem_bytes) {
@@ -969,6 +3047,33 @@ impl HubClient {
         println!();
 
         Ok(())
+    }
+
+    async fn verify_cached_hub_ca_for_pairing(&self) {
+        let cached_path = Path::new(&self.data_dir).join("hub_ca.crt");
+        let Ok(cached_data) = fs::read(&cached_path).await else {
+            return;
+        };
+
+        info!(
+            "[Pairing] Verifying cached Hub CA against {}...",
+            self.hub_addr
+        );
+        match crate::hubca::probe_hub_ca(&self.hub_addr).await {
+            Ok(info) => {
+                let cached = String::from_utf8_lossy(&cached_data).trim().to_string();
+                let probed = String::from_utf8_lossy(&info.ca_pem).trim().to_string();
+                if cached != probed {
+                    warn!("[Pairing] CA MISMATCH: Hub identity has changed");
+                    if let Err(e) = fs::remove_file(&cached_path).await {
+                        warn!("[Pairing] Failed to remove outdated cached CA: {}", e);
+                    }
+                } else {
+                    info!("[Pairing] Cached CA is valid (matches live Hub)");
+                }
+            }
+            Err(e) => warn!("[Pairing] Warning: Could not probe Hub CA: {}", e),
+        }
     }
 
     async fn load_private_key(&self) -> Result<SigningKey> {
@@ -1119,14 +3224,12 @@ impl HubClient {
             }
 
             // Replay protection (RequestID dedup, matches Go)
-            if !secure.request_id.is_empty() {
-                if self.replay_cache.contains_key(&secure.request_id) {
-                    error!("[SECURITY] Replay detected! Request ID {} already processed",
-                        secure.request_id);
-                    continue;
-                }
-                self.replay_cache.insert(secure.request_id.clone(), now);
+            if self.replay_cache.contains_key(&secure.request_id) {
+                error!("[SECURITY] Replay detected! Request ID {} already processed",
+                    secure.request_id);
+                continue;
             }
+            self.replay_cache.insert(secure.request_id.clone(), now);
 
             // Unmarshal EncryptedCommandPayload
             let payload = match EncryptedCommandPayload::decode(secure.data.as_slice()) {
@@ -1140,7 +3243,9 @@ impl HubClient {
             info!("[Hub] Decrypted command type: {}", payload.r#type);
 
             // Extend metrics streaming window when stats are requested (matches Go's EnableStatsStreaming)
-            if payload.r#type == command_types::STATUS || payload.r#type == command_types::GET_METRICS {
+            if payload.r#type == command_types::STATUS
+                || payload.r#type == command_types::GET_METRICS
+            {
                 let mut until = self.stats_streaming_until.write().await;
                 *until = tokio::time::Instant::now() + Duration::from_secs(30);
             }
@@ -1182,7 +3287,13 @@ impl HubClient {
 
     async fn dispatch_command(&self, cmd_type: i32, payload: Vec<u8>) -> CommandResult {
         let (status, error_message, response_payload) = match cmd_type {
-            command_types::STATUS | command_types::GET_METRICS => self.handle_status().await,
+            command_types::STATUS => self.handle_status().await,
+            command_types::GET_METRICS => self.handle_metrics().await,
+            command_types::STATS_CONTROL => (
+                "ERROR".to_string(),
+                "unknown command: COMMAND_TYPE_STATS_CONTROL".to_string(),
+                vec![],
+            ),
             command_types::LIST_PROXIES => self.handle_list_proxies().await,
             command_types::LIST_RULES => self.handle_list_rules(payload).await,
             command_types::ADD_RULE => self.handle_add_rule(payload).await,
@@ -1194,14 +3305,12 @@ impl HubClient {
             }
             command_types::CREATE_PROXY => self.handle_create_proxy(payload).await,
             command_types::APPLY_PROXY => self.handle_apply_proxy(payload).await,
-            command_types::DELETE_PROXY | command_types::UNAPPLY_PROXY => {
-                self.handle_delete_proxy(payload).await
-            }
+            command_types::DELETE_PROXY => self.handle_delete_proxy(payload).await,
+            command_types::UNAPPLY_PROXY => self.handle_unapply_proxy(payload).await,
             command_types::ENABLE_PROXY => self.handle_enable_proxy(payload).await,
             command_types::DISABLE_PROXY => self.handle_disable_proxy(payload).await,
-            command_types::UPDATE_PROXY | command_types::PROXY_UPDATE => {
-                self.handle_update_proxy(payload).await
-            }
+            command_types::UPDATE_PROXY => self.handle_update_proxy(payload).await,
+            command_types::PROXY_UPDATE => self.handle_proxy_update(payload).await,
             command_types::RESTART_LISTENERS => self.handle_restart_listeners().await,
             command_types::RELOAD_RULES => self.handle_reload_rules(payload).await,
             command_types::RESOLVE_APPROVAL => self.handle_resolve_approval(payload).await,
@@ -1210,7 +3319,9 @@ impl HubClient {
             command_types::LIST_GLOBAL_RULES => self.handle_list_global_rules().await,
             command_types::REMOVE_GLOBAL_RULE => self.handle_remove_global_rule(payload).await,
             command_types::GET_APPLIED => self.handle_get_applied().await,
-            command_types::LIST_ACTIVE_APPROVALS => self.handle_list_active_approvals().await,
+            command_types::LIST_ACTIVE_APPROVALS => {
+                self.handle_list_active_approvals(payload).await
+            }
             command_types::CANCEL_APPROVAL => self.handle_cancel_approval(payload).await,
             command_types::CONFIGURE_GEOIP => self.handle_configure_geoip(payload).await,
             command_types::GET_GEOIP_STATUS => self.handle_get_geoip_status().await,
@@ -1234,6 +3345,29 @@ impl HubClient {
         let statuses = self.manager.list_proxies().await;
 
         let mut total_conns: i64 = 0;
+        let mut bytes_in: i64 = 0;
+        let mut bytes_out: i64 = 0;
+
+        for s in &statuses {
+            total_conns += s.total_connections;
+            bytes_in += s.bytes_in;
+            bytes_out += s.bytes_out;
+        }
+
+        let resp = StatsSummaryResponse {
+            total_connections: total_conns,
+            total_bytes_in: bytes_in,
+            total_bytes_out: bytes_out,
+            ..Default::default()
+        };
+
+        ("OK".to_string(), "".to_string(), resp.encode_to_vec())
+    }
+
+    async fn handle_metrics(&self) -> (String, String, Vec<u8>) {
+        let statuses = self.manager.list_proxies().await;
+
+        let mut total_conns: i64 = 0;
         let mut active_conns: i64 = 0;
         let mut bytes_in: i64 = 0;
         let mut bytes_out: i64 = 0;
@@ -1251,6 +3385,7 @@ impl HubClient {
             total_bytes_out: bytes_out,
             active_connections: active_conns,
             proxy_count: statuses.len() as i32,
+            timestamp: Some(prost_types::Timestamp::from(std::time::SystemTime::now())),
             ..Default::default()
         };
 
@@ -1288,11 +3423,13 @@ impl HubClient {
         match AddRuleRequest::decode(payload.as_slice()) {
             Ok(req) => {
                 if let Some(rule) = req.rule {
-                    let rule_id = rule.id.clone();
                     match self.manager.add_rule(&req.proxy_id, rule.clone()).await {
-                        Ok(_) => {
-                            info!("[Hub] Added rule {} to proxy {}", rule.name, req.proxy_id);
-                            ("OK".to_string(), "".to_string(), rule_id.into_bytes())
+                        Ok(created) => {
+                            info!(
+                                "[Hub] Added rule {} ({}) to proxy {}",
+                                created.name, created.id, req.proxy_id
+                            );
+                            ("OK".to_string(), "".to_string(), created.encode_to_vec())
                         }
                         Err(e) => ("ERROR".to_string(), e.to_string(), vec![]),
                     }
@@ -1351,6 +3488,13 @@ impl HubClient {
     async fn handle_close_connection(&self, payload: Vec<u8>) -> (String, String, Vec<u8>) {
         match CloseConnectionRequest::decode(payload.as_slice()) {
             Ok(req) => {
+                if req.conn_id.is_empty() {
+                    return (
+                        "ERROR".to_string(),
+                        "conn_id is required".to_string(),
+                        vec![],
+                    );
+                }
                 info!(
                     "[Hub] Close connection request: {} on {}",
                     req.conn_id, req.proxy_id
@@ -1367,13 +3511,7 @@ impl HubClient {
                         };
                         ("OK".to_string(), "".to_string(), resp.encode_to_vec())
                     }
-                    Err(e) => {
-                        let resp = CloseConnectionResponse {
-                            success: false,
-                            error_message: e.to_string(),
-                        };
-                        ("ERROR".to_string(), e.to_string(), resp.encode_to_vec())
-                    }
+                    Err(e) => ("ERROR".to_string(), e.to_string(), vec![]),
                 }
             }
             Err(e) => (
@@ -1418,7 +3556,7 @@ impl HubClient {
     async fn handle_apply_proxy(&self, payload: Vec<u8>) -> (String, String, Vec<u8>) {
         // Try proto-based ApplyProxyRequest with embedded YAML config
         if let Ok(req) = ApplyProxyRequest::decode(payload.as_slice()) {
-            if !req.config_yaml.is_empty() {
+            if looks_like_apply_proxy_template(&req) {
                 info!(
                     "[Hub] ApplyProxy (template): proxy_id={}, revision={}",
                     req.proxy_id, req.revision_num
@@ -1427,7 +3565,7 @@ impl HubClient {
             }
         }
         // Fall back to legacy CreateProxyRequest
-        self.handle_create_proxy(payload).await
+        self.handle_apply_proxy_legacy(payload).await
     }
 
     /// Apply a proxy from YAML template, matching Go's applyProxyTemplate.
@@ -1462,50 +3600,48 @@ impl HubClient {
         // Create new listeners from entrypoints
         if let Some(eps) = &yaml_config.entry_points {
             for (name, ep) in eps {
-                let mut default_backend = ep.default_backend.clone();
-
-                // Resolve backend from TCP routers
-                if default_backend.is_empty() {
-                    if let Some(tcp) = &yaml_config.tcp {
-                        if let Some(routers) = &tcp.routers {
-                            for (_, router) in routers {
-                                if router.entry_points.contains(name) && !router.service.is_empty()
-                                {
-                                    if let Some(services) = &tcp.services {
-                                        if let Some(svc) = services.get(&router.service) {
-                                            if let Some(lb) = &svc.load_balancer {
-                                                if let Some(server) = lb.servers.first() {
-                                                    if !server.address.is_empty() {
-                                                        default_backend = server.address.clone();
-                                                    } else {
-                                                        default_backend = server.url.clone();
-                                                    }
-                                                }
-                                            } else if let Some(addr) = &svc.address {
-                                                default_backend = addr.clone();
-                                            }
-                                        }
-                                    }
-                                    break;
-                                }
-                            }
-                        }
+                let resolved = yaml_config.resolve_entry_point(name, ep);
+                let security = resolve_template_entrypoint_tls(ep);
+                let rate_limit = match crate::config::rate_limit_to_proto(&ep.rate_limit) {
+                    Ok(rate_limit) => rate_limit,
+                    Err(e) => {
+                        let msg = format!("Invalid rateLimit for entryPoint {}: {}", name, e);
+                        error!("[Hub] {}", msg);
+                        last_error = Some(msg);
+                        continue;
                     }
-                }
+                };
 
                 // Map action type
                 let action_type = match ep.default_action.to_lowercase().as_str() {
                     "block" => crate::proto::common::ActionType::Block as i32,
                     "mock" => crate::proto::common::ActionType::Mock as i32,
-                    "approval" => crate::proto::common::ActionType::RequireApproval as i32,
+                    "approval" | "require_approval" | "require-approval" => {
+                        crate::proto::common::ActionType::RequireApproval as i32
+                    }
                     _ => crate::proto::common::ActionType::Allow as i32,
                 };
 
                 let create_req = CreateProxyRequest {
-                    name: format!("{}-{}", proxy_id, name),
+                    name: format!("{}-{}", proxy_name_prefix(proxy_id), name),
                     listen_addr: ep.address.clone(),
-                    default_backend,
+                    default_backend: resolved.default_backend.clone(),
                     default_action: action_type,
+                    default_mock: string_to_mock_preset(&ep.default_mock),
+                    fallback_action: match ep.fallback_action.to_lowercase().as_str() {
+                        "mock" => crate::proto::common::FallbackAction::Mock as i32,
+                        "close" => crate::proto::common::FallbackAction::Close as i32,
+                        _ => crate::proto::common::FallbackAction::Unspecified as i32,
+                    },
+                    fallback_mock: string_to_mock_preset(&ep.fallback_mock),
+                    cert_pem: security.cert_pem,
+                    key_pem: security.key_pem,
+                    ca_pem: security.ca_pem,
+                    client_auth_type: security.client_auth_type,
+                    health_check: resolved
+                        .health_check
+                        .as_ref()
+                        .map(crate::config::health_check_to_proto),
                     ..Default::default()
                 };
 
@@ -1515,6 +3651,23 @@ impl HubClient {
                             "[Hub] ApplyProxy: Created listener {} for {}/{}",
                             lid, proxy_id, name
                         );
+                        if let Some(rate_limit) = rate_limit {
+                            add_yaml_default_rule(
+                                &self.manager,
+                                &lid,
+                                action_type,
+                                string_to_mock_preset(&ep.default_mock),
+                                rate_limit,
+                            )
+                            .await;
+                        }
+                        add_yaml_middleware_rules(
+                            &self.manager,
+                            &lid,
+                            resolved.middleware_mocks,
+                            resolved.router_priority,
+                        )
+                        .await;
                         new_listener_ids.push(lid);
                     }
                     Err(e) => {
@@ -1570,13 +3723,46 @@ impl HubClient {
         match CreateProxyRequest::decode(payload.as_slice()) {
             Ok(req) => {
                 info!("[Hub] Creating proxy: {} on {}", req.name, req.listen_addr);
+                match self.manager.create_proxy(req).await {
+                    Ok(id) => {
+                        let resp = CreateProxyResponse {
+                            success: true,
+                            error_message: String::new(),
+                            proxy_id: id,
+                        };
+                        ("OK".to_string(), "".to_string(), resp.encode_to_vec())
+                    }
+                    Err(e) => {
+                        let resp = CreateProxyResponse {
+                            success: false,
+                            error_message: e.to_string(),
+                            proxy_id: String::new(),
+                        };
+                        ("OK".to_string(), String::new(), resp.encode_to_vec())
+                    }
+                }
+            }
+            Err(e) => (
+                "ERROR".to_string(),
+                format!("Invalid request: {}", e),
+                vec![],
+            ),
+        }
+    }
+
+    async fn handle_apply_proxy_legacy(&self, payload: Vec<u8>) -> (String, String, Vec<u8>) {
+        match CreateProxyRequest::decode(payload.as_slice()) {
+            Ok(req) => {
+                info!(
+                    "[Hub] Applying legacy proxy: {} on {}",
+                    req.name, req.listen_addr
+                );
                 match self.manager.create_proxy(req.clone()).await {
                     Ok(id) => {
-                        // Track as applied
                         let applied = AppliedProxy {
                             proxy_id: id.clone(),
                             revision_num: 0,
-                            config_hash: "".to_string(),
+                            config_hash: String::new(),
                             applied_at: chrono::Utc::now().timestamp(),
                             status: "active".to_string(),
                             error_msg: None,
@@ -1599,7 +3785,7 @@ impl HubClient {
                             fallback_mock: req.fallback_mock,
                             ..Default::default()
                         };
-                        ("OK".to_string(), "".to_string(), status.encode_to_vec())
+                        ("OK".to_string(), String::new(), status.encode_to_vec())
                     }
                     Err(e) => ("ERROR".to_string(), e.to_string(), vec![]),
                 }
@@ -1616,14 +3802,10 @@ impl HubClient {
         match DeleteProxyRequest::decode(payload.as_slice()) {
             Ok(req) => {
                 info!("[Hub] Deleting proxy: {}", req.proxy_id);
-                match self.manager.delete_proxy(&req.proxy_id).await {
+                // Match Go's lifecycle DELETE_PROXY behavior: disable the proxy
+                // but keep its model so it can be enabled again.
+                match self.manager.disable_proxy(&req.proxy_id).await {
                     Ok(_) => {
-                        {
-                            let mut lock = self.applied_proxies.write().await;
-                            lock.remove(&req.proxy_id);
-                        }
-                        self.save_applied_proxies().await;
-
                         let resp = DeleteProxyResponse {
                             success: true,
                             error_message: "".to_string(),
@@ -1635,9 +3817,65 @@ impl HubClient {
                             success: false,
                             error_message: e.to_string(),
                         };
-                        ("ERROR".to_string(), e.to_string(), resp.encode_to_vec())
+                        ("OK".to_string(), String::new(), resp.encode_to_vec())
                     }
                 }
+            }
+            Err(e) => (
+                "ERROR".to_string(),
+                format!("Invalid request: {}", e),
+                vec![],
+            ),
+        }
+    }
+
+    async fn handle_unapply_proxy(&self, payload: Vec<u8>) -> (String, String, Vec<u8>) {
+        match DeleteProxyRequest::decode(payload.as_slice()) {
+            Ok(req) => {
+                if req.proxy_id.is_empty() {
+                    let resp = DeleteProxyResponse {
+                        success: false,
+                        error_message: "proxy_id is required".to_string(),
+                    };
+                    return (
+                        "ERROR".to_string(),
+                        "proxy_id is required".to_string(),
+                        resp.encode_to_vec(),
+                    );
+                }
+
+                let applied = {
+                    let lock = self.applied_proxies.read().await;
+                    lock.get(&req.proxy_id).cloned()
+                };
+
+                let Some(applied) = applied else {
+                    let resp = DeleteProxyResponse {
+                        success: false,
+                        error_message: "proxy not applied".to_string(),
+                    };
+                    return ("OK".to_string(), String::new(), resp.encode_to_vec());
+                };
+
+                for listener_id in &applied.listener_ids {
+                    if let Err(e) = self.manager.delete_proxy(listener_id).await {
+                        warn!(
+                            "[Hub] Failed to remove unapplied listener {}: {}",
+                            listener_id, e
+                        );
+                    }
+                }
+                {
+                    let mut lock = self.applied_proxies.write().await;
+                    lock.remove(&req.proxy_id);
+                }
+                self.save_applied_proxies().await;
+
+                let resp = DeleteProxyResponse {
+                    success: true,
+                    error_message: String::new(),
+                };
+                ("OK".to_string(), String::new(), resp.encode_to_vec())
             }
             Err(e) => (
                 "ERROR".to_string(),
@@ -1659,7 +3897,13 @@ impl HubClient {
                         };
                         ("OK".to_string(), "".to_string(), resp.encode_to_vec())
                     }
-                    Err(e) => ("ERROR".to_string(), e.to_string(), vec![]),
+                    Err(e) => {
+                        let resp = EnableProxyResponse {
+                            success: false,
+                            error_message: e.to_string(),
+                        };
+                        ("OK".to_string(), String::new(), resp.encode_to_vec())
+                    }
                 }
             }
             Err(e) => (
@@ -1682,7 +3926,13 @@ impl HubClient {
                         };
                         ("OK".to_string(), "".to_string(), resp.encode_to_vec())
                     }
-                    Err(e) => ("ERROR".to_string(), e.to_string(), vec![]),
+                    Err(e) => {
+                        let resp = DisableProxyResponse {
+                            success: false,
+                            error_message: e.to_string(),
+                        };
+                        ("OK".to_string(), String::new(), resp.encode_to_vec())
+                    }
                 }
             }
             Err(e) => (
@@ -1710,9 +3960,46 @@ impl HubClient {
                             success: false,
                             error_message: e.to_string(),
                         };
-                        ("ERROR".to_string(), e.to_string(), resp.encode_to_vec())
+                        ("OK".to_string(), String::new(), resp.encode_to_vec())
                     }
                 }
+            }
+            Err(e) => (
+                "ERROR".to_string(),
+                format!("Invalid request: {}", e),
+                vec![],
+            ),
+        }
+    }
+
+    async fn handle_proxy_update(&self, payload: Vec<u8>) -> (String, String, Vec<u8>) {
+        match UpdateProxyRequest::decode(payload.as_slice()) {
+            Ok(req) => {
+                if req.proxy_id.is_empty() {
+                    return (
+                        "ERROR".to_string(),
+                        "proxy_id is required".to_string(),
+                        vec![],
+                    );
+                }
+
+                info!("[Hub] Proxy update notification: {}", req.proxy_id);
+                let exists = {
+                    let lock = self.applied_proxies.read().await;
+                    lock.contains_key(&req.proxy_id)
+                };
+                let resp = if exists {
+                    UpdateProxyResponse {
+                        success: true,
+                        error_message: String::new(),
+                    }
+                } else {
+                    UpdateProxyResponse {
+                        success: false,
+                        error_message: "proxy not applied on this node".to_string(),
+                    }
+                };
+                ("OK".to_string(), String::new(), resp.encode_to_vec())
             }
             Err(e) => (
                 "ERROR".to_string(),
@@ -1774,14 +4061,28 @@ impl HubClient {
                     req.req_id, allowed, req.retention_mode, req.duration_seconds
                 );
 
+                let mut retention_mode = ApprovalRetentionMode::try_from(req.retention_mode)
+                    .unwrap_or(ApprovalRetentionMode::Cache);
+                if retention_mode == ApprovalRetentionMode::Unspecified {
+                    retention_mode = ApprovalRetentionMode::Cache;
+                }
+                let mut duration_seconds = req.duration_seconds;
+                if retention_mode == ApprovalRetentionMode::Cache && duration_seconds <= 0 {
+                    duration_seconds = DEFAULT_APPROVAL_DURATION_SECONDS;
+                }
+                if retention_mode == ApprovalRetentionMode::ConnectionOnly && duration_seconds < 0 {
+                    duration_seconds = 0;
+                }
+
                 let resolved = self
                     .manager
                     .approval_manager
                     .resolve_with_retention(
                         &req.req_id,
                         allowed,
-                        req.duration_seconds,
-                        req.retention_mode,
+                        duration_seconds,
+                        &req.reason,
+                        retention_mode as i32,
                     )
                     .await;
                 if resolved {
@@ -1885,12 +4186,30 @@ impl HubClient {
         ("OK".to_string(), "".to_string(), resp.encode_to_vec())
     }
 
-    async fn handle_list_active_approvals(&self) -> (String, String, Vec<u8>) {
+    async fn handle_list_active_approvals(&self, payload: Vec<u8>) -> (String, String, Vec<u8>) {
+        let req = if payload.is_empty() {
+            ListActiveApprovalsRequest::default()
+        } else {
+            match ListActiveApprovalsRequest::decode(payload.as_slice()) {
+                Ok(req) => req,
+                Err(e) => {
+                    return (
+                        "ERROR".to_string(),
+                        format!("Invalid request: {}", e),
+                        vec![],
+                    );
+                }
+            }
+        };
         let entries = self.manager.approval_manager.list_active().await;
         info!("[Hub] List active approvals: {} entries", entries.len());
 
         let approvals: Vec<ActiveApproval> = entries
             .into_iter()
+            .filter(|e| {
+                (req.proxy_id.is_empty() || e.proxy_id == req.proxy_id)
+                    && (req.source_ip.is_empty() || e.source_ip == req.source_ip)
+            })
             .map(|e| ActiveApproval {
                 key: e.key,
                 source_ip: e.source_ip,
@@ -1910,9 +4229,9 @@ impl HubClient {
                 geo_country: e.geo_country,
                 geo_city: e.geo_city,
                 geo_isp: e.geo_isp,
-                tls_session_id: "".to_string(),
+                tls_session_id: e.tls_session_id,
                 blocked_count: e.blocked_count,
-                conn_ids: vec![],
+                conn_ids: e.conn_ids,
             })
             .collect();
 
@@ -1924,7 +4243,28 @@ impl HubClient {
         match CancelApprovalRequest::decode(payload.as_slice()) {
             Ok(req) => {
                 info!("[Hub] Cancel approval: {}", req.key);
-                ("OK".to_string(), "".to_string(), vec![])
+                if req.key.split('\0').count() < 2 {
+                    let resp = CancelApprovalResponse {
+                        success: false,
+                        error_message: "Invalid approval key format".to_string(),
+                        connections_closed: 0,
+                    };
+                    return ("OK".to_string(), "".to_string(), resp.encode_to_vec());
+                }
+                let (success, connections_closed) = self
+                    .manager
+                    .cancel_approval_with_close(&req.key, req.close_connections)
+                    .await;
+                let resp = CancelApprovalResponse {
+                    success,
+                    error_message: if success {
+                        String::new()
+                    } else {
+                        "Approval not found".to_string()
+                    },
+                    connections_closed,
+                };
+                ("OK".to_string(), "".to_string(), resp.encode_to_vec())
             }
             Err(e) => (
                 "ERROR".to_string(),
@@ -1938,12 +4278,14 @@ impl HubClient {
         match LookupIpRequest::decode(payload.as_slice()) {
             Ok(req) => {
                 info!("[Hub] Lookup IP: {}", req.ip);
+                let start = std::time::Instant::now();
                 let info = self.manager.lookup_ip(&req.ip).await;
+                let elapsed = start.elapsed().as_millis() as i64;
                 use crate::proto::proxy::LookupIpResponse;
                 let resp = LookupIpResponse {
                     geo: Some(info),
-                    cached: false,
-                    lookup_time_ms: 0,
+                    cached: elapsed < 5,
+                    lookup_time_ms: elapsed,
                 };
                 ("OK".to_string(), "".to_string(), resp.encode_to_vec())
             }
@@ -1971,32 +4313,28 @@ impl HubClient {
                     Some(req.isp_db_path)
                 };
 
-                let remote_url = if !req.provider.is_empty() {
-                    let url = match req.provider.as_str() {
-                        "ip-api" => "http://ip-api.com/json/{ip}".to_string(),
-                        "ipinfo" => {
-                            if !req.api_key.is_empty() {
-                                format!("https://ipinfo.io/{{ip}}?token={}", req.api_key)
-                            } else {
-                                "https://ipinfo.io/{ip}".to_string()
-                            }
-                        }
-                        custom => custom.to_string(),
-                    };
-                    Some(url)
+                let remote_urls = if req.mode == 1 {
+                    Some(
+                        req.provider
+                            .split(',')
+                            .map(str::trim)
+                            .filter(|provider| !provider.is_empty())
+                            .map(ToString::to_string)
+                            .collect::<Vec<_>>(),
+                    )
                 } else {
                     None
                 };
 
                 let strategy = match req.mode {
-                    0 => Some("local,remote".to_string()), // MODE_LOCAL_DB
-                    1 => Some("remote,local".to_string()), // MODE_REMOTE_API
+                    0 => Some("l1,local".to_string()),  // MODE_LOCAL_DB
+                    1 => Some("l1,remote".to_string()), // MODE_REMOTE_API
                     _ => None,
                 };
 
                 match self
                     .manager
-                    .configure_geoip(city_db, isp_db, remote_url, strategy)
+                    .configure_geoip(city_db, isp_db, remote_urls, strategy)
                     .await
                 {
                     Ok(_) => {
@@ -2020,34 +4358,26 @@ impl HubClient {
     async fn handle_get_geoip_status(&self) -> (String, String, Vec<u8>) {
         use crate::proto::proxy::GetGeoIpStatusResponse;
         let status = self.manager.get_geoip_status().await;
-
-        let mode = if status.strategy.contains(&"remote".to_string())
-            && status.strategy.contains(&"local".to_string())
-        {
-            "hybrid".to_string()
-        } else if status.strategy.contains(&"remote".to_string()) {
-            "remote".to_string()
-        } else if status.strategy.contains(&"local".to_string()) {
-            "local".to_string()
-        } else {
-            "disabled".to_string()
-        };
-
         let resp = GetGeoIpStatusResponse {
             enabled: status.enabled,
-            mode,
-            city_db_path: if status.city_db_loaded {
-                "Loaded".to_string()
+            mode: if status.enabled {
+                "embedded".to_string()
             } else {
-                "".to_string()
+                "disabled".to_string()
             },
-            isp_db_path: if status.isp_db_loaded {
-                "Loaded".to_string()
+            city_db_path: String::new(),
+            isp_db_path: String::new(),
+            provider: String::new(),
+            strategy: if status.enabled {
+                vec![
+                    "l1".to_string(),
+                    "l2".to_string(),
+                    "local".to_string(),
+                    "remote".to_string(),
+                ]
             } else {
-                "".to_string()
+                vec![]
             },
-            provider: status.remote_providers.first().cloned().unwrap_or_default(),
-            strategy: status.strategy,
             cache_hits: 0,
             cache_misses: 0,
         };
@@ -2078,6 +4408,15 @@ impl HubClient {
     }
 }
 
+fn looks_like_apply_proxy_template(req: &ApplyProxyRequest) -> bool {
+    let yaml = req.config_yaml.trim();
+    !yaml.is_empty()
+        && (yaml.contains("entryPoints")
+            || yaml.contains("entry_points")
+            || yaml.contains("tcp:")
+            || yaml.contains("http:"))
+}
+
 impl HubClient {
     async fn p2p_signaling_loop(
         mut client: NodeServiceClient<InterceptedService<Channel, HubInterceptor>>,
@@ -2087,8 +4426,9 @@ impl HubClient {
         applied_proxies: Arc<RwLock<HashMap<String, AppliedProxy>>>,
         data_dir: String,
     ) {
-        let (tx, mut rx) = mpsc::channel::<SignalMessage>(10);
+        let (tx, rx) = mpsc::channel::<SignalMessage>(10);
         let outbound = ReceiverStream::new(rx);
+        let peers = Arc::new(RwLock::new(HashMap::new()));
 
         match client.stream_signaling(outbound).await {
             Ok(resp) => {
@@ -2108,10 +4448,11 @@ impl HubClient {
                             let applied = applied_proxies.clone();
                             let ddir = data_dir.clone();
                             let node = node_name.clone();
+                            let peers = peers.clone();
 
                             tokio::spawn(async move {
                                 if let Err(e) = Self::handle_p2p_signal(
-                                    signal, tx_clone, mgr, stun, applied, ddir, node,
+                                    signal, tx_clone, mgr, stun, applied, ddir, node, peers,
                                 )
                                 .await
                                 {
@@ -2138,7 +4479,16 @@ impl HubClient {
         applied_proxies: Arc<RwLock<HashMap<String, AppliedProxy>>>,
         data_dir: String,
         node_name: String,
+        peers: Arc<RwLock<HashMap<String, Arc<webrtc::peer_connection::RTCPeerConnection>>>>,
     ) -> Result<()> {
+        if signal.r#type == "candidate" {
+            let candidate: RTCIceCandidateInit = serde_json::from_str(&signal.payload)?;
+            if let Some(pc) = peers.read().await.get(&signal.source_id).cloned() {
+                pc.add_ice_candidate(candidate).await?;
+            }
+            return Ok(());
+        }
+
         if signal.r#type == "offer" {
             info!("[Hub] Received P2P Offer from {}", signal.source_id);
 
@@ -2160,12 +4510,51 @@ impl HubClient {
             };
 
             let pc = Arc::new(api.new_peer_connection(config).await?);
+            peers
+                .write()
+                .await
+                .insert(signal.source_id.clone(), pc.clone());
+
+            let tx_ice = tx.clone();
+            let ice_target = signal.source_id.clone();
+            let ice_source = node_name.clone();
+            pc.on_ice_candidate(Box::new(move |candidate| {
+                let tx = tx_ice.clone();
+                let target = ice_target.clone();
+                let source = ice_source.clone();
+                Box::pin(async move {
+                    let Some(candidate) = candidate else {
+                        return;
+                    };
+                    let Ok(init) = candidate.to_json() else {
+                        return;
+                    };
+                    let Ok(payload) = serde_json::to_string(&init) else {
+                        return;
+                    };
+                    let _ = tx
+                        .send(SignalMessage {
+                            target_id: target,
+                            source_id: source,
+                            r#type: "candidate".to_string(),
+                            payload,
+                            source_user_id: "".to_string(),
+                        })
+                        .await;
+                })
+            }));
+
+            let signing_key = load_p2p_signing_key(&data_dir).await?;
+            let node_cert_pem = fs::read_to_string(Path::new(&data_dir).join("node.crt"))
+                .await
+                .unwrap_or_default();
+            let node_fingerprint =
+                hex::encode(sha2::Sha256::digest(signing_key.verifying_key().as_bytes()));
 
             let mgr = manager.clone();
             let applied = applied_proxies.clone();
             let ddir = data_dir.clone();
-            let node = node_name.clone();
-
+            let auth_node = node_name.clone();
             pc.on_data_channel(Box::new(
                 move |dc: Arc<webrtc::data_channel::RTCDataChannel>| {
                     let dc_label = dc.label().to_string();
@@ -2173,6 +4562,11 @@ impl HubClient {
                     let applied = applied.clone();
                     let ddir = ddir.clone();
                     let dc2 = dc.clone();
+                    let signing_key = signing_key.clone();
+                    let node_cert_pem = node_cert_pem.clone();
+                    let node_fingerprint = node_fingerprint.clone();
+                    let auth_node = auth_node.clone();
+                    let peer_pubkey = Arc::new(RwLock::new(None));
 
                     Box::pin(async move {
                         debug!("[Hub] P2P DataChannel opened: {}", dc_label);
@@ -2183,49 +4577,28 @@ impl HubClient {
                             let ddir = ddir.clone();
                             let dc_send = dc3.clone();
                             let data = msg.data.to_vec();
+                            let signing_key = signing_key.clone();
+                            let node_cert_pem = node_cert_pem.clone();
+                            let node_fingerprint = node_fingerprint.clone();
+                            let auth_node = auth_node.clone();
+                            let peer_pubkey = peer_pubkey.clone();
 
                             Box::pin(async move {
-                                if let Ok(payload) =
-                                    EncryptedCommandPayload::decode(data.as_slice())
+                                if let Err(e) = Self::handle_p2p_data_message(
+                                    data,
+                                    dc_send,
+                                    mgr,
+                                    applied,
+                                    ddir,
+                                    signing_key,
+                                    node_cert_pem,
+                                    auth_node,
+                                    node_fingerprint,
+                                    peer_pubkey,
+                                )
+                                .await
                                 {
-                                    let result = Self::static_dispatch(
-                                        payload.r#type,
-                                        payload.payload,
-                                        &mgr,
-                                        &applied,
-                                        &ddir,
-                                    )
-                                    .await;
-                                    let resp_bytes = result.encode_to_vec();
-                                    if let Err(e) =
-                                        dc_send.send(&bytes::Bytes::from(resp_bytes)).await
-                                    {
-                                        error!("[Hub] P2P Send error: {}", e);
-                                    }
-                                } else {
-                                    if let Ok(secure) =
-                                        SecureCommandPayload::decode(data.as_slice())
-                                    {
-                                        if let Ok(payload) =
-                                            EncryptedCommandPayload::decode(secure.data.as_slice())
-                                        {
-                                            let result = Self::static_dispatch(
-                                                payload.r#type,
-                                                payload.payload,
-                                                &mgr,
-                                                &applied,
-                                                &ddir,
-                                            )
-                                            .await;
-                                            let resp_bytes = result.encode_to_vec();
-                                            if let Err(e) =
-                                                dc_send.send(&bytes::Bytes::from(resp_bytes)).await
-                                            {
-                                                error!("[Hub] P2P Send error: {}", e);
-                                            }
-                                        }
-                                    }
-                                    warn!("[Hub] Failed to decode P2P message");
+                                    warn!("[Hub] Failed to handle P2P data message: {}", e);
                                 }
                             })
                         }));
@@ -2233,14 +4606,18 @@ impl HubClient {
                 },
             ));
 
-            let desc = RTCSessionDescription::offer(signal.payload.clone())?;
+            let desc = RTCSessionDescription::offer(sdp_from_signal_payload(&signal.payload))?;
             pc.set_remote_description(desc).await?;
 
             let answer = pc.create_answer(None).await?;
-            let mut answer_gather = answer.clone();
+            let answer_gather = answer.clone();
             pc.set_local_description(answer).await?;
 
-            let payload = answer_gather.sdp;
+            let payload = serde_json::json!({
+                "type": "answer",
+                "sdp": answer_gather.sdp,
+            })
+            .to_string();
             tx.send(SignalMessage {
                 target_id: signal.source_id,
                 source_id: node_name.clone(),
@@ -2266,71 +4643,169 @@ impl HubClient {
         Ok(())
     }
 
+    async fn handle_p2p_data_message(
+        data: Vec<u8>,
+        dc_send: Arc<webrtc::data_channel::RTCDataChannel>,
+        manager: Arc<ProxyManager>,
+        applied_proxies: Arc<RwLock<HashMap<String, AppliedProxy>>>,
+        data_dir: String,
+        signing_key: SigningKey,
+        node_cert_pem: String,
+        node_name: String,
+        node_fingerprint: String,
+        peer_pubkey: Arc<RwLock<Option<VerifyingKey>>>,
+    ) -> Result<()> {
+        if let Some(auth) = parse_p2p_auth_message(&data) {
+            match auth.message_type.as_str() {
+                "auth_challenge" => {
+                    let peer_key = verifying_key_from_slice(&auth.public_key)?;
+                    *peer_pubkey.write().await = Some(peer_key);
+                    let signature = signing_key.sign(&auth.challenge);
+                    let response = serde_json::json!({
+                        "type": "auth_response",
+                        "user_id": node_name,
+                        "public_key": general_purpose::STANDARD.encode(signing_key.verifying_key().as_bytes()),
+                        "cert_pem": node_cert_pem,
+                        "signature": general_purpose::STANDARD.encode(signature.to_bytes()),
+                        "challenge": general_purpose::STANDARD.encode(auth.challenge),
+                    });
+                    dc_send
+                        .send(&bytes::Bytes::from(response.to_string()))
+                        .await?;
+                    return Ok(());
+                }
+                "auth_success" => return Ok(()),
+                "auth_failed" => anyhow::bail!("P2P auth failed"),
+                _ => return Ok(()),
+            }
+        }
+
+        if let Some(result) =
+            Self::dispatch_raw_p2p_command(&data, &manager, &applied_proxies, &data_dir).await
+        {
+            dc_send
+                .send(&bytes::Bytes::from(result.encode_to_vec()))
+                .await?;
+            return Ok(());
+        }
+
+        let (request_id, cmd_type, payload) = decrypt_p2p_command_message(&data, &signing_key)?;
+        let result = Self::dispatch_secure_or_inner_command(
+            cmd_type,
+            payload,
+            &manager,
+            &applied_proxies,
+            &data_dir,
+        )
+        .await;
+
+        let peer_key = peer_pubkey
+            .read()
+            .await
+            .clone()
+            .ok_or_else(|| anyhow!("P2P peer is not authenticated"))?;
+        let response = encrypt_p2p_command_response(
+            &request_id,
+            &result,
+            &peer_key,
+            &signing_key,
+            &node_fingerprint,
+        )?;
+        dc_send.send(&bytes::Bytes::from(response)).await?;
+        Ok(())
+    }
+
+    async fn dispatch_raw_p2p_command(
+        data: &[u8],
+        manager: &Arc<ProxyManager>,
+        applied_proxies: &Arc<RwLock<HashMap<String, AppliedProxy>>>,
+        data_dir: &str,
+    ) -> Option<CommandResult> {
+        if let Ok(payload) = EncryptedCommandPayload::decode(data) {
+            return Some(
+                Self::static_dispatch(
+                    payload.r#type,
+                    payload.payload,
+                    manager,
+                    applied_proxies,
+                    data_dir,
+                )
+                .await,
+            );
+        }
+        if let Ok(secure) = SecureCommandPayload::decode(data) {
+            if let Ok(payload) = EncryptedCommandPayload::decode(secure.data.as_slice()) {
+                return Some(
+                    Self::static_dispatch(
+                        payload.r#type,
+                        payload.payload,
+                        manager,
+                        applied_proxies,
+                        data_dir,
+                    )
+                    .await,
+                );
+            }
+        }
+        None
+    }
+
+    async fn dispatch_secure_or_inner_command(
+        fallback_cmd_type: i32,
+        payload: Vec<u8>,
+        manager: &Arc<ProxyManager>,
+        applied_proxies: &Arc<RwLock<HashMap<String, AppliedProxy>>>,
+        data_dir: &str,
+    ) -> CommandResult {
+        if let Ok(secure) = SecureCommandPayload::decode(payload.as_slice()) {
+            if let Ok(inner) = EncryptedCommandPayload::decode(secure.data.as_slice()) {
+                return Self::static_dispatch(
+                    inner.r#type,
+                    inner.payload,
+                    manager,
+                    applied_proxies,
+                    data_dir,
+                )
+                .await;
+            }
+        }
+        if let Ok(inner) = EncryptedCommandPayload::decode(payload.as_slice()) {
+            return Self::static_dispatch(
+                inner.r#type,
+                inner.payload,
+                manager,
+                applied_proxies,
+                data_dir,
+            )
+            .await;
+        }
+        Self::static_dispatch(
+            fallback_cmd_type,
+            payload,
+            manager,
+            applied_proxies,
+            data_dir,
+        )
+        .await
+    }
+
     async fn static_dispatch(
         cmd_type: i32,
         payload: Vec<u8>,
         manager: &Arc<ProxyManager>,
-        _applied_proxies: &Arc<RwLock<HashMap<String, AppliedProxy>>>,
-        _data_dir: &str,
+        applied_proxies: &Arc<RwLock<HashMap<String, AppliedProxy>>>,
+        data_dir: &str,
     ) -> CommandResult {
-        if cmd_type == command_types::STATUS {
-            let statuses = manager.list_proxies().await;
-            let mut total_conns = 0;
-            let mut active = 0;
-            let mut total_in = 0;
-            let mut total_out = 0;
-            for s in &statuses {
-                total_conns += s.total_connections;
-                active += s.active_connections;
-                total_in += s.bytes_in;
-                total_out += s.bytes_out;
-            }
-            let resp = StatsSummaryResponse {
-                total_connections: total_conns,
-                active_connections: active,
-                total_bytes_in: total_in,
-                total_bytes_out: total_out,
-                proxy_count: statuses.len() as i32,
-                ..Default::default()
-            };
-            return CommandResult {
-                status: "OK".to_string(),
-                error_message: "".to_string(),
-                response_payload: resp.encode_to_vec(),
-            };
-        }
-
-        if cmd_type == command_types::RESOLVE_APPROVAL {
-            if let Ok(req) = ResolveApprovalRequest::decode(payload.as_slice()) {
-                let allowed = req.action == 1;
-                let resolved = manager
-                    .approval_manager
-                    .resolve_with_retention(
-                        &req.req_id,
-                        allowed,
-                        req.duration_seconds,
-                        req.retention_mode,
-                    )
-                    .await;
-                if resolved {
-                    return CommandResult {
-                        status: "OK".to_string(),
-                        ..Default::default()
-                    };
-                } else {
-                    return CommandResult {
-                        status: "ERROR".to_string(),
-                        error_message: "Not found".to_string(),
-                        ..Default::default()
-                    };
-                }
-            }
-        }
-
-        CommandResult {
-            status: "ERROR".to_string(),
-            error_message: "Unimplemented in P2P".to_string(),
-            ..Default::default()
-        }
+        let mut dispatcher = Self::new(
+            "p2p".to_string(),
+            data_dir.to_string(),
+            "p2p".to_string(),
+            manager.clone(),
+            None,
+            None,
+            None,
+        );
+        dispatcher.applied_proxies = applied_proxies.clone();
+        dispatcher.dispatch_command(cmd_type, payload).await
     }
 }

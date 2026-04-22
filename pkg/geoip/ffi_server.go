@@ -9,7 +9,7 @@ import (
 	empty "google.golang.org/protobuf/types/known/emptypb"
 )
 
-// FfiServerImpl implements geoip.FfiServer for zero-copy FFI calls.
+// FfiServerImpl implements geoip.GeoIPServiceFfiServer for zero-copy FFI calls.
 type FfiServerImpl struct {
 	pb.UnimplementedGeoIPServiceServer
 	manager *Manager
@@ -54,5 +54,5 @@ func (s *FfiServerImpl) GetStatus(ctx context.Context, req *empty.Empty) (*pb.Se
 	}, nil
 }
 
-// Ensure FfiServerImpl implements geoip.FfiServer interface.
-var _ pb.FfiServer = (*FfiServerImpl)(nil)
+// Ensure FfiServerImpl implements geoip.GeoIPServiceFfiServer interface.
+var _ pb.GeoIPServiceFfiServer = (*FfiServerImpl)(nil)

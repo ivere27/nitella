@@ -20,8 +20,12 @@ pub struct ApprovalReqData {
     pub proxy_id: String,
     pub source_ip: String,
     pub rule_id: String,
+    pub tls_session_id: String,
     pub info: String,
     pub created_at: i64,
+    pub geo_country: String,
+    pub geo_city: String,
+    pub geo_isp: String,
 }
 
 /// Result of an approval request
@@ -30,6 +34,7 @@ pub struct ApprovalResult {
     pub allowed: bool,
     pub retention_mode: i32,
     pub duration_seconds: i64,
+    pub reason: String,
 }
 
 struct PendingEntry {
@@ -50,6 +55,7 @@ pub struct ApprovalCacheEntry {
     pub source_ip: String,
     pub rule_id: String,
     pub proxy_id: String,
+    pub tls_session_id: String,
     pub allowed: bool,
     pub expires_at: i64,
     pub created_at: i64,
@@ -63,6 +69,7 @@ pub struct ApprovalCacheEntry {
     pub bytes_in: i64,
     pub bytes_out: i64,
     pub blocked_count: i64,
+    pub conn_ids: Vec<String>,
 }
 
 /// Internal cache entry that holds both cloneable data and live connection tracking
@@ -111,14 +118,23 @@ impl ApprovalManager {
         mgr
     }
 
-    fn build_key(source_ip: &str, rule_id: &str) -> String {
-        format!("{}\0{}", source_ip, rule_id)
+    fn build_key(source_ip: &str, rule_id: &str, tls_session_id: &str) -> String {
+        if tls_session_id.is_empty() {
+            format!("{}\0{}", source_ip, rule_id)
+        } else {
+            format!("{}\0{}\0{}", source_ip, rule_id, tls_session_id)
+        }
     }
 
     /// Check if there's a cached approval decision for this source_ip + rule_id.
     /// Returns Some(result) on cache hit, None on miss.
-    pub async fn check_cache(&self, source_ip: &str, rule_id: &str) -> Option<ApprovalResult> {
-        let key = Self::build_key(source_ip, rule_id);
+    pub async fn check_cache(
+        &self,
+        source_ip: &str,
+        rule_id: &str,
+        tls_session_id: &str,
+    ) -> Option<ApprovalResult> {
+        let key = Self::build_key(source_ip, rule_id, tls_session_id);
         let cache = self.cache.read().await;
         if let Some(entry) = cache.get(&key) {
             let now = Utc::now().timestamp();
@@ -127,6 +143,7 @@ impl ApprovalManager {
                     allowed: entry.data.allowed,
                     retention_mode: ApprovalRetentionMode::Cache as i32,
                     duration_seconds: entry.data.expires_at - now,
+                    reason: String::new(),
                 });
             }
         }
@@ -185,12 +202,14 @@ impl ApprovalManager {
                 allowed: false,
                 retention_mode: ApprovalRetentionMode::Unspecified as i32,
                 duration_seconds: 0,
+                reason: String::new(),
             }),
             _ = timeout => {
                 ApprovalResult {
                     allowed: false,
                     retention_mode: ApprovalRetentionMode::Unspecified as i32,
                     duration_seconds: 0,
+                    reason: String::new(),
                 }
             }
         };
@@ -229,6 +248,7 @@ impl ApprovalManager {
             id,
             allowed,
             duration_seconds,
+            "",
             ApprovalRetentionMode::Cache as i32,
         )
         .await
@@ -239,6 +259,7 @@ impl ApprovalManager {
         id: &str,
         allowed: bool,
         duration_seconds: i64,
+        reason: &str,
         retention_mode: i32,
     ) -> bool {
         // Resolve pending
@@ -273,11 +294,16 @@ impl ApprovalManager {
                 allowed,
                 retention_mode: mode as i32,
                 duration_seconds,
+                reason: reason.to_string(),
             });
 
             // CACHE mode stores follow-up decisions in cache.
             if mode == ApprovalRetentionMode::Cache {
-                let key = Self::build_key(&entry.data.source_ip, &entry.data.rule_id);
+                let key = Self::build_key(
+                    &entry.data.source_ip,
+                    &entry.data.rule_id,
+                    &entry.data.tls_session_id,
+                );
                 let duration = if duration_seconds > 0 {
                     duration_seconds
                 } else {
@@ -289,15 +315,17 @@ impl ApprovalManager {
                     source_ip: entry.data.source_ip,
                     rule_id: entry.data.rule_id,
                     proxy_id: entry.data.proxy_id,
+                    tls_session_id: entry.data.tls_session_id,
                     allowed,
                     created_at: Utc::now().timestamp(),
                     expires_at: Utc::now().timestamp() + duration,
-                    geo_country: String::new(),
-                    geo_city: String::new(),
-                    geo_isp: String::new(),
+                    geo_country: entry.data.geo_country,
+                    geo_city: entry.data.geo_city,
+                    geo_isp: entry.data.geo_isp,
                     bytes_in: 0,
                     bytes_out: 0,
                     blocked_count: 0,
+                    conn_ids: vec![],
                 };
                 let mut cache_lock = self.cache.write().await;
                 cache_lock.insert(
@@ -321,13 +349,14 @@ impl ApprovalManager {
         source_ip: &str,
         rule_id: &str,
         proxy_id: &str,
+        tls_session_id: &str,
         allowed: bool,
         duration_seconds: i64,
         geo_country: &str,
         geo_city: &str,
         geo_isp: &str,
     ) {
-        let key = Self::build_key(source_ip, rule_id);
+        let key = Self::build_key(source_ip, rule_id, tls_session_id);
         let duration = if duration_seconds > 0 {
             duration_seconds
         } else {
@@ -338,6 +367,7 @@ impl ApprovalManager {
             source_ip: source_ip.to_string(),
             rule_id: rule_id.to_string(),
             proxy_id: proxy_id.to_string(),
+            tls_session_id: tls_session_id.to_string(),
             allowed,
             created_at: Utc::now().timestamp(),
             expires_at: Utc::now().timestamp() + duration,
@@ -347,6 +377,7 @@ impl ApprovalManager {
             bytes_in: 0,
             bytes_out: 0,
             blocked_count: 0,
+            conn_ids: vec![],
         };
         let mut cache_lock = self.cache.write().await;
         cache_lock.insert(
@@ -364,11 +395,12 @@ impl ApprovalManager {
         &self,
         source_ip: &str,
         rule_id: &str,
+        tls_session_id: &str,
         conn_id: &str,
         bytes_in: Arc<AtomicU64>,
         bytes_out: Arc<AtomicU64>,
     ) -> bool {
-        let key = Self::build_key(source_ip, rule_id);
+        let key = Self::build_key(source_ip, rule_id, tls_session_id);
         let mut cache = self.cache.write().await;
         if let Some(entry) = cache.get_mut(&key) {
             if entry.live_conns.len() >= MAX_CONN_IDS_PER_APPROVAL {
@@ -389,8 +421,14 @@ impl ApprovalManager {
 
     /// Remove a connection from tracking when it closes.
     /// Accumulates final byte counts into the cache entry.
-    pub async fn remove_conn_id(&self, source_ip: &str, rule_id: &str, conn_id: &str) {
-        let key = Self::build_key(source_ip, rule_id);
+    pub async fn remove_conn_id(
+        &self,
+        source_ip: &str,
+        rule_id: &str,
+        tls_session_id: &str,
+        conn_id: &str,
+    ) {
+        let key = Self::build_key(source_ip, rule_id, tls_session_id);
         let mut cache = self.cache.write().await;
         if let Some(entry) = cache.get_mut(&key) {
             if let Some(stats) = entry.live_conns.remove(conn_id) {
@@ -402,8 +440,13 @@ impl ApprovalManager {
     }
 
     /// Increment the blocked attempt counter
-    pub async fn increment_blocked_count(&self, source_ip: &str, rule_id: &str) {
-        let key = Self::build_key(source_ip, rule_id);
+    pub async fn increment_blocked_count(
+        &self,
+        source_ip: &str,
+        rule_id: &str,
+        tls_session_id: &str,
+    ) {
+        let key = Self::build_key(source_ip, rule_id, tls_session_id);
         let mut cache = self.cache.write().await;
         if let Some(entry) = cache.get_mut(&key) {
             entry.data.blocked_count += 1;
@@ -421,6 +464,8 @@ impl ApprovalManager {
             .filter(|e| now < e.data.expires_at)
             .map(|entry| {
                 let mut result = entry.data.clone();
+                result.conn_ids = entry.live_conns.keys().cloned().collect();
+                result.conn_ids.sort();
                 // Add live bytes from active connections
                 for stats in entry.live_conns.values() {
                     result.bytes_in += stats.bytes_in.load(Ordering::Relaxed) as i64;
@@ -432,8 +477,17 @@ impl ApprovalManager {
     }
 
     pub async fn cancel_approval(&self, key: &str) -> bool {
+        self.cancel_approval_details(key).await.is_some()
+    }
+
+    pub async fn cancel_approval_details(&self, key: &str) -> Option<(String, Vec<String>)> {
         let mut cache_lock = self.cache.write().await;
-        cache_lock.remove(key).is_some()
+        cache_lock.remove(key).map(|entry| {
+            (
+                entry.data.proxy_id,
+                entry.live_conns.keys().cloned().collect::<Vec<_>>(),
+            )
+        })
     }
 }
 
@@ -453,8 +507,12 @@ mod tests {
             proxy_id: "p1".to_string(),
             source_ip: "1.2.3.4".to_string(),
             rule_id: "r1".to_string(),
+            tls_session_id: String::new(),
             info: "test info".to_string(),
             created_at: Utc::now().timestamp(),
+            geo_country: String::new(),
+            geo_city: String::new(),
+            geo_isp: String::new(),
         };
 
         let mgr_clone = manager.clone();
@@ -492,8 +550,12 @@ mod tests {
                     proxy_id: "p1".to_string(),
                     source_ip: "10.0.0.1".to_string(),
                     rule_id: "r1".to_string(),
+                    tls_session_id: String::new(),
                     info: "test".to_string(),
                     created_at: Utc::now().timestamp(),
+                    geo_country: String::new(),
+                    geo_city: String::new(),
+                    geo_isp: String::new(),
                 };
                 mgr.request_approval(data).await
             }));
@@ -508,8 +570,12 @@ mod tests {
             proxy_id: "p1".to_string(),
             source_ip: "10.0.0.1".to_string(),
             rule_id: "r1".to_string(),
+            tls_session_id: String::new(),
             info: "test".to_string(),
             created_at: Utc::now().timestamp(),
+            geo_country: String::new(),
+            geo_city: String::new(),
+            geo_isp: String::new(),
         };
         let result = manager.request_approval(data).await;
         assert!(result.is_err(), "Should reject due to per-IP limit");
@@ -520,8 +586,12 @@ mod tests {
             proxy_id: "p1".to_string(),
             source_ip: "10.0.0.2".to_string(),
             rule_id: "r1".to_string(),
+            tls_session_id: String::new(),
             info: "test".to_string(),
             created_at: Utc::now().timestamp(),
+            geo_country: String::new(),
+            geo_city: String::new(),
+            geo_isp: String::new(),
         };
         // This spawns a waiting request, so wrap in spawn
         let mgr = manager.clone();
@@ -539,7 +609,17 @@ mod tests {
 
         // Create a cached approval
         manager
-            .add_to_cache_with_geo("1.2.3.4", "r1", "p1", true, 300, "US", "NYC", "ISP1")
+            .add_to_cache_with_geo(
+                "1.2.3.4",
+                "r1",
+                "p1",
+                "session-1",
+                true,
+                300,
+                "US",
+                "NYC",
+                "ISP1",
+            )
             .await;
 
         // Register a live connection with byte counters
@@ -549,6 +629,7 @@ mod tests {
             .set_conn_id(
                 "1.2.3.4",
                 "r1",
+                "session-1",
                 "conn-1",
                 bytes_in.clone(),
                 bytes_out.clone(),
@@ -563,11 +644,14 @@ mod tests {
         // list_active should show live bytes
         let active = manager.list_active().await;
         assert_eq!(active.len(), 1);
+        assert_eq!(active[0].tls_session_id, "session-1");
         assert_eq!(active[0].bytes_in, 1000);
         assert_eq!(active[0].bytes_out, 500);
 
         // Remove connection (simulating close) — bytes get accumulated
-        manager.remove_conn_id("1.2.3.4", "r1", "conn-1").await;
+        manager
+            .remove_conn_id("1.2.3.4", "r1", "session-1", "conn-1")
+            .await;
 
         // After removal, accumulated bytes should still show
         let active2 = manager.list_active().await;

@@ -64,6 +64,7 @@
 
 ## Logic & UX
 
+- [ ] The "Huge Response" Tarpit
 - [ ] Enterprise plugin stubs (Phase 7) deferred
 - [ ] Embedded proxy tunneling (Future Feature) deferred
 

@@ -1,6 +1,6 @@
 #!/bin/bash
 # Resource monitor using /proc for instantaneous CPU% and RSS.
-# Outputs CSV: Timestamp,RSS_KB,CPU_Percent
+# Outputs CSV: Timestamp,RSS_KB,CPU_Percent,Threads
 
 TARGET_PID=$1
 OUTPUT_FILE=$2
@@ -40,6 +40,13 @@ read_rss_kb() {
     awk -v pskb="$PAGE_SIZE_KB" '{print $2 * pskb}' "$stat_file" 2>/dev/null
 }
 
+read_threads() {
+    local pid=$1
+    local status_file="/proc/$pid/status"
+    [ -f "$status_file" ] || return
+    awk '/^Threads:/ {print $2}' "$status_file" 2>/dev/null
+}
+
 # Collect all PIDs: target + descendants (recursive)
 collect_pids() {
     local parent=$1
@@ -58,7 +65,7 @@ collect_pids() {
     echo "$pids"
 }
 
-echo "Timestamp,RSS_KB,CPU_Percent" > "$OUTPUT_FILE"
+echo "Timestamp,RSS_KB,CPU_Percent,Threads" > "$OUTPUT_FILE"
 
 # Take initial reading
 PREV_TICKS=0
@@ -79,6 +86,7 @@ while kill -0 "$TARGET_PID" 2>/dev/null; do
 
     CURR_TICKS=0
     TOTAL_RSS=0
+    TOTAL_THREADS=0
 
     for pid in $ALL_PIDS; do
         ticks=$(read_cpu_ticks "$pid")
@@ -89,6 +97,11 @@ while kill -0 "$TARGET_PID" 2>/dev/null; do
         rss=$(read_rss_kb "$pid")
         if [ -n "$rss" ]; then
             TOTAL_RSS=$((TOTAL_RSS + rss))
+        fi
+
+        threads=$(read_threads "$pid")
+        if [ -n "$threads" ]; then
+            TOTAL_THREADS=$((TOTAL_THREADS + threads))
         fi
     done
 
@@ -106,7 +119,7 @@ while kill -0 "$TARGET_PID" 2>/dev/null; do
     fi
 
     TIMESTAMP=$(date +%s)
-    echo "$TIMESTAMP,$TOTAL_RSS,$CPU_PCT" >> "$OUTPUT_FILE"
+    echo "$TIMESTAMP,$TOTAL_RSS,$CPU_PCT,$TOTAL_THREADS" >> "$OUTPUT_FILE"
 
     PREV_TICKS=$CURR_TICKS
     PREV_TIME=$NOW_TIME

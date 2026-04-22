@@ -231,7 +231,7 @@ type FfiClient struct {
 }
 
 // NewFfiClient creates an FFI GeoIP client using synurang FFI.
-// The conn should be created via geoip_pb.NewFfiClientConn(ffiServer).
+// The conn should be created via geoip_pb.NewGeoIPServiceFfiClientConn(ffiServer).
 func NewFfiClient(conn grpc.ClientConnInterface) *FfiClient {
 	return &FfiClient{
 		client: pb.NewGeoIPServiceClient(conn),

@@ -1,11 +1,10 @@
 use clap::Parser;
-use ed25519_dalek::{
-    pkcs8::{DecodePrivateKey, EncodePrivateKey},
-    SigningKey, VerifyingKey,
-};
+use ed25519_dalek::{pkcs8::DecodePrivateKey, SigningKey};
 use rand::RngCore;
 use std::fs as std_fs;
+use std::path::Path;
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::sync::{broadcast, RwLock};
 use tonic::transport::{Identity, Server, ServerTlsConfig};
 use tonic::{Request, Status};
@@ -14,9 +13,10 @@ use tracing_subscriber::FmtSubscriber;
 
 // Use library crate's proto and modules
 use nitella::proto;
+#[cfg(unix)]
+use nitella::synurang;
 use nitella::{
-    admin, admin_security, config, db, geoip, health, hub, manager, pairing_offline, rules, server,
-    stats, synurang,
+    admin, admin_security, config, db, geoip, health, hub, manager, pairing_offline, rules, stats,
 };
 
 use admin::AdminServer;
@@ -26,13 +26,17 @@ use health::HealthChecker;
 use hub::HubClient;
 use manager::ProxyManager;
 use nitella::approval::ApprovalManager;
-use pairing_offline::OfflinePairing;
-use proto::common::{ActionType, FallbackAction, MockPreset};
+#[cfg(unix)]
+use nitella::server::NitellaProcessServer;
+use pairing_offline::{OfflinePairing, DEFAULT_PAIRING_TIMEOUT};
+use proto::common::{ActionType, ConditionType, FallbackAction, MockPreset, Operator};
+#[cfg(unix)]
 use proto::process::process_control_server::ProcessControlServer;
 use proto::proxy::proxy_control_service_server::ProxyControlServiceServer;
-use proto::proxy::CreateProxyRequest;
+use proto::proxy::{
+    ClientAuthType, Condition, CreateProxyRequest, MockConfig, RateLimitConfig, Rule,
+};
 use rules::RuleEngine;
-use server::NitellaProcessServer;
 use stats::StatsService;
 
 /// Nitella Proxy Daemon (Rust Implementation)
@@ -41,20 +45,76 @@ use stats::StatsService;
 struct Args {
     // --- Proxy Options ---
     /// Listen address for proxy
-    #[arg(long, default_value = "0.0.0.0:8080")]
+    #[arg(long, default_value = ":8080")]
     listen: String,
 
     /// Default backend address
     #[arg(long)]
     backend: Option<String>,
 
+    /// Default action for CLI proxy: allow, block, mock, approval, require_approval
+    #[arg(long, default_value = "allow")]
+    default_action: String,
+
+    /// Fallback action for blocked or failed connections: close, mock
+    #[arg(long)]
+    fallback_action: Option<String>,
+
+    /// Mock preset for --fallback-action mock, e.g. ssh-tarpit, mysql-tarpit, raw-tarpit
+    #[arg(long)]
+    fallback_mock: Option<String>,
+
+    /// Source IPs/CIDRs or standalone aliases (localhost, private, local) to allow
+    #[arg(long, value_delimiter = ',')]
+    allow_ip: Vec<String>,
+
+    /// Source IPs/CIDRs or standalone aliases (localhost, private, local) to block
+    #[arg(long, value_delimiter = ',')]
+    block_ip: Vec<String>,
+
+    /// GeoIP countries to allow as startup rules, e.g. --allow-country KR,JP
+    #[arg(long, value_delimiter = ',')]
+    allow_country: Vec<String>,
+
+    /// GeoIP countries to block as startup rules, e.g. --block-country CN,RU
+    #[arg(long, value_delimiter = ',')]
+    block_country: Vec<String>,
+
+    /// Maximum connections/failures per source IP in the rate-limit interval (0 = disabled)
+    #[arg(long)]
+    rate_limit_max_connections: Option<i32>,
+
+    /// Rate-limit counting window in seconds
+    #[arg(long)]
+    rate_limit_interval: Option<i32>,
+
+    /// Temporarily block source IPs that exceed the rate limit
+    #[arg(long, num_args = 0..=1, default_missing_value = "true", value_parser = clap::value_parser!(bool))]
+    rate_limit_auto_block: Option<bool>,
+
+    /// Temporary block duration in seconds
+    #[arg(long)]
+    rate_limit_block_duration: Option<i32>,
+
+    /// Comma-separated escalation block durations in seconds, e.g. 600,3600,86400
+    #[arg(long)]
+    rate_limit_block_steps: Option<String>,
+
+    /// Only count connections shorter than --rate-limit-failure-threshold
+    #[arg(long)]
+    rate_limit_count_only_failures: bool,
+
+    /// Short-lived failure threshold in seconds when --rate-limit-count-only-failures is set
+    #[arg(long)]
+    rate_limit_failure_threshold: Option<i32>,
+
     /// Path to YAML config file
     #[arg(long)]
     config: Option<String>,
 
-    /// Path to SQLite database (default "nitella.db")
-    #[arg(long, default_value = "nitella.db")]
-    db_path: String,
+    /// Path to SQLite database for proxy persistence (disabled by default)
+    #[arg(long)]
+    db_path: Option<String>,
 
     /// Path to statistics database
     #[arg(long)]
@@ -105,12 +165,8 @@ struct Args {
     hub_data_dir: Option<String>,
 
     /// Enable P2P connections via Hub
-    #[arg(long, default_value_t = true)]
+    #[arg(long, default_value_t = false)]
     hub_p2p: bool,
-
-    /// Use QR code pairing mode
-    #[arg(long)]
-    hub_qr_mode: bool,
 
     /// Path to Hub CA certificate
     #[arg(long)]
@@ -163,15 +219,15 @@ struct Args {
     geoip_isp: Option<String>,
 
     /// Path to GeoIP L2 Cache
-    #[arg(long)]
+    #[arg(long, default_value = "geoip_cache.db")]
     geoip_cache: Option<String>,
 
     /// GeoIP L2 Cache TTL in hours
-    #[arg(long)]
+    #[arg(long, default_value = "24")]
     geoip_cache_ttl: Option<i32>,
 
     /// Lookup strategy order
-    #[arg(long)]
+    #[arg(long, default_value = "l1,l2,local,remote")]
     geoip_strategy: Option<String>,
 
     /// Remote provider timeout in ms
@@ -213,7 +269,52 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
+    if (args.pair.is_some() || args.pair_offline) && args.hub.is_none() {
+        return Err("--hub address required for pairing".into());
+    }
+
+    if args.config.is_some() && cli_fallback_args_present(&args) {
+        return Err("fallback CLI flags are only supported with --listen/--backend standalone mode; use entryPoints.<name>.fallbackAction/fallbackMock in YAML config".into());
+    }
+    let (cli_fallback_action, cli_fallback_mock) = if args.config.is_none() {
+        build_cli_fallback_config(
+            args.fallback_action.as_deref(),
+            args.fallback_mock.as_deref(),
+        )?
+    } else {
+        (
+            FallbackAction::Unspecified as i32,
+            MockPreset::Unspecified as i32,
+        )
+    };
+    if cli_fallback_args_present(&args) && args.backend.is_none() {
+        return Err("fallback CLI flags require --backend; use YAML fallbackAction/fallbackMock with --config for config-file mode".into());
+    }
+
+    if args.config.is_some() && cli_rate_limit_args_present(&args) {
+        return Err("rate-limit CLI flags are only supported with --listen/--backend standalone mode; use entryPoints.<name>.rateLimit in YAML config".into());
+    }
+    let cli_rate_limit = if args.config.is_none() {
+        build_cli_rate_limit_config(cli_rate_limit_options_from_args(&args))?
+    } else {
+        None
+    };
+    if cli_rate_limit.is_some() && args.backend.is_none() {
+        return Err("rate-limit CLI flags require --backend; use YAML rateLimit with --config for config-file mode".into());
+    }
+
     info!("Nitella Proxy Daemon (Rust) starting...");
+
+    let cert_pem = read_optional_file(args.tls_cert.as_deref(), "TLS certificate");
+    let key_pem = read_optional_file(args.tls_key.as_deref(), "TLS private key");
+    let ca_pem = read_optional_file(args.tls_ca.as_deref(), "TLS CA certificate");
+    let client_auth_type = if args.mtls {
+        ClientAuthType::ClientAuthRequire as i32
+    } else if !ca_pem.is_empty() {
+        ClientAuthType::ClientAuthRequest as i32
+    } else {
+        ClientAuthType::ClientAuthNone as i32
+    };
 
     // 0. Handle Offline Pairing
     if args.pair_offline {
@@ -225,28 +326,44 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let pairing = OfflinePairing::new(args.hub_data_dir.clone().unwrap(), node_name);
 
         let port = if let Some(p_str) = args.pair_port.as_deref() {
-            Some(p_str.parse::<u16>()?)
+            Some(p_str.trim_start_matches(':').parse::<u16>()?)
         } else {
             None
         };
 
-        match pairing.run(port).await {
-            Ok(_) => info!("Offline pairing completed successfully."),
-            Err(e) => error!("Offline pairing failed: {}", e),
-        }
-        return Ok(());
+        let timeout = match args.pair_timeout.as_deref() {
+            Some(value) => {
+                let parsed = parse_go_duration(value)?;
+                if parsed.is_zero() {
+                    DEFAULT_PAIRING_TIMEOUT
+                } else {
+                    parsed
+                }
+            }
+            None => DEFAULT_PAIRING_TIMEOUT,
+        };
+
+        pairing.run(port, timeout).await?;
+        info!("Offline pairing completed successfully.");
     }
 
-    // 1. Initialize DB
-    let db = match Database::new(&args.db_path).await {
-        Ok(d) => Some(d),
-        Err(e) => {
-            warn!(
-                "Failed to init DB persistence: {}. Running in-memory only.",
-                e
-            );
-            None
+    // 1. Initialize DB. Match Go nitellad: CLI mode is stateless by default;
+    // --db-path opts into proxy persistence; config mode is YAML-owned and
+    // child mode also does not use DB state.
+    let db = if should_open_proxy_db(is_child, args.config.as_deref(), args.db_path.as_deref()) {
+        let db_path = args.db_path.as_deref().unwrap_or_default();
+        match Database::new(db_path).await {
+            Ok(d) => Some(d),
+            Err(e) => {
+                warn!(
+                    "Failed to init DB persistence: {}. Running in-memory only.",
+                    e
+                );
+                None
+            }
         }
+    } else {
+        None
     };
 
     // 2. Initialize Shared Services
@@ -254,9 +371,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         GeoIPService::new(
             args.geoip_city.clone(),
             args.geoip_isp.clone(),
-            args.geoip_addr
-                .clone()
-                .or_else(|| Some("https://ip-api.com/json".to_string())),
+            args.geoip_addr.clone(),
             args.geoip_cache
                 .clone()
                 .or(Some("geoip_cache.db".to_string())),
@@ -272,25 +387,39 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // 3. Event Bus & Stats
     let (event_tx, _) = broadcast::channel(100);
-    let stats = Arc::new(StatsService::new(event_tx.clone()));
+    let stats_db_path = if is_child {
+        None
+    } else {
+        Some(resolve_stats_db_path(
+            args.config.as_deref(),
+            args.stats_db.as_deref(),
+        ))
+    };
+    let stats = Arc::new(StatsService::new_with_db(event_tx.clone(), stats_db_path).await);
 
     // 7. Run Logic
     if is_child {
         // --- CHILD MODE ---
         info!("Mode: Child Process (IPC)");
 
-        // In child mode, we use a dedicated local rule engine for the single proxy
-        let rule_engine = Arc::new(RwLock::new(RuleEngine::new(vec![])));
-
-        let process_server = NitellaProcessServer::new(
-            rule_engine.clone(),
-            geoip.clone(),
-            stats.clone(),
-            event_tx.clone(),
-        );
+        #[cfg(not(unix))]
+        {
+            error!("Child process mode requires Unix socketpair transport on this build.");
+            std::process::exit(1);
+        }
 
         #[cfg(unix)]
         {
+            // In child mode, we use a dedicated local rule engine for the single proxy
+            let rule_engine = Arc::new(RwLock::new(RuleEngine::new(vec![])));
+
+            let process_server = NitellaProcessServer::new(
+                rule_engine.clone(),
+                geoip.clone(),
+                stats.clone(),
+                event_tx.clone(),
+            );
+
             if let Some(unix_stream) = synurang::get_ipc_transport() {
                 // Use a channel to create a stream that yields the connection once and then stays open
                 // This prevents the server from shutting down immediately after accepting the connection
@@ -341,9 +470,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             approval_manager.clone(),
         ));
 
-        // Restore state from DB
-        if let Err(e) = manager.load_state().await {
-            error!("Failed to restore state: {}", e);
+        // Restore state from DB only when DB mode is active. In config mode Go
+        // uses the YAML file as the sole startup source.
+        if db.is_some() {
+            if let Err(e) = manager.load_state().await {
+                error!("Failed to restore state: {}", e);
+            }
         }
 
         // 5. Load YAML Config
@@ -351,64 +483,34 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             match config::load_config(cfg_path).await {
                 Ok(yaml) => {
                     info!("Loaded YAML config from {}", cfg_path);
-                    if let Some(eps) = yaml.entry_points {
+                    if let Some(eps) = &yaml.entry_points {
                         for (name, ep) in eps {
-                            let mut default_backend = ep.default_backend.clone();
-
-                            // Try to resolve backend from TCP routers if not specified
-                            if default_backend.is_empty() {
-                                if let Some(tcp) = &yaml.tcp {
-                                    if let Some(routers) = &tcp.routers {
-                                        for (_, router) in routers {
-                                            if router.entry_points.contains(&name)
-                                                && !router.service.is_empty()
-                                            {
-                                                if let Some(services) = &tcp.services {
-                                                    if let Some(svc) = services.get(&router.service)
-                                                    {
-                                                        if let Some(lb) = &svc.load_balancer {
-                                                            if let Some(server) = lb.servers.first()
-                                                            {
-                                                                if !server.address.is_empty() {
-                                                                    default_backend =
-                                                                        server.address.clone();
-                                                                } else {
-                                                                    default_backend =
-                                                                        server.url.clone();
-                                                                }
-                                                                if lb.servers.len() > 1 {
-                                                                    warn!("[Config] Service '{}' defines multiple servers, but load balancing is not supported yet. Using first server: {}", router.service, default_backend);
-                                                                }
-                                                            }
-                                                        } else if let Some(addr) = &svc.address {
-                                                            default_backend = addr.clone();
-                                                        }
-                                                    }
-                                                }
-                                                break;
-                                            }
-                                        }
-                                    }
+                            let resolved = yaml.resolve_entry_point(name, ep);
+                            let security = resolve_entrypoint_tls(
+                                ep,
+                                &cert_pem,
+                                &key_pem,
+                                &ca_pem,
+                                client_auth_type,
+                            );
+                            let rate_limit = match config::rate_limit_to_proto(&ep.rate_limit) {
+                                Ok(rate_limit) => rate_limit,
+                                Err(e) => {
+                                    error!("Invalid rateLimit for entryPoint {}: {}", name, e);
+                                    std::process::exit(1);
                                 }
-                            }
+                            };
 
                             // Map default_action string to ActionType enum
-                            let action_type = match ep.default_action.to_lowercase().as_str() {
-                                "block" => ActionType::Block as i32,
-                                "mock" => ActionType::Mock as i32,
-                                "approval" => ActionType::RequireApproval as i32,
-                                _ => ActionType::Allow as i32,
-                            };
+                            let action_type = action_type_from_str(&ep.default_action)
+                                .unwrap_or(ActionType::Allow as i32);
 
                             // Map default_mock string to MockPreset enum
                             let mock_preset = string_to_mock_preset(&ep.default_mock);
 
                             // Map fallback_action string to FallbackAction enum
-                            let fallback_action = match ep.fallback_action.to_lowercase().as_str() {
-                                "mock" => FallbackAction::Mock as i32,
-                                "close" => FallbackAction::Close as i32,
-                                _ => FallbackAction::Unspecified as i32,
-                            };
+                            let fallback_action = fallback_action_from_str(&ep.fallback_action)
+                                .unwrap_or(FallbackAction::Unspecified as i32);
 
                             let fallback_mock = string_to_mock_preset(&ep.fallback_mock);
 
@@ -419,16 +521,43 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                             let req = CreateProxyRequest {
                                 name: name.clone(),
-                                listen_addr: ep.address,
-                                default_backend,
+                                listen_addr: ep.address.clone(),
+                                default_backend: resolved.default_backend.clone(),
                                 default_action: action_type,
                                 default_mock: mock_preset,
                                 fallback_action,
                                 fallback_mock,
+                                cert_pem: security.cert_pem,
+                                key_pem: security.key_pem,
+                                ca_pem: security.ca_pem,
+                                client_auth_type: security.client_auth_type,
+                                health_check: resolved
+                                    .health_check
+                                    .as_ref()
+                                    .map(config::health_check_to_proto),
                                 ..Default::default()
                             };
-                            if let Err(e) = manager.create_proxy(req).await {
-                                error!("Failed to start config proxy: {}", e);
+                            match manager.create_proxy(req).await {
+                                Ok(proxy_id) => {
+                                    add_initial_default_rule(
+                                        &manager,
+                                        &proxy_id,
+                                        action_type,
+                                        mock_preset,
+                                        rate_limit,
+                                    )
+                                    .await;
+                                    add_yaml_middleware_rules(
+                                        &manager,
+                                        &proxy_id,
+                                        resolved.middleware_mocks,
+                                        resolved.router_priority,
+                                    )
+                                    .await;
+                                }
+                                Err(e) => {
+                                    error!("Failed to start config proxy: {}", e);
+                                }
                             }
                         }
                     }
@@ -445,6 +574,72 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         tokio::spawn(async move {
             health_checker.run().await;
         });
+
+        // C. Start Initial Proxy from Flags before Hub startup, matching Go's
+        // startup order: configured local listeners exist before hub commands
+        // can observe the node.
+        if args.config.is_none() {
+            let cli_default_action = match action_type_from_str(&args.default_action) {
+                Some(action) => action,
+                None => {
+                    eprintln!(
+                        "Error: Invalid --default-action {} (want allow, block, mock, approval, require_approval)",
+                        args.default_action
+                    );
+                    std::process::exit(1);
+                }
+            };
+            let allow_ips = normalize_source_ip_values(&args.allow_ip);
+            let block_ips = normalize_source_ip_values(&args.block_ip);
+            let allow_countries = normalize_country_values(&args.allow_country);
+            let block_countries = normalize_country_values(&args.block_country);
+
+            if let Some(backend) = args.backend {
+                let req = CreateProxyRequest {
+                    name: args.name.unwrap_or("cli-default".to_string()),
+                    listen_addr: args.listen.clone(),
+                    default_backend: backend,
+                    default_action: cli_default_action,
+                    fallback_action: cli_fallback_action,
+                    fallback_mock: cli_fallback_mock,
+                    cert_pem,
+                    key_pem,
+                    ca_pem,
+                    client_auth_type,
+                    ..Default::default()
+                };
+
+                match manager.create_proxy(req).await {
+                    Ok(proxy_id) => {
+                        add_initial_default_rule(
+                            &manager,
+                            &proxy_id,
+                            cli_default_action,
+                            MockPreset::Unspecified as i32,
+                            cli_rate_limit.clone(),
+                        )
+                        .await;
+                        add_startup_ip_rules(&manager, &proxy_id, &allow_ips, &block_ips).await;
+                        add_startup_country_rules(
+                            &manager,
+                            &proxy_id,
+                            &allow_countries,
+                            &block_countries,
+                        )
+                        .await;
+                    }
+                    Err(e) => {
+                        error!("Failed to start initial proxy: {}", e);
+                        std::process::exit(1);
+                    }
+                }
+            } else if args.hub.is_none() {
+                eprintln!(
+                    "Error: No backend specified. Use --backend, --config, or --hub with pairing."
+                );
+                std::process::exit(1);
+            }
+        }
 
         // A. Start Hub Client
         if let Some(ref hub_addr) = args.hub {
@@ -493,13 +688,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             let admin_dir = if let Some(dir) = args.admin_data_dir {
                 dir
-            } else {
-                let p = std::path::Path::new(&args.db_path);
+            } else if let Some(db_path) = args.db_path.as_deref() {
+                let p = std::path::Path::new(db_path);
                 match p.parent() {
                     Some(parent) if parent.as_os_str().is_empty() => ".".to_string(),
                     Some(parent) => parent.to_string_lossy().to_string(),
                     None => ".".to_string(),
                 }
+            } else {
+                ".".to_string()
             };
 
             info!("Admin Data Directory: {}", admin_dir);
@@ -585,41 +782,33 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
 
-        // C. Start Initial Proxy from Flags
-        if let Some(backend) = args.backend {
-            let req = CreateProxyRequest {
-                name: args.name.unwrap_or("cli-default".to_string()),
-                listen_addr: args.listen.clone(),
-                default_backend: backend,
-                cert_pem: args.tls_cert.unwrap_or_default(),
-                key_pem: args.tls_key.unwrap_or_default(),
-                ca_pem: args.tls_ca.unwrap_or_default(),
-                ..Default::default()
-            };
-
-            if let Err(e) = manager.create_proxy(req).await {
-                error!("Failed to start initial proxy: {}", e);
-                std::process::exit(1);
-            }
-        } else if args.hub.is_none() && args.config.is_none() && args.admin_port == 0 {
-            eprintln!("Error: No backend, config, conn-hub or admin-port specified.");
-            std::process::exit(1);
-        }
-
-        use tokio::signal::unix::{signal, SignalKind};
-
-        let mut term = signal(SignalKind::terminate())?;
-
-        tokio::select! {
-            _ = tokio::signal::ctrl_c() => {
-                info!("Received Ctrl-C, shutting down...");
-            },
-            _ = term.recv() => {
-                info!("Received SIGTERM, shutting down...");
-            }
-        }
+        wait_for_shutdown().await?;
     }
 
+    Ok(())
+}
+
+#[cfg(unix)]
+async fn wait_for_shutdown() -> Result<(), Box<dyn std::error::Error>> {
+    use tokio::signal::unix::{signal, SignalKind};
+
+    let mut term = signal(SignalKind::terminate())?;
+
+    tokio::select! {
+        _ = tokio::signal::ctrl_c() => {
+            info!("Received Ctrl-C, shutting down...");
+        },
+        _ = term.recv() => {
+            info!("Received SIGTERM, shutting down...");
+        }
+    }
+    Ok(())
+}
+
+#[cfg(not(unix))]
+async fn wait_for_shutdown() -> Result<(), Box<dyn std::error::Error>> {
+    tokio::signal::ctrl_c().await?;
+    info!("Received Ctrl-C, shutting down...");
     Ok(())
 }
 
@@ -638,5 +827,894 @@ fn string_to_mock_preset(s: &str) -> i32 {
         "telnet-secure" => MockPreset::TelnetSecure as i32,
         "raw-tarpit" => MockPreset::RawTarpit as i32,
         _ => MockPreset::Unspecified as i32,
+    }
+}
+
+fn fallback_action_from_str(action: &str) -> Option<i32> {
+    match action.trim().to_ascii_lowercase().as_str() {
+        "" => Some(FallbackAction::Unspecified as i32),
+        "close" => Some(FallbackAction::Close as i32),
+        "mock" => Some(FallbackAction::Mock as i32),
+        _ => None,
+    }
+}
+
+fn cli_fallback_args_present(args: &Args) -> bool {
+    args.fallback_action.is_some() || args.fallback_mock.is_some()
+}
+
+fn build_cli_fallback_config(
+    action: Option<&str>,
+    mock: Option<&str>,
+) -> Result<(i32, i32), Box<dyn std::error::Error>> {
+    if action.is_none() && mock.is_none() {
+        return Ok((
+            FallbackAction::Unspecified as i32,
+            MockPreset::Unspecified as i32,
+        ));
+    }
+
+    let fallback_action = fallback_action_from_str(action.unwrap_or(""))
+        .ok_or("--fallback-action must be close or mock")?;
+
+    let fallback_mock = match mock {
+        Some(value) if !value.trim().is_empty() => {
+            let preset = string_to_mock_preset(value);
+            if preset == MockPreset::Unspecified as i32 {
+                return Err(format!("unknown --fallback-mock preset {value:?}").into());
+            }
+            preset
+        }
+        _ => MockPreset::Unspecified as i32,
+    };
+
+    if mock.is_some() && fallback_action != FallbackAction::Mock as i32 {
+        return Err("--fallback-mock requires --fallback-action mock".into());
+    }
+    if fallback_action == FallbackAction::Mock as i32
+        && fallback_mock == MockPreset::Unspecified as i32
+    {
+        return Err("--fallback-action mock requires --fallback-mock".into());
+    }
+
+    Ok((fallback_action, fallback_mock))
+}
+
+#[derive(Debug, Default)]
+struct CliRateLimitOptions {
+    max_connections: Option<i32>,
+    interval_seconds: Option<i32>,
+    auto_block: Option<bool>,
+    block_duration_seconds: Option<i32>,
+    block_steps_seconds: Option<String>,
+    count_only_failures: bool,
+    failure_duration_threshold: Option<i32>,
+}
+
+fn cli_rate_limit_options_from_args(args: &Args) -> CliRateLimitOptions {
+    CliRateLimitOptions {
+        max_connections: args.rate_limit_max_connections,
+        interval_seconds: args.rate_limit_interval,
+        auto_block: args.rate_limit_auto_block,
+        block_duration_seconds: args.rate_limit_block_duration,
+        block_steps_seconds: args.rate_limit_block_steps.clone(),
+        count_only_failures: args.rate_limit_count_only_failures,
+        failure_duration_threshold: args.rate_limit_failure_threshold,
+    }
+}
+
+fn cli_rate_limit_args_present(args: &Args) -> bool {
+    cli_rate_limit_options_from_args(args).has_any_setting()
+}
+
+impl CliRateLimitOptions {
+    fn has_any_setting(&self) -> bool {
+        self.max_connections.is_some()
+            || self.interval_seconds.is_some()
+            || self.auto_block.is_some()
+            || self.block_duration_seconds.is_some()
+            || self.block_steps_seconds.is_some()
+            || self.count_only_failures
+            || self.failure_duration_threshold.is_some()
+    }
+}
+
+fn build_cli_rate_limit_config(
+    options: CliRateLimitOptions,
+) -> Result<Option<RateLimitConfig>, Box<dyn std::error::Error>> {
+    if !options.has_any_setting() {
+        return Ok(None);
+    }
+
+    let Some(max_connections) = options.max_connections else {
+        return Err(
+            "--rate-limit-max-connections must be greater than 0 when rate-limit flags are used"
+                .into(),
+        );
+    };
+    if max_connections <= 0 {
+        return Err(
+            "--rate-limit-max-connections must be greater than 0 when rate-limit flags are used"
+                .into(),
+        );
+    }
+
+    let interval_seconds = options.interval_seconds.unwrap_or(60);
+    if interval_seconds <= 0 {
+        return Err("--rate-limit-interval must be greater than 0".into());
+    }
+
+    let block_duration_seconds = options.block_duration_seconds.unwrap_or(600);
+    if block_duration_seconds < 0 {
+        return Err("--rate-limit-block-duration cannot be negative".into());
+    }
+
+    let block_steps_seconds = parse_rate_limit_block_steps(options.block_steps_seconds.as_deref())?;
+
+    if let Some(threshold) = options.failure_duration_threshold {
+        if threshold < 0 {
+            return Err("--rate-limit-failure-threshold cannot be negative".into());
+        }
+        if !options.count_only_failures {
+            return Err(
+                "--rate-limit-failure-threshold requires --rate-limit-count-only-failures".into(),
+            );
+        }
+    }
+
+    let failure_duration_threshold = if options.count_only_failures {
+        options.failure_duration_threshold.unwrap_or(1)
+    } else {
+        0
+    };
+
+    Ok(Some(RateLimitConfig {
+        max_connections,
+        interval_seconds,
+        auto_block: options.auto_block.unwrap_or(true),
+        block_duration_seconds,
+        block_steps_seconds,
+        count_only_failures: options.count_only_failures,
+        failure_duration_threshold,
+    }))
+}
+
+fn parse_rate_limit_block_steps(
+    value: Option<&str>,
+) -> Result<Vec<i32>, Box<dyn std::error::Error>> {
+    let Some(value) = value else {
+        return Ok(Vec::new());
+    };
+    let value = value.trim();
+    if value.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let mut steps = Vec::new();
+    for part in value.split(',') {
+        let part = part.trim();
+        if part.is_empty() {
+            continue;
+        }
+        let seconds: i32 = match part.parse() {
+            Ok(seconds) => seconds,
+            Err(_) => {
+                return Err(
+                    format!("--rate-limit-block-steps contains invalid duration {part:?}").into(),
+                )
+            }
+        };
+        if seconds < 0 {
+            return Err("--rate-limit-block-steps cannot contain negative values".into());
+        }
+        steps.push(seconds);
+    }
+    Ok(steps)
+}
+
+async fn add_initial_default_rule(
+    manager: &Arc<ProxyManager>,
+    proxy_id: &str,
+    default_action: i32,
+    default_mock: i32,
+    rate_limit: Option<RateLimitConfig>,
+) {
+    let rule = initial_default_rule(default_action, default_mock, rate_limit);
+    if let Err(e) = manager.add_rule(proxy_id, rule).await {
+        warn!("Failed to add __default rule to proxy {}: {}", proxy_id, e);
+    }
+}
+
+async fn add_startup_country_rules(
+    manager: &Arc<ProxyManager>,
+    proxy_id: &str,
+    allow_countries: &[String],
+    block_countries: &[String],
+) {
+    for country in allow_countries {
+        if let Err(e) = manager
+            .add_rule(
+                proxy_id,
+                startup_country_rule(ActionType::Allow as i32, country),
+            )
+            .await
+        {
+            warn!(
+                "Failed to add allow-country rule for {} to proxy {}: {}",
+                country, proxy_id, e
+            );
+            continue;
+        }
+        info!("Rule: ALLOW country {}", country);
+    }
+
+    for country in block_countries {
+        if let Err(e) = manager
+            .add_rule(
+                proxy_id,
+                startup_country_rule(ActionType::Block as i32, country),
+            )
+            .await
+        {
+            warn!(
+                "Failed to add block-country rule for {} to proxy {}: {}",
+                country, proxy_id, e
+            );
+            continue;
+        }
+        info!("Rule: BLOCK country {}", country);
+    }
+}
+
+async fn add_startup_ip_rules(
+    manager: &Arc<ProxyManager>,
+    proxy_id: &str,
+    allow_ips: &[String],
+    block_ips: &[String],
+) {
+    for ip in allow_ips {
+        if let Err(e) = manager
+            .add_rule(
+                proxy_id,
+                startup_source_ip_rule(ActionType::Allow as i32, ip),
+            )
+            .await
+        {
+            warn!(
+                "Failed to add allow-ip rule for {} to proxy {}: {}",
+                ip, proxy_id, e
+            );
+            continue;
+        }
+        info!("Rule: ALLOW IP {}", ip);
+    }
+
+    for ip in block_ips {
+        if let Err(e) = manager
+            .add_rule(
+                proxy_id,
+                startup_source_ip_rule(ActionType::Block as i32, ip),
+            )
+            .await
+        {
+            warn!(
+                "Failed to add block-ip rule for {} to proxy {}: {}",
+                ip, proxy_id, e
+            );
+            continue;
+        }
+        info!("Rule: BLOCK IP {}", ip);
+    }
+}
+
+async fn add_yaml_middleware_rules(
+    manager: &Arc<ProxyManager>,
+    proxy_id: &str,
+    middleware_mocks: Vec<(String, config::MockConfig)>,
+    router_priority: i32,
+) {
+    for (name, mock) in middleware_mocks {
+        let rule = Rule {
+            id: uuid::Uuid::new_v4().to_string(),
+            name: format!("__middleware:{}", name),
+            priority: router_priority,
+            enabled: true,
+            action: ActionType::Mock as i32,
+            mock_response: Some(config::mock_config_to_proto(&mock)),
+            ..Default::default()
+        };
+        if let Err(e) = manager.add_rule(proxy_id, rule).await {
+            warn!(
+                "Failed to add YAML middleware rule {} to proxy {}: {}",
+                name, proxy_id, e
+            );
+        }
+    }
+}
+
+fn initial_default_rule(
+    default_action: i32,
+    default_mock: i32,
+    rate_limit: Option<RateLimitConfig>,
+) -> Rule {
+    let action = normalize_default_action(default_action, default_mock);
+    Rule {
+        id: uuid::Uuid::new_v4().to_string(),
+        name: "__default".to_string(),
+        priority: -1000,
+        enabled: true,
+        action,
+        rate_limit,
+        mock_response: if action == ActionType::Mock as i32 {
+            Some(MockConfig {
+                preset: default_mock,
+                ..Default::default()
+            })
+        } else {
+            None
+        },
+        ..Default::default()
+    }
+}
+
+fn startup_country_rule(action: i32, country: &str) -> Rule {
+    startup_rule(
+        action,
+        "Country",
+        country,
+        ConditionType::GeoCountry as i32,
+        Operator::Eq as i32,
+    )
+}
+
+fn startup_source_ip_rule(action: i32, value: &str) -> Rule {
+    startup_rule(
+        action,
+        "IP",
+        value,
+        ConditionType::SourceIp as i32,
+        source_ip_operator(value),
+    )
+}
+
+fn startup_rule(action: i32, label: &str, value: &str, condition_type: i32, op: i32) -> Rule {
+    let (name_action, priority) = if action == ActionType::Block as i32 {
+        ("Block", 110)
+    } else {
+        ("Allow", 100)
+    };
+
+    Rule {
+        id: uuid::Uuid::new_v4().to_string(),
+        name: format!("{} {} {}", name_action, label, value),
+        priority,
+        enabled: true,
+        action,
+        conditions: vec![Condition {
+            r#type: condition_type,
+            op,
+            value: value.to_string(),
+            ..Default::default()
+        }],
+        ..Default::default()
+    }
+}
+
+fn source_ip_operator(value: &str) -> i32 {
+    if value.contains('/') {
+        Operator::Cidr as i32
+    } else {
+        Operator::Eq as i32
+    }
+}
+
+fn action_type_from_str(action: &str) -> Option<i32> {
+    match action.trim().to_ascii_lowercase().as_str() {
+        "" | "allow" => Some(ActionType::Allow as i32),
+        "block" => Some(ActionType::Block as i32),
+        "mock" => Some(ActionType::Mock as i32),
+        "approval" | "require_approval" | "require-approval" => {
+            Some(ActionType::RequireApproval as i32)
+        }
+        _ => None,
+    }
+}
+
+fn normalize_country_values(values: &[String]) -> Vec<String> {
+    normalize_values(values, Some(normalize_country_value))
+}
+
+fn normalize_source_ip_values(values: &[String]) -> Vec<String> {
+    let mut normalized = Vec::new();
+    for value in values {
+        for expanded in expand_source_ip_alias(value) {
+            if expanded.is_empty() || normalized.iter().any(|existing| existing == &expanded) {
+                continue;
+            }
+            normalized.push(expanded);
+        }
+    }
+    normalized
+}
+
+fn expand_source_ip_alias(value: &str) -> Vec<String> {
+    let trimmed = value.trim();
+    match trimmed.to_ascii_lowercase().as_str() {
+        "" => Vec::new(),
+        "localhost" => vec!["127.0.0.0/8".to_string(), "::1/128".to_string()],
+        "private" => vec![
+            "10.0.0.0/8".to_string(),
+            "172.16.0.0/12".to_string(),
+            "192.168.0.0/16".to_string(),
+            "fc00::/7".to_string(),
+        ],
+        "local" => vec![
+            "127.0.0.0/8".to_string(),
+            "::1/128".to_string(),
+            "10.0.0.0/8".to_string(),
+            "172.16.0.0/12".to_string(),
+            "192.168.0.0/16".to_string(),
+            "fc00::/7".to_string(),
+            "169.254.0.0/16".to_string(),
+            "fe80::/10".to_string(),
+        ],
+        _ => vec![trimmed.to_string()],
+    }
+}
+
+fn normalize_values(values: &[String], normalize: Option<fn(&str) -> String>) -> Vec<String> {
+    let mut normalized = Vec::new();
+    for value in values {
+        let value = match normalize {
+            Some(normalize) => normalize(value),
+            None => value.trim().to_string(),
+        };
+        if value.is_empty() || normalized.iter().any(|existing| existing == &value) {
+            continue;
+        }
+        normalized.push(value);
+    }
+    normalized
+}
+
+fn normalize_country_value(value: &str) -> String {
+    let trimmed = value.trim();
+    if trimmed.len() == 2 {
+        trimmed.to_ascii_uppercase()
+    } else {
+        trimmed.to_string()
+    }
+}
+
+fn normalize_default_action(default_action: i32, default_mock: i32) -> i32 {
+    if default_action == ActionType::Unspecified as i32 {
+        if default_mock != MockPreset::Unspecified as i32 {
+            ActionType::Mock as i32
+        } else {
+            ActionType::Allow as i32
+        }
+    } else {
+        default_action
+    }
+}
+
+struct ListenerSecurity {
+    cert_pem: String,
+    key_pem: String,
+    ca_pem: String,
+    client_auth_type: i32,
+}
+
+fn resolve_entrypoint_tls(
+    ep: &config::EntryPoint,
+    default_cert_pem: &str,
+    default_key_pem: &str,
+    default_ca_pem: &str,
+    default_client_auth_type: i32,
+) -> ListenerSecurity {
+    let Some(tls) = &ep.tls else {
+        return ListenerSecurity {
+            cert_pem: default_cert_pem.to_string(),
+            key_pem: default_key_pem.to_string(),
+            ca_pem: default_ca_pem.to_string(),
+            client_auth_type: default_client_auth_type,
+        };
+    };
+
+    let cert_pem = if tls.cert_file.is_empty() {
+        default_cert_pem.to_string()
+    } else {
+        read_optional_file(Some(&tls.cert_file), "entrypoint TLS certificate")
+    };
+    let key_pem = if tls.key_file.is_empty() {
+        default_key_pem.to_string()
+    } else {
+        read_optional_file(Some(&tls.key_file), "entrypoint TLS private key")
+    };
+    let ca_pem = if tls.client_ca.is_empty() {
+        default_ca_pem.to_string()
+    } else {
+        read_optional_file(Some(&tls.client_ca), "entrypoint TLS client CA")
+    };
+
+    let client_auth_type = match tls.client_auth.to_lowercase().as_str() {
+        "none" => ClientAuthType::ClientAuthNone as i32,
+        "optional" | "request" => ClientAuthType::ClientAuthRequest as i32,
+        "require" | "required" | "mtls" => ClientAuthType::ClientAuthRequire as i32,
+        "auto" => {
+            if ca_pem.is_empty() {
+                ClientAuthType::ClientAuthNone as i32
+            } else {
+                ClientAuthType::ClientAuthRequest as i32
+            }
+        }
+        "" => {
+            if !tls.client_ca.is_empty() {
+                if ca_pem.is_empty() {
+                    ClientAuthType::ClientAuthNone as i32
+                } else {
+                    ClientAuthType::ClientAuthRequest as i32
+                }
+            } else {
+                default_client_auth_type
+            }
+        }
+        other => {
+            warn!(
+                "Unknown entrypoint TLS clientAuth {:?}; using process default",
+                other
+            );
+            default_client_auth_type
+        }
+    };
+
+    ListenerSecurity {
+        cert_pem,
+        key_pem,
+        ca_pem,
+        client_auth_type,
+    }
+}
+
+fn parse_go_duration(input: &str) -> Result<Duration, std::io::Error> {
+    let s = input.trim();
+    if s.is_empty() {
+        return Err(invalid_duration(input, "duration cannot be empty"));
+    }
+
+    let bytes = s.as_bytes();
+    let mut i = 0;
+    let mut total_nanos = 0.0_f64;
+
+    while i < bytes.len() {
+        let start = i;
+        let mut seen_digit = false;
+        let mut seen_dot = false;
+
+        while i < bytes.len() {
+            let b = bytes[i];
+            if b.is_ascii_digit() {
+                seen_digit = true;
+                i += 1;
+            } else if b == b'.' && !seen_dot {
+                seen_dot = true;
+                i += 1;
+            } else {
+                break;
+            }
+        }
+
+        if !seen_digit {
+            return Err(invalid_duration(input, "expected duration number"));
+        }
+
+        let value = s[start..i]
+            .parse::<f64>()
+            .map_err(|_| invalid_duration(input, "invalid duration number"))?;
+        if !value.is_finite() || value < 0.0 {
+            return Err(invalid_duration(input, "invalid duration number"));
+        }
+
+        let rest = &s[i..];
+        let factor = if rest.starts_with("ms") {
+            i += 2;
+            1_000_000.0
+        } else if rest.starts_with("us") {
+            i += 2;
+            1_000.0
+        } else if rest.starts_with("ns") {
+            i += 2;
+            1.0
+        } else if rest.starts_with('h') {
+            i += 1;
+            60.0 * 60.0 * 1_000_000_000.0
+        } else if rest.starts_with('m') {
+            i += 1;
+            60.0 * 1_000_000_000.0
+        } else if rest.starts_with('s') {
+            i += 1;
+            1_000_000_000.0
+        } else {
+            return Err(invalid_duration(input, "missing or unknown duration unit"));
+        };
+
+        total_nanos += value * factor;
+    }
+
+    let max_nanos = (u64::MAX as f64) * 1_000_000_000.0;
+    if !total_nanos.is_finite() || total_nanos > max_nanos {
+        return Err(invalid_duration(input, "duration is too large"));
+    }
+
+    let total_nanos = total_nanos.round() as u128;
+    let seconds = total_nanos / 1_000_000_000;
+    let nanos = total_nanos % 1_000_000_000;
+    if seconds > u64::MAX as u128 {
+        return Err(invalid_duration(input, "duration is too large"));
+    }
+
+    Ok(Duration::new(seconds as u64, nanos as u32))
+}
+
+fn invalid_duration(input: &str, reason: &str) -> std::io::Error {
+    std::io::Error::new(
+        std::io::ErrorKind::InvalidInput,
+        format!("invalid pair-timeout {:?}: {}", input, reason),
+    )
+}
+
+fn read_optional_file(path: Option<&str>, label: &str) -> String {
+    let Some(path) = path else {
+        return String::new();
+    };
+    if path.is_empty() {
+        return String::new();
+    }
+    match std_fs::read_to_string(path) {
+        Ok(data) => data,
+        Err(e) => {
+            warn!("Failed to read {} {}: {}", label, path, e);
+            String::new()
+        }
+    }
+}
+
+fn resolve_stats_db_path(config_path: Option<&str>, stats_db: Option<&str>) -> String {
+    if let Some(path) = stats_db {
+        if !path.is_empty() {
+            return path.to_string();
+        }
+    }
+    if let Some(path) = config_path {
+        if !path.is_empty() {
+            if let Some(parent) = Path::new(path).parent() {
+                if !parent.as_os_str().is_empty() {
+                    return parent.join("stats.db").to_string_lossy().to_string();
+                }
+            }
+        }
+    }
+    "stats.db".to_string()
+}
+
+fn should_open_proxy_db(is_child: bool, config_path: Option<&str>, db_path: Option<&str>) -> bool {
+    !is_child && config_path.unwrap_or("").is_empty() && !db_path.unwrap_or("").is_empty()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_go_duration_accepts_go_style_units() {
+        assert_eq!(parse_go_duration("3m").unwrap(), Duration::from_secs(180));
+        assert_eq!(parse_go_duration("90s").unwrap(), Duration::from_secs(90));
+        assert_eq!(
+            parse_go_duration("1h30m").unwrap(),
+            Duration::from_secs(90 * 60)
+        );
+    }
+
+    #[test]
+    fn parse_go_duration_rejects_missing_unit() {
+        assert!(parse_go_duration("90").is_err());
+    }
+
+    #[test]
+    fn initial_default_rule_has_unique_id_and_mock_config() {
+        let rule = initial_default_rule(
+            ActionType::Mock as i32,
+            MockPreset::Http403 as i32,
+            Some(RateLimitConfig {
+                max_connections: 3,
+                ..Default::default()
+            }),
+        );
+        assert!(!rule.id.is_empty());
+        assert_eq!(rule.name, "__default");
+        assert_eq!(rule.priority, -1000);
+        assert_eq!(rule.action, ActionType::Mock as i32);
+        assert_eq!(rule.rate_limit.as_ref().unwrap().max_connections, 3);
+        assert_eq!(
+            rule.mock_response.expect("mock response").preset,
+            MockPreset::Http403 as i32
+        );
+    }
+
+    #[test]
+    fn cli_rate_limit_config_builds_fail2ban_policy() {
+        let got = build_cli_rate_limit_config(CliRateLimitOptions {
+            max_connections: Some(3),
+            interval_seconds: Some(60),
+            auto_block: Some(true),
+            block_duration_seconds: Some(1800),
+            count_only_failures: true,
+            failure_duration_threshold: Some(20),
+            ..Default::default()
+        })
+        .unwrap()
+        .unwrap();
+
+        assert_eq!(got.max_connections, 3);
+        assert_eq!(got.interval_seconds, 60);
+        assert!(got.auto_block);
+        assert_eq!(got.block_duration_seconds, 1800);
+        assert!(got.count_only_failures);
+        assert_eq!(got.failure_duration_threshold, 20);
+    }
+
+    #[test]
+    fn cli_rate_limit_config_rejects_threshold_without_failure_only_mode() {
+        let err = build_cli_rate_limit_config(CliRateLimitOptions {
+            max_connections: Some(3),
+            failure_duration_threshold: Some(20),
+            ..Default::default()
+        })
+        .unwrap_err();
+        assert!(err.to_string().contains("count-only-failures"));
+    }
+
+    #[test]
+    fn cli_rate_limit_auto_block_accepts_explicit_false() {
+        let args = Args::try_parse_from([
+            "nitellad-rs",
+            "--backend",
+            "127.0.0.1:3000",
+            "--rate-limit-max-connections",
+            "3",
+            "--rate-limit-auto-block=false",
+        ])
+        .unwrap();
+        assert_eq!(args.rate_limit_auto_block, Some(false));
+    }
+
+    #[test]
+    fn cli_fallback_config_builds_mock_tarpit() {
+        let (action, mock) = build_cli_fallback_config(Some("mock"), Some("ssh-tarpit")).unwrap();
+        assert_eq!(action, FallbackAction::Mock as i32);
+        assert_eq!(mock, MockPreset::SshTarpit as i32);
+    }
+
+    #[test]
+    fn cli_fallback_config_rejects_mock_without_action() {
+        let err = build_cli_fallback_config(None, Some("ssh-tarpit")).unwrap_err();
+        assert!(err.to_string().contains("fallback-action"));
+    }
+
+    #[test]
+    fn cli_country_rule_has_geo_country_condition_above_default() {
+        let rule = startup_country_rule(ActionType::Allow as i32, "KR");
+        assert!(!rule.id.is_empty());
+        assert_eq!(rule.action, ActionType::Allow as i32);
+        assert!(rule.priority > -1000);
+        assert_eq!(rule.conditions.len(), 1);
+        let cond = &rule.conditions[0];
+        assert_eq!(cond.r#type, ConditionType::GeoCountry as i32);
+        assert_eq!(cond.op, Operator::Eq as i32);
+        assert_eq!(cond.value, "KR");
+    }
+
+    #[test]
+    fn cli_country_values_are_trimmed_uppercased_and_deduped() {
+        let values = vec![
+            " kr ".to_string(),
+            "JP".to_string(),
+            "kr".to_string(),
+            "South Korea".to_string(),
+            " ".to_string(),
+        ];
+        assert_eq!(
+            normalize_country_values(&values),
+            vec![
+                "KR".to_string(),
+                "JP".to_string(),
+                "South Korea".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn cli_ip_rule_uses_eq_or_cidr_operator() {
+        let exact = startup_source_ip_rule(ActionType::Allow as i32, "127.0.0.1");
+        let exact_cond = &exact.conditions[0];
+        assert_eq!(exact_cond.r#type, ConditionType::SourceIp as i32);
+        assert_eq!(exact_cond.op, Operator::Eq as i32);
+
+        let cidr = startup_source_ip_rule(ActionType::Block as i32, "192.168.0.0/16");
+        let cidr_cond = &cidr.conditions[0];
+        assert_eq!(cidr.action, ActionType::Block as i32);
+        assert_eq!(cidr_cond.r#type, ConditionType::SourceIp as i32);
+        assert_eq!(cidr_cond.op, Operator::Cidr as i32);
+    }
+
+    #[test]
+    fn cli_ip_values_are_trimmed_and_deduped() {
+        let values = vec![
+            " 127.0.0.1 ".to_string(),
+            "192.168.0.0/16".to_string(),
+            "127.0.0.1".to_string(),
+            " ".to_string(),
+        ];
+        assert_eq!(
+            normalize_values(&values, None),
+            vec!["127.0.0.1".to_string(), "192.168.0.0/16".to_string()]
+        );
+    }
+
+    #[test]
+    fn cli_ip_values_expand_standalone_aliases() {
+        let values = vec![
+            "localhost".to_string(),
+            "private".to_string(),
+            "local".to_string(),
+            "127.0.0.1".to_string(),
+            "private".to_string(),
+        ];
+        assert_eq!(
+            normalize_source_ip_values(&values),
+            vec![
+                "127.0.0.0/8".to_string(),
+                "::1/128".to_string(),
+                "10.0.0.0/8".to_string(),
+                "172.16.0.0/12".to_string(),
+                "192.168.0.0/16".to_string(),
+                "fc00::/7".to_string(),
+                "169.254.0.0/16".to_string(),
+                "fe80::/10".to_string(),
+                "127.0.0.1".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn action_type_from_str_accepts_cli_aliases() {
+        assert_eq!(
+            action_type_from_str("require_approval"),
+            Some(ActionType::RequireApproval as i32)
+        );
+        assert_eq!(
+            action_type_from_str("require-approval"),
+            Some(ActionType::RequireApproval as i32)
+        );
+        assert_eq!(action_type_from_str("bad"), None);
+    }
+
+    #[test]
+    fn proxy_db_is_disabled_for_config_and_child_modes() {
+        assert!(!should_open_proxy_db(false, None, None));
+        assert!(!should_open_proxy_db(false, Some(""), None));
+        assert!(should_open_proxy_db(false, None, Some("nitella.db")));
+        assert!(should_open_proxy_db(false, Some(""), Some("nitella.db")));
+        assert!(!should_open_proxy_db(
+            false,
+            Some("proxy.yaml"),
+            Some("nitella.db")
+        ));
+        assert!(!should_open_proxy_db(true, None, Some("nitella.db")));
+        assert!(!should_open_proxy_db(
+            true,
+            Some("proxy.yaml"),
+            Some("nitella.db")
+        ));
     }
 }

@@ -1,5 +1,7 @@
 use crate::proto::common::MockPreset;
-use crate::proto::proxy::{Condition, CreateProxyRequest, HealthCheckConfig, MockConfig, Rule};
+use crate::proto::proxy::{
+    Condition, CreateProxyRequest, HealthCheckConfig, MockConfig, RateLimitConfig, Rule,
+};
 use anyhow::Result;
 use sqlx::{sqlite::SqlitePoolOptions, Pool, Row, Sqlite};
 use std::path::Path;
@@ -50,7 +52,9 @@ impl Database {
     pub async fn new(db_path: &str) -> Result<Self> {
         // Ensure directory exists
         if let Some(parent) = Path::new(db_path).parent() {
-            fs::create_dir_all(parent).await?;
+            if !parent.as_os_str().is_empty() {
+                fs::create_dir_all(parent).await?;
+            }
         }
 
         // Create file if not exists
@@ -170,6 +174,24 @@ impl Database {
         Ok(())
     }
 
+    pub async fn set_proxy_enabled(&self, id: &str, enabled: bool) -> Result<()> {
+        if id.is_empty() {
+            sqlx::query("UPDATE proxy_model SET enabled = ?, updated_at = CURRENT_TIMESTAMP")
+                .bind(enabled)
+                .execute(&self.pool)
+                .await?;
+        } else {
+            sqlx::query(
+                "UPDATE proxy_model SET enabled = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+            )
+            .bind(enabled)
+            .bind(id)
+            .execute(&self.pool)
+            .await?;
+        }
+        Ok(())
+    }
+
     pub async fn load_proxies(&self) -> Result<Vec<(String, CreateProxyRequest)>> {
         let rows = sqlx::query("SELECT * FROM proxy_model WHERE enabled = 1")
             .fetch_all(&self.pool)
@@ -225,12 +247,17 @@ impl Database {
         } else {
             String::new()
         };
+        let rate_limit_json = if let Some(config) = &rule.rate_limit {
+            serde_json::to_string(config).unwrap_or_default()
+        } else {
+            String::new()
+        };
 
         sqlx::query(
             "INSERT OR REPLACE INTO rule_model (
                 id, proxy_id, name, priority, enabled, action, target_backend, 
-                conditions_json, mock_config_json, expression, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)",
+                conditions_json, mock_config_json, rate_limit_json, expression, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)",
         )
         .bind(&rule.id)
         .bind(proxy_id)
@@ -241,6 +268,7 @@ impl Database {
         .bind(&rule.target_backend)
         .bind(conds_json)
         .bind(mock_json)
+        .bind(rate_limit_json)
         .bind(&rule.expression)
         .execute(&self.pool)
         .await?;
@@ -272,6 +300,9 @@ impl Database {
             let target_backend: String = row.get("target_backend");
             let conds_json: String = row.get("conditions_json");
             let mock_json: String = row.get("mock_config_json");
+            let rate_limit_json: String = row
+                .try_get::<Option<String>, _>("rate_limit_json")?
+                .unwrap_or_default();
             let expression: String = row.get("expression");
 
             let conditions: Vec<Condition> = if !conds_json.is_empty() {
@@ -285,6 +316,11 @@ impl Database {
             } else {
                 None
             };
+            let rate_limit: Option<RateLimitConfig> = if !rate_limit_json.trim().is_empty() {
+                serde_json::from_str(&rate_limit_json).ok()
+            } else {
+                None
+            };
 
             let rule = Rule {
                 id,
@@ -295,11 +331,140 @@ impl Database {
                 target_backend,
                 conditions,
                 mock_response,
+                rate_limit,
                 expression,
                 ..Default::default()
             };
             result.push(rule);
         }
         Ok(result)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::proto::common::{ActionType, ConditionType, Operator};
+    use uuid::Uuid;
+
+    fn temp_db_path(test_name: &str) -> String {
+        std::env::temp_dir()
+            .join(format!("{}-{}.db", test_name, Uuid::new_v4()))
+            .to_string_lossy()
+            .into_owned()
+    }
+
+    #[tokio::test]
+    async fn save_and_load_rule_preserves_rate_limit() {
+        let path = temp_db_path("nitella-rate-limit-roundtrip");
+        let db = Database::new(&path).await.unwrap();
+        let rule = Rule {
+            id: "rule-rate-limit".to_string(),
+            name: "rate limit".to_string(),
+            priority: 7,
+            enabled: true,
+            action: ActionType::Allow as i32,
+            target_backend: "127.0.0.1:9000".to_string(),
+            rate_limit: Some(RateLimitConfig {
+                max_connections: 3,
+                interval_seconds: 10,
+                auto_block: true,
+                block_duration_seconds: 60,
+                block_steps_seconds: vec![60, 120],
+                count_only_failures: true,
+                failure_duration_threshold: 2,
+            }),
+            ..Default::default()
+        };
+
+        db.save_rule("proxy-a", &rule).await.unwrap();
+        let loaded = db.load_rules("proxy-a").await.unwrap();
+
+        assert_eq!(loaded.len(), 1);
+        assert_eq!(loaded[0].rate_limit, rule.rate_limit);
+
+        db.pool.close().await;
+        let _ = fs::remove_file(path).await;
+    }
+
+    #[tokio::test]
+    async fn load_rules_accepts_go_json_with_omitted_default_fields() {
+        let path = temp_db_path("nitella-rate-limit-go-json");
+        let db = Database::new(&path).await.unwrap();
+        let conditions_json = format!(
+            r#"[{{"type":{},"op":{},"value":"10.0.0.0/8"}}]"#,
+            ConditionType::SourceIp as i32,
+            Operator::Cidr as i32
+        );
+
+        sqlx::query(
+            "INSERT INTO rule_model (
+                id, proxy_id, name, priority, enabled, action, target_backend,
+                conditions_json, mock_config_json, rate_limit_json, expression
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        )
+        .bind("go-json-rule")
+        .bind("proxy-a")
+        .bind("go json rule")
+        .bind(1)
+        .bind(true)
+        .bind(ActionType::Allow as i32)
+        .bind("")
+        .bind(conditions_json)
+        .bind("")
+        .bind(r#"{"max_connections":5,"interval_seconds":30}"#)
+        .bind("")
+        .execute(&db.pool)
+        .await
+        .unwrap();
+
+        let loaded = db.load_rules("proxy-a").await.unwrap();
+
+        assert_eq!(loaded.len(), 1);
+        assert_eq!(loaded[0].conditions.len(), 1);
+        assert!(!loaded[0].conditions[0].negate);
+        let rate_limit = loaded[0].rate_limit.as_ref().unwrap();
+        assert_eq!(rate_limit.max_connections, 5);
+        assert_eq!(rate_limit.interval_seconds, 30);
+        assert!(!rate_limit.auto_block);
+        assert_eq!(rate_limit.block_steps_seconds, Vec::<i32>::new());
+
+        db.pool.close().await;
+        let _ = fs::remove_file(path).await;
+    }
+
+    #[tokio::test]
+    async fn load_rules_treats_null_rate_limit_json_as_absent() {
+        let path = temp_db_path("nitella-rate-limit-null-json");
+        let db = Database::new(&path).await.unwrap();
+
+        sqlx::query(
+            "INSERT INTO rule_model (
+                id, proxy_id, name, priority, enabled, action, target_backend,
+                conditions_json, mock_config_json, rate_limit_json, expression
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        )
+        .bind("null-rate-limit-rule")
+        .bind("proxy-a")
+        .bind("null rate limit rule")
+        .bind(1)
+        .bind(true)
+        .bind(ActionType::Allow as i32)
+        .bind("")
+        .bind("")
+        .bind("")
+        .bind("null")
+        .bind("")
+        .execute(&db.pool)
+        .await
+        .unwrap();
+
+        let loaded = db.load_rules("proxy-a").await.unwrap();
+
+        assert_eq!(loaded.len(), 1);
+        assert!(loaded[0].rate_limit.is_none());
+
+        db.pool.close().await;
+        let _ = fs::remove_file(path).await;
     }
 }

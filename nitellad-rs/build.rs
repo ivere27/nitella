@@ -2,16 +2,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Compile the Protobuf definitions from the parent 'api' directory
     // We include all relevant protos to ensure all types are generated
     let serde_impl = "#[derive(serde::Serialize, serde::Deserialize)]";
+    let serde_message_impl = "#[derive(serde::Serialize, serde::Deserialize)]\n#[serde(default)]";
 
     tonic_build::configure()
         .build_server(true)
         .build_client(true)
-        .type_attribute("nitella.proxy.CreateProxyRequest", serde_impl)
-        .type_attribute("nitella.proxy.Rule", serde_impl)
-        .type_attribute("nitella.proxy.Condition", serde_impl)
-        .type_attribute("nitella.proxy.RateLimitConfig", serde_impl)
-        .type_attribute("nitella.proxy.MockConfig", serde_impl)
-        .type_attribute("nitella.proxy.HealthCheckConfig", serde_impl)
+        .type_attribute("nitella.proxy.CreateProxyRequest", serde_message_impl)
+        .type_attribute("nitella.proxy.Rule", serde_message_impl)
+        .type_attribute("nitella.proxy.Condition", serde_message_impl)
+        .type_attribute("nitella.proxy.RateLimitConfig", serde_message_impl)
+        .type_attribute("nitella.proxy.MockConfig", serde_message_impl)
+        .type_attribute("nitella.proxy.HealthCheckConfig", serde_message_impl)
         .type_attribute("nitella.common.ActionType", serde_impl)
         .type_attribute("nitella.common.MockPreset", serde_impl)
         .type_attribute("nitella.common.FallbackAction", serde_impl)

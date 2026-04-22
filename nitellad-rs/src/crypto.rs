@@ -16,60 +16,10 @@ const EMOJIS: &[&str] = &[
     "🐠", "🐟", "🐬", "🐳", "🐋", "🦈", "🐊", "🐅", "🐆", "🦓", "🦍", "🦧", "🐘", "🦛", "🦏", "🐪",
 ];
 
-// Reconstruct standard ASN.1 SPKI header for Ed25519 (OID 1.3.101.112)
-// SEQUENCE { SEQUENCE { OID 1.3.101.112 } BIT STRING { key } }
-const ED25519_SPKI_PREFIX: &[u8] = &[
-    0x30, 0x2a, // SEQUENCE, 42 bytes
-    0x30, 0x05, // SEQUENCE, 5 bytes
-    0x06, 0x03, // OID, 3 bytes
-    0x2b, 0x65, 0x70, // 1.3.101.112
-    0x03, 0x21, // BIT STRING, 33 bytes
-    0x00, // Unused bits
-];
-
 pub fn compute_spki_fingerprint_and_emoji(cert_der: &[u8]) -> Result<(String, String)> {
     let (_, x509) =
         X509Certificate::from_der(cert_der).map_err(|e| anyhow!("Failed to parse X509: {}", e))?;
-
-    // Check if Ed25519
-    let oid = x509
-        .tbs_certificate
-        .subject_pki
-        .algorithm
-        .algorithm
-        .to_string();
-    let is_ed25519 = oid == "1.3.101.112";
-
-    let spki_bytes = if is_ed25519 {
-        // Construct SPKI from raw key bytes
-        let key_bits = &x509.tbs_certificate.subject_pki.subject_public_key;
-        let key_bytes = key_bits.data.as_ref();
-
-        if key_bytes.len() == 32 {
-            let mut buf = Vec::with_capacity(ED25519_SPKI_PREFIX.len() + key_bytes.len());
-            buf.extend_from_slice(ED25519_SPKI_PREFIX);
-            buf.extend_from_slice(key_bytes);
-            buf
-        } else {
-            // Fallback to cert hash if key length mismatch
-            // This shouldn't happen for valid Ed25519 certs
-            return Ok((
-                hex::encode(Sha256::digest(cert_der)),
-                hash_to_emojis(&Sha256::digest(cert_der)),
-            ));
-        }
-    } else {
-        // For non-Ed25519, we don't have easy SPKI reconstruction in this simplified logic.
-        // Fallback to Cert Hash (Fingerprint of the whole cert).
-        // User will have to live with mismatch if using RSA, or verify against Cert Trace.
-        // But Nitella implies Ed25519 mostly.
-        return Ok((
-            hex::encode(Sha256::digest(cert_der)),
-            hash_to_emojis(&Sha256::digest(cert_der)),
-        ));
-    };
-
-    let hash = Sha256::digest(&spki_bytes);
+    let hash = Sha256::digest(x509.tbs_certificate.subject_pki.raw);
     let hex_fingerprint = hex::encode(hash);
     let emoji = hash_to_emojis(&hash);
 

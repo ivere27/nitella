@@ -30,13 +30,52 @@ endif
 
 MOBILE_BACKEND_PATH := ./cmd/mobile_backend
 
-.PHONY: all build proto test clean deps fmt lint build_plugin
+.PHONY: all help build proto test clean deps fmt lint build_plugin
 .PHONY: hub_build hub_server hubctl_build hub_proto hub_test hub_run hub_docker_build hub_docker_run
 .PHONY: local_proto local_ffi_proto mobile_build mobile_android mobile_ios mobile_linux app_run
 .PHONY: mobile_test mobile_test_e2e mobile_test_e2e_standalone mobile_test_e2e_visible mobile_test_clean
 .PHONY: pre shared_android build_android run_android_release run_android_debug release_unstable release_unstable_clean release_stable release_stable_clean
 
 all: build
+
+help:
+	@echo "Nitella Make targets"
+	@echo ""
+	@echo "General:"
+	@echo "  make build                         Build Go services"
+	@echo "  make test                          Run Go tests"
+	@echo "  make clean                         Remove generated build artifacts"
+	@echo ""
+	@echo "Nitellad:"
+	@echo "  make example_backend               Run example HTTP backend on localhost:3000"
+	@echo "  make nitellad_build                Build Go nitellad to $(BUILD_DIR)/nitellad"
+	@echo "  make nitellad_run NITELLAD_ARGS=\"--listen :8080 --backend localhost:3000\""
+	@echo "                                     Build and run Go nitellad"
+	@echo "  make nitellad_rs_build             Build Rust nitellad-rs to $(BUILD_DIR)/nitellad-rs"
+	@echo "  make nitellad_rs_run NITELLAD_ARGS=\"--listen :8080 --backend localhost:3000\""
+	@echo "                                     Build and run Rust nitellad-rs"
+	@echo "                                     NITELLAD_RS_ARGS is also accepted"
+	@echo "  GeoIP example:"
+	@echo "    NITELLAD_ARGS=\"--listen :8080 --backend localhost:3000 --geoip-city /path/GeoLite2-City.mmdb --geoip-isp /path/GeoLite2-ASN.mmdb\""
+	@echo "  KR-only example:"
+	@echo "    NITELLAD_ARGS=\"--listen :8080 --backend localhost:3000 --default-action block --allow-country KR --allow-ip local --geoip-city /path/GeoLite2-City.mmdb --geoip-isp /path/GeoLite2-ASN.mmdb\""
+	@echo "  Block countries example:"
+	@echo "    NITELLAD_ARGS=\"--listen :8080 --backend localhost:3000 --default-action allow --block-country US,JP --geoip-city /path/GeoLite2-City.mmdb\""
+	@echo "  Source IP/CIDR example:"
+	@echo "    NITELLAD_ARGS=\"--listen :8080 --backend localhost:3000 --default-action block --allow-ip localhost,private\""
+	@echo "  Fail2ban + tarpit example:"
+	@echo "    NITELLAD_ARGS=\"--listen :8080 --backend localhost:3000 --rate-limit-max-connections 3 --rate-limit-interval 60 --rate-limit-count-only-failures --rate-limit-failure-threshold 20 --rate-limit-block-duration 1800 --fallback-action mock --fallback-mock ssh-tarpit\""
+	@echo "    Blocks IPs for 30 minutes after 3 connections under 20s, then sends new blocked/failed connections to SSH tarpit."
+	@echo "  Fallback presets include: ssh-tarpit, mysql-tarpit, raw-tarpit, http-403"
+	@echo "  make nitellad_test                 Run nitellad unit tests"
+	@echo "  make nitellad_test_integration     Run nitellad integration tests"
+	@echo ""
+	@echo "CLI and Hub:"
+	@echo "  make nitella_build                 Build nitella CLI to $(BUILD_DIR)/nitella"
+	@echo "  make nitella_run TOKEN=xxx         Run nitella CLI"
+	@echo "  make hub_build                     Build Hub and hubctl"
+	@echo "  make hub_run                       Run Hub server"
+	@echo "  make hubctl_run CMD=\"users list\"   Run hubctl"
 
 # ============================================================================
 # Build synurang FFI plugin
@@ -346,18 +385,34 @@ geoip_clean:
 # Nitellad Proxy Daemon
 # ============================================================================
 
-.PHONY: nitellad_build nitellad_run nitellad_test nitellad_test_integration nitella_build nitella_run nitellad_docker_build nitellad_docker_run
+.PHONY: nitellad_build nitellad_run nitellad_rs_build nitellad_rs_run nitellad_test nitellad_test_integration nitella_build nitella_run nitellad_docker_build nitellad_docker_run
 
 nitellad_build: proto
 	@mkdir -p $(BUILD_DIR)
 	go build -ldflags "$(LD_FLAGS)" -o $(BUILD_DIR)/nitellad ./cmd/nitellad
 
+nitellad_rs_build:
+	@mkdir -p $(BUILD_DIR)
+	cargo build --release --manifest-path nitellad-rs/Cargo.toml
+	cp nitellad-rs/target/release/nitellad-rs $(BUILD_DIR)/nitellad-rs
+
 nitella_build: proto
 	@mkdir -p $(BUILD_DIR)
 	go build -ldflags "$(LD_FLAGS)" -o $(BUILD_DIR)/nitella ./cmd/nitella
 
+# Common runtime args for both Go nitellad and Rust nitellad-rs.
+# NITELLAD_RS_ARGS is kept as a compatibility alias.
+NITELLAD_ARGS ?=
+NITELLAD_RS_ARGS ?=
+NITELLAD_RUN_ARGS = $(if $(NITELLAD_ARGS),$(NITELLAD_ARGS),$(NITELLAD_RS_ARGS))
+
 nitellad_run: nitellad_build
-	./$(BUILD_DIR)/nitellad
+	./$(BUILD_DIR)/nitellad $(NITELLAD_RUN_ARGS)
+
+# Run Rust nitellad implementation
+# Usage: make nitellad_rs_run NITELLAD_ARGS="--listen :8080 --backend localhost:3000"
+nitellad_rs_run: nitellad_rs_build
+	./$(BUILD_DIR)/nitellad-rs $(NITELLAD_RUN_ARGS)
 
 # Run nitella CLI
 # Usage: make nitella_run TOKEN=xxx ADDR=localhost:50051
@@ -378,7 +433,7 @@ nitellad_test_integration: nitellad_build nitella_build mock_build
 	go test -v ./test/integration/... -run "Proxy|Rule|Connection|Client|AdminAPI|RateLimit|DDoS|Fallback|GeoIPLookup|ProcessListener|CLI|Mode" -timeout 300s
 
 nitellad_clean:
-	rm -f $(BUILD_DIR)/nitellad $(BUILD_DIR)/nitella
+	rm -f $(BUILD_DIR)/nitellad $(BUILD_DIR)/nitella $(BUILD_DIR)/nitellad-rs
 	rm -f pkg/api/proxy/*.pb.go
 
 # ============================================================================
@@ -486,7 +541,7 @@ nitellad_docker_run: nitellad_docker_build
 # Mock Server Module
 # ============================================================================
 
-.PHONY: mock_build mock_run mock_test mock_test_integration mock_docker_build mock_docker_run
+.PHONY: mock_build mock_run example_backend_build example_backend mock_test mock_test_integration mock_docker_build mock_docker_run
 
 mock_build:
 	@mkdir -p $(BUILD_DIR)
@@ -505,8 +560,21 @@ MOCK_PROTOCOL ?= http
 mock_run: mock_build
 	./$(BUILD_DIR)/mock -port $(MOCK_PORT) -protocol $(MOCK_PROTOCOL)
 
+# Build the example backend used by nitellad examples.
+example_backend_build:
+	@mkdir -p $(BUILD_DIR)
+	cargo build --release --manifest-path nitellad-rs/Cargo.toml --bin bench_backend
+	cp nitellad-rs/target/release/bench_backend $(BUILD_DIR)/rust-backend
+
+# Run the example backend for nitellad examples.
+# Usage: make example_backend
+#        make example_backend EXAMPLE_BACKEND_PORT=3001
+EXAMPLE_BACKEND_PORT ?= 3000
+example_backend: example_backend_build
+	./$(BUILD_DIR)/rust-backend --port $(EXAMPLE_BACKEND_PORT)
+
 mock_clean:
-	rm -f $(BUILD_DIR)/mock
+	rm -f $(BUILD_DIR)/mock $(BUILD_DIR)/rust-backend
 
 # Docker
 mock_docker_build:

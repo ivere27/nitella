@@ -7,10 +7,9 @@ use tracing::{error, info};
 
 use crate::approval::ApprovalManager;
 use crate::geoip::GeoIPService;
-use crate::proto::common::{ActionType, MockPreset};
 use crate::proto::process::process_control_server::ProcessControl;
 use crate::proto::process::*;
-use crate::proto::proxy::ProxyStatus;
+use crate::proto::proxy::{ClientAuthType, ProxyStatus};
 use crate::proxy::EmbeddedListener;
 use crate::rules::RuleEngine;
 use crate::stats::StatsService;
@@ -63,7 +62,7 @@ impl ProcessControl for NitellaProcessServer {
         }
 
         let backend = req.default_backend;
-        let listener = Arc::new(EmbeddedListener::new(
+        let mut listener = EmbeddedListener::new(
             req.id,
             req.name,
             req.listen_addr,
@@ -80,7 +79,15 @@ impl ProcessControl for NitellaProcessServer {
             req.default_mock.map(|m| m.preset).unwrap_or(0),
             req.fallback_action,
             req.fallback_mock,
-        ));
+        );
+        if !req.cert_pem.is_empty() {
+            let auth_type = ClientAuthType::try_from(req.client_auth_type)
+                .unwrap_or(ClientAuthType::ClientAuthNone);
+            listener = listener
+                .with_tls(&req.cert_pem, &req.key_pem, &req.ca_pem, auth_type)
+                .map_err(|e| Status::invalid_argument(e.to_string()))?;
+        }
+        let listener = Arc::new(listener);
 
         let listener_clone = listener.clone();
         let mut rx = self.shutdown_tx.subscribe();
@@ -203,11 +210,17 @@ impl ProcessControl for NitellaProcessServer {
         let req = request.into_inner();
         let lock = self.proxy_listener.read().await;
         if let Some(l) = lock.as_ref() {
-            l.close_connection(&req.conn_id);
-            Ok(Response::new(CloseConnectionResponse {
-                success: true,
-                error_message: "".to_string(),
-            }))
+            if l.close_connection(&req.conn_id) {
+                Ok(Response::new(CloseConnectionResponse {
+                    success: true,
+                    error_message: "".to_string(),
+                }))
+            } else {
+                Ok(Response::new(CloseConnectionResponse {
+                    success: false,
+                    error_message: "connection not found".to_string(),
+                }))
+            }
         } else {
             Ok(Response::new(CloseConnectionResponse {
                 success: false,

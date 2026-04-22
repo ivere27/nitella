@@ -19,18 +19,18 @@ import (
 )
 
 // =============================================================================
-// FFI Server Interface
+// GeoIPService FFI Server Interface
 // =============================================================================
 
-type FfiServer interface {
+type GeoIPServiceFfiServer interface {
 	GeoIPServiceServer
 }
 
 // =============================================================================
-// Invoke - returns []byte (for TCP/UDS)
+// GeoIPService Invoke - returns []byte (for TCP/UDS)
 // =============================================================================
 
-func Invoke(s FfiServer, ctx context.Context, method string, data []byte) ([]byte, error) {
+func GeoIPServiceInvoke(s GeoIPServiceFfiServer, ctx context.Context, method string, data []byte) ([]byte, error) {
 	switch method {
 	case "/nitella.geoip.GeoIPService/Lookup":
 		req := &LookupRequest{}
@@ -58,13 +58,13 @@ func Invoke(s FfiServer, ctx context.Context, method string, data []byte) ([]byt
 }
 
 // =============================================================================
-// InvokeFfi - returns C pointer (for zero-copy FFI)
+// GeoIPService InvokeFfi - returns C pointer (for zero-copy FFI)
 // =============================================================================
 
-// InvokeFfi is the zero-copy variant for FFI mode.
+// GeoIPServiceInvokeFfi is the zero-copy variant for FFI mode.
 // It allocates C memory and serializes directly into it.
 // Caller is responsible for freeing the returned pointer via C.free().
-func InvokeFfi(s FfiServer, ctx context.Context, method string, data []byte) (unsafe.Pointer, int64, error) {
+func GeoIPServiceInvokeFfi(s GeoIPServiceFfiServer, ctx context.Context, method string, data []byte) (unsafe.Pointer, int64, error) {
 	switch method {
 	case "/nitella.geoip.GeoIPService/Lookup":
 		req := &LookupRequest{}
@@ -120,18 +120,18 @@ func InvokeFfi(s FfiServer, ctx context.Context, method string, data []byte) (un
 }
 
 // =============================================================================
-// FFI Invoker - wraps FfiServer to implement synurang.Invoker interface
+// GeoIPService FFI Invoker - wraps GeoIPServiceFfiServer
 // =============================================================================
 
-// ffiInvoker wraps FfiServer to implement the synurang.Invoker interface.
+// geoIPServiceFfiInvoker wraps GeoIPServiceFfiServer to implement the synurang.Invoker interface.
 // This allows using the synurang runtime's FfiClientConn with generated code.
 // Uses zero-copy: proto.Message pointers are passed directly without serialization.
-type ffiInvoker struct {
-	server FfiServer
+type geoIPServiceFfiInvoker struct {
+	server GeoIPServiceFfiServer
 }
 
 // Invoke implements synurang.UnaryInvoker (zero-copy).
-func (i *ffiInvoker) Invoke(ctx context.Context, method string, req, reply proto.Message) error {
+func (i *geoIPServiceFfiInvoker) Invoke(ctx context.Context, method string, req, reply proto.Message) error {
 	switch method {
 	case "/nitella.geoip.GeoIPService/Lookup":
 		resp, err := i.server.Lookup(ctx, req.(*LookupRequest))
@@ -155,19 +155,19 @@ func (i *ffiInvoker) Invoke(ctx context.Context, method string, req, reply proto
 }
 
 // InvokeStream implements synurang.StreamInvoker (zero-copy).
-func (i *ffiInvoker) InvokeStream(ctx context.Context, method string, stream synurang.ServerStream) error {
+func (i *geoIPServiceFfiInvoker) InvokeStream(ctx context.Context, method string, stream synurang.ServerStream) error {
 	switch method {
 	default:
 		return fmt.Errorf("unknown streaming method: %s", method)
 	}
 }
 
-var _ synurang.Invoker = (*ffiInvoker)(nil)
+var _ synurang.Invoker = (*geoIPServiceFfiInvoker)(nil)
 
 // =============================================================================
-// FFI Client - convenience wrapper for synurang.FfiClientConn
+// GeoIPService FFI Client - convenience wrapper for synurang.FfiClientConn
 // =============================================================================
 
-func NewFfiClientConn(server FfiServer) grpc.ClientConnInterface {
-	return synurang.NewFfiClientConn(&ffiInvoker{server: server})
+func NewGeoIPServiceFfiClientConn(server GeoIPServiceFfiServer) grpc.ClientConnInterface {
+	return synurang.NewFfiClientConn(&geoIPServiceFfiInvoker{server: server})
 }

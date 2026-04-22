@@ -49,10 +49,10 @@ func (m ListenerMode) String() string {
 }
 
 type ManagedProxy struct {
-	Listener   Listener // nil if stopped
-	Model      *ProxyModel
-	eventSub   chan *pb.ConnectionEvent // Subscription channel for event forwarding
-	cancelSub  func()                   // Function to stop the event forwarder goroutine
+	Listener  Listener // nil if stopped
+	Model     *ProxyModel
+	eventSub  chan *pb.ConnectionEvent // Subscription channel for event forwarding
+	cancelSub func()                   // Function to stop the event forwarder goroutine
 }
 
 type ProxyManager struct {
@@ -110,6 +110,31 @@ func NewProxyManagerWithBool(useEmbedded bool) *ProxyManager {
 		mode = ListenerModeFfi
 	}
 	return NewProxyManager(mode)
+}
+
+func marshalRateLimitJSON(rateLimit *pb.RateLimitConfig) string {
+	if rateLimit == nil {
+		return ""
+	}
+	b, err := json.Marshal(rateLimit)
+	if err != nil {
+		log.Printf("Warning: Failed to serialize rate limit config: %v", err)
+		return ""
+	}
+	return string(b)
+}
+
+func unmarshalRateLimitJSON(ruleID, raw string) *pb.RateLimitConfig {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" || trimmed == "null" {
+		return nil
+	}
+	var cfg pb.RateLimitConfig
+	if err := json.Unmarshal([]byte(trimmed), &cfg); err != nil {
+		log.Printf("Warning: Failed to parse rate limit config for rule %s: %v", ruleID, err)
+		return nil
+	}
+	return &cfg
 }
 
 // SetApprovalManager sets the approval manager and wires it to all proxies
@@ -755,6 +780,7 @@ func (m *ProxyManager) ReloadRules(proxyID string, rules []*pb.Rule) (*pb.Reload
 		for _, rule := range rules {
 			condBytes, _ := json.Marshal(rule.Conditions)
 			mockBytes, _ := json.Marshal(rule.MockResponse)
+			rateLimitJSON := marshalRateLimitJSON(rule.RateLimit)
 
 			ruleModel := &RuleModel{
 				ID:             rule.Id,
@@ -766,6 +792,7 @@ func (m *ProxyManager) ReloadRules(proxyID string, rules []*pb.Rule) (*pb.Reload
 				TargetBackend:  rule.TargetBackend,
 				ConditionsJSON: string(condBytes),
 				MockConfigJSON: string(mockBytes),
+				RateLimitJSON:  rateLimitJSON,
 				Expression:     rule.Expression,
 			}
 			if _, err := m.db.Insert(ruleModel); err != nil {
@@ -943,6 +970,7 @@ func (m *ProxyManager) AddRule(req *pb.AddRuleRequest) (*pb.Rule, error) {
 	if m.db != nil {
 		condBytes, _ := json.Marshal(req.Rule.Conditions)
 		mockBytes, _ := json.Marshal(req.Rule.MockResponse)
+		rateLimitJSON := marshalRateLimitJSON(req.Rule.RateLimit)
 
 		ruleModel := &RuleModel{
 			ID:             req.Rule.Id,
@@ -954,6 +982,7 @@ func (m *ProxyManager) AddRule(req *pb.AddRuleRequest) (*pb.Rule, error) {
 			TargetBackend:  req.Rule.TargetBackend,
 			ConditionsJSON: string(condBytes),
 			MockConfigJSON: string(mockBytes),
+			RateLimitJSON:  rateLimitJSON,
 			Expression:     req.Rule.Expression,
 			CreatedAt:      time.Now(),
 			UpdatedAt:      time.Now(),
@@ -1328,6 +1357,7 @@ func (m *ProxyManager) LoadState() error {
 						log.Printf("Warning: Failed to parse mock config for rule %s: %v", r.ID, err)
 					}
 				}
+				rateLimit := unmarshalRateLimitJSON(r.ID, r.RateLimitJSON)
 
 				rule := &pb.Rule{
 					Id:            r.ID,
@@ -1338,6 +1368,7 @@ func (m *ProxyManager) LoadState() error {
 					TargetBackend: r.TargetBackend,
 					Conditions:    conds,
 					MockResponse:  &mockCfg,
+					RateLimit:     rateLimit,
 					Expression:    r.Expression,
 				}
 				proxy.AddRule(rule)

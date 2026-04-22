@@ -409,6 +409,37 @@ nitellad --config proxy.yaml
 nitellad --config proxy.yaml --geoip-city /path/to/GeoLite2-City.mmdb
 ```
 
+Standalone fail2ban-style rate limiting can be attached to the default rule from CLI flags:
+
+```bash
+nitellad --listen :8080 --backend localhost:3000 \
+  --rate-limit-max-connections 3 \
+  --rate-limit-interval 60 \
+  --rate-limit-count-only-failures \
+  --rate-limit-failure-threshold 20 \
+  --rate-limit-block-duration 1800 \
+  --fallback-action mock \
+  --fallback-mock ssh-tarpit
+```
+
+The same setting is available in YAML entrypoints:
+
+```yaml
+entryPoints:
+  web:
+    address: ":8080"
+    defaultAction: allow
+    fallbackAction: mock
+    fallbackMock: ssh-tarpit
+    rateLimit:
+      maxConnections: 3
+      intervalSeconds: 60
+      autoBlock: true
+      blockDurationSeconds: 1800
+      countOnlyFailures: true
+      failureDurationThreshold: 20
+```
+
 ---
 
 ## Performance Considerations

@@ -30,7 +30,15 @@ def parse_wrk_output(filepath):
         "latency_p99": None,
         "total_requests": None,
         "non_2xx": 0,
+        "socket_errors": {
+            "connect": 0,
+            "read": 0,
+            "write": 0,
+            "timeout": 0,
+        },
+        "total_socket_errors": 0,
         "transfer_sec": None,
+        "transfer_sec_mb": None,
     }
 
     if not os.path.exists(filepath):
@@ -48,6 +56,7 @@ def parse_wrk_output(filepath):
     m = re.search(r"Transfer/sec:\s+([\d.]+\S+)", content)
     if m:
         result["transfer_sec"] = m.group(1)
+        result["transfer_sec_mb"] = parse_transfer_to_mb_s(m.group(1))
 
     # Latency line:   Latency     1.23ms  456.78us  12.34ms   78.90%
     m = re.search(r"Latency\s+([\d.]+\S+)\s+([\d.]+\S+)\s+([\d.]+\S+)", content)
@@ -73,6 +82,21 @@ def parse_wrk_output(filepath):
     if m:
         result["non_2xx"] = int(m.group(1))
 
+    # Socket errors: connect 0, read 0, write 0, timeout 17
+    m = re.search(
+        r"Socket errors:\s+connect\s+(\d+),\s+read\s+(\d+),\s+write\s+(\d+),\s+timeout\s+(\d+)",
+        content,
+    )
+    if m:
+        errors = {
+            "connect": int(m.group(1)),
+            "read": int(m.group(2)),
+            "write": int(m.group(3)),
+            "timeout": int(m.group(4)),
+        }
+        result["socket_errors"] = errors
+        result["total_socket_errors"] = sum(errors.values())
+
     return result
 
 
@@ -90,15 +114,33 @@ def parse_duration_to_ms(s):
     return None
 
 
+def parse_transfer_to_mb_s(s):
+    """Convert wrk transfer rate string (e.g., '1.17MB', '900.00KB') to MiB/s."""
+    m = re.match(r"^([\d.]+)([KMGT]?B)$", s.strip())
+    if not m:
+        return None
+    value = float(m.group(1))
+    unit = m.group(2)
+    factors = {
+        "B": 1 / (1024 * 1024),
+        "KB": 1 / 1024,
+        "MB": 1,
+        "GB": 1024,
+        "TB": 1024 * 1024,
+    }
+    return value * factors[unit]
+
+
 def parse_resources_csv(filepath):
-    """Parse resource CSV and return max RSS (MB), avg CPU%, peak CPU%."""
+    """Parse resource CSV and return max RSS (MB), avg CPU%, peak CPU%, max threads."""
     max_rss_kb = 0
     total_cpu = 0.0
     peak_cpu = 0.0
+    max_threads = 0
     count = 0
 
     if not os.path.exists(filepath):
-        return 0.0, 0.0, 0.0
+        return 0.0, 0.0, 0.0, 0
 
     with open(filepath, "r") as f:
         reader = csv.DictReader(f)
@@ -106,15 +148,17 @@ def parse_resources_csv(filepath):
             try:
                 rss = int(row["RSS_KB"])
                 cpu = float(row["CPU_Percent"])
+                threads = int(row.get("Threads", 0) or 0)
                 max_rss_kb = max(max_rss_kb, rss)
                 total_cpu += cpu
                 peak_cpu = max(peak_cpu, cpu)
+                max_threads = max(max_threads, threads)
                 count += 1
             except (ValueError, KeyError):
                 continue
 
     avg_cpu = total_cpu / count if count > 0 else 0.0
-    return max_rss_kb / 1024.0, avg_cpu, peak_cpu
+    return max_rss_kb / 1024.0, avg_cpu, peak_cpu, max_threads
 
 
 def parse_resource_summary(filepath):
@@ -171,7 +215,22 @@ def compute_pprof_drift(results_dir, run_tag, leak_cycles):
     if not before:
         return None
 
+    if leak_cycles <= 0:
+        final = after_load or before
+        return {
+            "leak_checked": False,
+            "goroutines_before": before.get("goroutines", 0),
+            "goroutines_after_load": after_load.get("goroutines", 0) if after_load else 0,
+            "goroutines_final": final.get("goroutines", 0),
+            "heap_inuse_before": before.get("heap_inuse", 0),
+            "heap_inuse_after_load": after_load.get("heap_inuse", 0) if after_load else 0,
+            "heap_inuse_final": final.get("heap_inuse", 0),
+            "goroutine_leak": None,
+            "heap_inuse_drift": None,
+        }
+
     result = {
+        "leak_checked": True,
         "goroutines_before": before.get("goroutines", 0),
         "goroutines_after_load": after_load.get("goroutines", 0) if after_load else 0,
         "goroutines_final": final.get("goroutines", 0) if final else 0,
@@ -219,12 +278,19 @@ def analyze_variant(results_dir, variant, runs, leak_cycles):
     """Analyze all runs for a given variant."""
     run_results = []
     all_rps = []
+    all_transfer_mb = []
     all_p50 = []
     all_p99 = []
     all_max_rss = []
     all_avg_cpu = []
     all_peak_cpu = []
+    all_peak_threads = []
     all_total_cpu_sec = []
+    all_socket_errors = []
+    all_backend_max_rss = []
+    all_backend_avg_cpu = []
+    all_backend_peak_cpu = []
+    all_backend_peak_threads = []
 
     for run_num in range(1, runs + 1):
         run_tag = f"{variant}_run{run_num}"
@@ -235,8 +301,16 @@ def analyze_variant(results_dir, variant, runs, leak_cycles):
 
         # Parse resources
         res_file = os.path.join(results_dir, f"{run_tag}_resources.csv")
-        max_rss_mb, avg_cpu, peak_cpu = parse_resources_csv(res_file)
-        
+        max_rss_mb, avg_cpu, peak_cpu, peak_threads = parse_resources_csv(res_file)
+
+        backend_res_file = os.path.join(results_dir, f"{run_tag}_backend_resources.csv")
+        (
+            backend_max_rss_mb,
+            backend_avg_cpu,
+            backend_peak_cpu,
+            backend_peak_threads,
+        ) = parse_resources_csv(backend_res_file)
+
         # Parse resource summary (Total CPU Time)
         cpu_time = parse_resource_summary(f"{res_file}.summary")
 
@@ -249,15 +323,24 @@ def analyze_variant(results_dir, variant, runs, leak_cycles):
         run_data = {
             "run": run_num,
             "requests_sec": wrk["requests_sec"],
+            "transfer_sec": wrk["transfer_sec"],
+            "transfer_sec_mb": wrk["transfer_sec_mb"],
             "latency_avg_ms": wrk["latency_avg"],
             "latency_p50_ms": wrk["latency_p50"],
             "latency_p99_ms": wrk["latency_p99"],
             "latency_max_ms": wrk["latency_max"],
             "total_requests": wrk["total_requests"],
             "non_2xx": wrk["non_2xx"],
+            "socket_errors": wrk["socket_errors"],
+            "total_socket_errors": wrk["total_socket_errors"],
             "max_rss_mb": round(max_rss_mb, 2),
             "avg_cpu_pct": round(avg_cpu, 1),
             "peak_cpu_pct": round(peak_cpu, 1),
+            "peak_threads": peak_threads,
+            "backend_max_rss_mb": round(backend_max_rss_mb, 2),
+            "backend_avg_cpu_pct": round(backend_avg_cpu, 1),
+            "backend_peak_cpu_pct": round(backend_peak_cpu, 1),
+            "backend_peak_threads": backend_peak_threads,
             "total_cpu_sec": cpu_time,
             "rss_drift": drift,
             "pprof": pprof_drift,
@@ -266,6 +349,8 @@ def analyze_variant(results_dir, variant, runs, leak_cycles):
 
         if wrk["requests_sec"] is not None:
             all_rps.append(wrk["requests_sec"])
+        if wrk["transfer_sec_mb"] is not None:
+            all_transfer_mb.append(wrk["transfer_sec_mb"])
         if wrk["latency_p50"] is not None:
             all_p50.append(wrk["latency_p50"])
         if wrk["latency_p99"] is not None:
@@ -276,28 +361,54 @@ def analyze_variant(results_dir, variant, runs, leak_cycles):
             all_avg_cpu.append(avg_cpu)
         if peak_cpu > 0:
             all_peak_cpu.append(peak_cpu)
+        if peak_threads > 0:
+            all_peak_threads.append(peak_threads)
+        if backend_max_rss_mb > 0:
+            all_backend_max_rss.append(backend_max_rss_mb)
+        if backend_avg_cpu > 0:
+            all_backend_avg_cpu.append(backend_avg_cpu)
+        if backend_peak_cpu > 0:
+            all_backend_peak_cpu.append(backend_peak_cpu)
+        if backend_peak_threads > 0:
+            all_backend_peak_threads.append(backend_peak_threads)
         if cpu_time > 0:
             all_total_cpu_sec.append(cpu_time)
+        all_socket_errors.append(wrk["total_socket_errors"])
 
     # Aggregate drift across runs
     all_drift_kb = [r["rss_drift"]["drift_kb"] for r in run_results if r["rss_drift"]["drift_kb"] != 0]
 
     # Aggregate pprof data (Go runs only)
-    all_goroutine_leak = [r["pprof"]["goroutine_leak"] for r in run_results if r["pprof"]]
-    all_heap_inuse_drift = [r["pprof"]["heap_inuse_drift"] for r in run_results if r["pprof"]]
+    all_goroutine_leak = [
+        r["pprof"]["goroutine_leak"]
+        for r in run_results
+        if r["pprof"] and r["pprof"].get("goroutine_leak") is not None
+    ]
+    all_heap_inuse_drift = [
+        r["pprof"]["heap_inuse_drift"]
+        for r in run_results
+        if r["pprof"] and r["pprof"].get("heap_inuse_drift") is not None
+    ]
 
     return {
         "runs": run_results,
         "median_rps": safe_median(all_rps),
+        "median_transfer_mb": safe_median(all_transfer_mb),
         "median_p50_ms": safe_median(all_p50),
         "median_p99_ms": safe_median(all_p99),
         "peak_rss_mb": round(max(all_max_rss), 2) if all_max_rss else None,
         "mean_rss_mb": safe_mean(all_max_rss),
         "avg_cpu_pct": safe_mean(all_avg_cpu),
         "peak_cpu_pct": round(max(all_peak_cpu), 1) if all_peak_cpu else None,
+        "peak_threads": max(all_peak_threads) if all_peak_threads else None,
+        "backend_peak_rss_mb": round(max(all_backend_max_rss), 2) if all_backend_max_rss else None,
+        "backend_avg_cpu_pct": safe_mean(all_backend_avg_cpu),
+        "backend_peak_cpu_pct": round(max(all_backend_peak_cpu), 1) if all_backend_peak_cpu else None,
+        "backend_peak_threads": max(all_backend_peak_threads) if all_backend_peak_threads else None,
         "mean_total_cpu_sec": safe_mean(all_total_cpu_sec),
         "mean_rss_drift_kb": safe_mean(all_drift_kb) if all_drift_kb else 0,
         "total_non_2xx": sum(r["non_2xx"] for r in run_results),
+        "total_socket_errors": sum(all_socket_errors),
         "mean_goroutine_leak": safe_mean(all_goroutine_leak) if all_goroutine_leak else None,
         "mean_heap_inuse_drift": safe_mean(all_heap_inuse_drift) if all_heap_inuse_drift else None,
     }
@@ -317,6 +428,16 @@ def generate_markdown(summary, config):
     lines.append(f"# Nitella Comprehensive Benchmark Results")
     lines.append("")
     lines.append(f"**Runs per variant:** {config['runs']}  ")
+    if "backend" in config:
+        lines.append(f"**Backend:** {config['backend']}  ")
+    if "env" in config:
+        env = config["env"]
+        lines.append(
+            "**Environment:** "
+            f"GOMAXPROCS={env.get('GOMAXPROCS', 'unset')}, "
+            f"BACKEND_TASKSET={env.get('BACKEND_TASKSET', 'unset')}, "
+            f"DAEMON_TASKSET={env.get('DAEMON_TASKSET', 'unset')}  "
+        )
     if "scenarios" in config:
         lines.append("**Scenarios tested:**")
         for s_name, s_args in config["scenarios"].items():
@@ -327,8 +448,8 @@ def generate_markdown(summary, config):
     lines.append("## Performance")
     lines.append("")
     # Added "CPU Time (s)" column
-    lines.append("| Variant | Median Req/s | p50 (ms) | p99 (ms) | Non-2xx | Peak RSS (MB) | Avg CPU (%) | CPU Time (s) | RSS Drift (KB) | Goroutine Leak |")
-    lines.append("|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|")
+    lines.append("| Variant | Median Req/s | Transfer (MiB/s) | p50 (ms) | p99 (ms) | Non-2xx | Socket errors | Peak RSS (MB) | Peak Threads | Avg CPU (%) | Backend CPU (%) | CPU Time (s) | RSS Drift (KB) | Goroutine Leak |")
+    lines.append("|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|")
 
     for variant in config["variants"]:
         data = summary.get(variant)
@@ -337,16 +458,20 @@ def generate_markdown(summary, config):
         readable_name = format_variant_name(variant)
 
         rps = f"{data['median_rps']:.0f}" if data["median_rps"] else "N/A"
+        transfer = f"{data['median_transfer_mb']:.2f}" if data["median_transfer_mb"] else "N/A"
         p50 = f"{data['median_p50_ms']:.2f}" if data["median_p50_ms"] else "N/A"
         p99 = f"{data['median_p99_ms']:.2f}" if data["median_p99_ms"] else "N/A"
         non2xx = str(data["total_non_2xx"])
+        socket_errors = str(data.get("total_socket_errors", 0))
         rss = f"{data['peak_rss_mb']:.1f}" if data["peak_rss_mb"] else "N/A"
+        threads = str(data["peak_threads"]) if data.get("peak_threads") else "N/A"
         cpu = f"{data['avg_cpu_pct']:.1f}" if data["avg_cpu_pct"] else "N/A"
+        backend_cpu = f"{data['backend_avg_cpu_pct']:.1f}" if data.get("backend_avg_cpu_pct") else "N/A"
         cpu_time = f"{data['mean_total_cpu_sec']:.2f}" if data["mean_total_cpu_sec"] is not None else "N/A"
         drift = f"{data['mean_rss_drift_kb']:.0f}" if data["mean_rss_drift_kb"] else "0"
         gleak = f"{data['mean_goroutine_leak']:.0f}" if data.get("mean_goroutine_leak") is not None else "N/A"
 
-        lines.append(f"| {readable_name} | {rps} | {p50} | {p99} | {non2xx} | {rss} | {cpu} | {cpu_time} | {drift} | {gleak} |")
+        lines.append(f"| {readable_name} | {rps} | {transfer} | {p50} | {p99} | {non2xx} | {socket_errors} | {rss} | {threads} | {cpu} | {backend_cpu} | {cpu_time} | {drift} | {gleak} |")
 
     lines.append("")
     lines.append("## Leak Detection Details")
@@ -372,12 +497,15 @@ def generate_markdown(summary, config):
 
             pprof = run_data.get("pprof")
             if pprof:
-                gleak = pprof["goroutine_leak"]
-                g_status = "PASS" if abs(gleak) <= 5 else "WARN"
-                detail += (
-                    f" | goroutines: {pprof['goroutines_before']}->{pprof['goroutines_final']}"
-                    f" (leak={gleak}) [{g_status}]"
-                )
+                if pprof.get("leak_checked"):
+                    gleak = pprof["goroutine_leak"]
+                    g_status = "PASS" if abs(gleak) <= 5 else "WARN"
+                    detail += (
+                        f" | goroutines: {pprof['goroutines_before']}->{pprof['goroutines_final']}"
+                        f" (leak={gleak}) [{g_status}]"
+                    )
+                else:
+                    detail += " | goroutine leak check skipped"
 
             lines.append(detail)
 

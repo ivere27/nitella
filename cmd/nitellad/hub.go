@@ -1758,16 +1758,16 @@ func applyProxyTemplate(pm *node.ProxyManager, req *pb.ApplyProxyRequest) ([]byt
 			}
 		}
 
+		rateLimit, err := ep.RateLimit.ToProto()
+		if err != nil {
+			lastError = fmt.Errorf("invalid rateLimit for entryPoint %q: %w", name, err)
+			log.Printf("[Hub] %v", lastError)
+			continue
+		}
+
 		// Convert string action to enum
-		var actionType common.ActionType
-		switch strings.ToLower(ep.DefaultAction) {
-		case "block":
-			actionType = common.ActionType_ACTION_TYPE_BLOCK
-		case "mock":
-			actionType = common.ActionType_ACTION_TYPE_MOCK
-		case "approval":
-			actionType = common.ActionType_ACTION_TYPE_REQUIRE_APPROVAL
-		default:
+		actionType, ok := actionTypeFromString(ep.DefaultAction)
+		if !ok {
 			actionType = common.ActionType_ACTION_TYPE_ALLOW
 		}
 
@@ -1808,6 +1808,16 @@ func applyProxyTemplate(pm *node.ProxyManager, req *pb.ApplyProxyRequest) ([]byt
 
 		newListenerIDs = append(newListenerIDs, resp.ProxyId)
 		log.Printf("[Hub] Started listener %s on %s -> %s", name, ep.Address, defaultBackend)
+
+		if rateLimit != nil {
+			if _, err := pm.AddRule(&pb.AddRuleRequest{
+				ProxyId: resp.ProxyId,
+				Rule:    defaultStartupRule(ep.DefaultAction, ep.DefaultMock, rateLimit),
+			}); err != nil {
+				lastError = err
+				log.Printf("[Hub] Warning: failed to add rate-limited default rule for listener %s: %v", name, err)
+			}
+		}
 	}
 
 	if len(newListenerIDs) == 0 && lastError != nil {

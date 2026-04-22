@@ -48,7 +48,7 @@ type FfiListener struct {
 }
 
 // NewFfiListener creates a new FFI-based listener.
-// The ffiConnFactory creates the FFI connection (e.g., synurang.NewFfiClientConn(core)).
+// The ffiConnFactory creates the FFI connection (e.g., process.NewProcessControlFfiClientConn(core)).
 func NewFfiListener(
 	id, name, listenAddr, defaultBackend string,
 	defaultAction common.ActionType,
@@ -62,7 +62,7 @@ func NewFfiListener(
 
 	// Create FFI connection via synurang
 	// Note: This requires the generated FFI binding from process.proto
-	ffiConn := pb.NewFfiClientConn(core)
+	ffiConn := pb.NewProcessControlFfiClientConn(core)
 
 	return &FfiListener{
 		core:           core,

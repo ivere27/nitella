@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::net::IpAddr;
 use std::sync::atomic::{AtomicI32, Ordering};
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -19,6 +20,7 @@ use crate::proto::proxy::{
 use crate::proxy::{EmbeddedListener, ProxyListener};
 use crate::rules::RuleEngine;
 use crate::stats::StatsService;
+use ipnet::IpNet;
 
 pub struct ManagedProxy {
     pub listener: Arc<ProxyListener>,
@@ -39,6 +41,31 @@ pub struct ProxyManager {
     db: Option<Database>,
     process_mode: bool,
     pub approval_manager: Arc<ApprovalManager>, // Added public for Admin access
+}
+
+fn validate_ip_or_cidr(input: &str) -> anyhow::Result<()> {
+    if input.is_empty() {
+        return Err(anyhow::anyhow!("IP/CIDR cannot be empty"));
+    }
+    if input.contains('/') {
+        input
+            .parse::<IpNet>()
+            .map(|_| ())
+            .map_err(|e| anyhow::anyhow!("invalid CIDR: {}", e))
+    } else {
+        input
+            .parse::<IpAddr>()
+            .map(|_| ())
+            .map_err(|_| anyhow::anyhow!("invalid IP address: {}", input))
+    }
+}
+
+fn source_ip_operator(input: &str) -> i32 {
+    if input.parse::<IpNet>().is_ok() {
+        Operator::Cidr as i32
+    } else {
+        Operator::Eq as i32
+    }
 }
 
 impl ProxyManager {
@@ -66,7 +93,7 @@ impl ProxyManager {
         let expirations = manager.global_rule_expirations.clone();
 
         tokio::spawn(async move {
-            let mut interval = tokio::time::interval(std::time::Duration::from_secs(60));
+            let mut interval = tokio::time::interval(std::time::Duration::from_secs(10));
             loop {
                 interval.tick().await;
                 let now = std::time::SystemTime::now();
@@ -269,6 +296,26 @@ impl ProxyManager {
 
     pub async fn disable_proxy(&self, id: &str) -> anyhow::Result<()> {
         let mut lock = self.proxies.write().await;
+        if id.is_empty() {
+            for (pid, managed) in lock.iter_mut() {
+                if !managed.enabled {
+                    continue;
+                }
+                managed.abort_handle.abort();
+                if let ProxyListener::Process(p) = &*managed.listener {
+                    let _ = p.stop().await;
+                }
+                managed.enabled = false;
+                info!("Disabled proxy {}", pid);
+            }
+            if let Some(db) = &self.db {
+                if let Err(e) = db.set_proxy_enabled("", false).await {
+                    error!("Failed to persist disabled proxy state: {}", e);
+                }
+            }
+            return Ok(());
+        }
+
         if let Some(managed) = lock.get_mut(id) {
             if !managed.enabled {
                 return Ok(());
@@ -280,6 +327,11 @@ impl ProxyManager {
 
             managed.enabled = false;
             info!("Disabled proxy {}", id);
+            if let Some(db) = &self.db {
+                if let Err(e) = db.set_proxy_enabled(id, false).await {
+                    error!("Failed to persist disabled proxy state for {}: {}", id, e);
+                }
+            }
             Ok(())
         } else {
             Err(anyhow::anyhow!("Proxy not found"))
@@ -288,6 +340,7 @@ impl ProxyManager {
 
     pub async fn enable_proxy(&self, id: &str) -> anyhow::Result<()> {
         let config_clone;
+        let rules_to_keep;
         {
             let lock = self.proxies.read().await;
             if let Some(managed) = lock.get(id) {
@@ -295,13 +348,19 @@ impl ProxyManager {
                     return Ok(());
                 }
                 config_clone = managed.config.clone();
+                rules_to_keep = managed.rule_engine.read().await.get_rules();
             } else {
                 return Err(anyhow::anyhow!("Proxy not found"));
             }
         }
 
-        self.start_proxy_instance(id.to_string(), config_clone, None)
+        self.start_proxy_instance(id.to_string(), config_clone, Some(rules_to_keep))
             .await?;
+        if let Some(db) = &self.db {
+            if let Err(e) = db.set_proxy_enabled(id, true).await {
+                error!("Failed to persist enabled proxy state for {}: {}", id, e);
+            }
+        }
         info!("Enabled proxy {}", id);
         Ok(())
     }
@@ -326,15 +385,28 @@ impl ProxyManager {
 
     async fn get_proxy_status_internal(&self, id: &str, p: &ManagedProxy) -> ProxyStatus {
         match &*p.listener {
-            ProxyListener::Process(pl) => pl.get_status().await,
-            ProxyListener::Embedded(_) => {
+            ProxyListener::Process(pl) => {
+                let mut status = pl.get_status().await;
+                status.proxy_id = id.to_string();
+                status.running = p.enabled && status.running;
+                status.default_backend = p.config.default_backend.clone();
+                status.default_action = p.config.default_action;
+                status.default_mock = p.config.default_mock;
+                status.fallback_action = p.config.fallback_action;
+                status.fallback_mock = p.config.fallback_mock;
+                status.uptime_seconds = p.start_time.elapsed().as_secs() as i64;
+                status.health_status = p.health_status.load(Ordering::Relaxed);
+                status.health_check = p.config.health_check.clone();
+                status
+            }
+            ProxyListener::Embedded(listener) => {
                 let (active, total, b_in, b_out) = self.stats.get_summary(Some(id));
                 let health = p.health_status.load(Ordering::Relaxed);
 
                 ProxyStatus {
                     proxy_id: id.to_string(),
                     running: p.enabled,
-                    listen_addr: p.config.listen_addr.clone(),
+                    listen_addr: listener.get_bound_addr().await,
                     default_backend: p.config.default_backend.clone(),
                     uptime_seconds: p.start_time.elapsed().as_secs() as i64,
                     active_connections: active,
@@ -353,7 +425,11 @@ impl ProxyManager {
         }
     }
 
-    pub async fn add_rule(&self, proxy_id: &str, rule: Rule) -> anyhow::Result<()> {
+    pub async fn add_rule(&self, proxy_id: &str, mut rule: Rule) -> anyhow::Result<Rule> {
+        if rule.id.is_empty() {
+            rule.id = Uuid::new_v4().to_string();
+        }
+
         {
             let lock = self.proxies.read().await;
             if let Some(managed) = lock.get(proxy_id) {
@@ -375,7 +451,7 @@ impl ProxyManager {
             db.save_rule(proxy_id, &rule).await?;
         }
 
-        Ok(())
+        Ok(rule)
     }
 
     pub async fn update_proxy(&self, req: UpdateProxyRequest) -> anyhow::Result<()> {
@@ -458,23 +534,29 @@ impl ProxyManager {
         let statuses = self.list_proxies().await;
         let mut count = 0;
         for s in statuses {
-            if let Some(_) = self.proxies.write().await.remove(&s.proxy_id) {
-                // Wait a bit to ensure port release?
-                // In EmbeddedListener, the TcpListener drop should close the socket.
-                // However, tokio tasks might still be running.
-            }
+            let (config, rule_engine) = {
+                let lock = self.proxies.read().await;
+                if let Some(managed) = lock.get(&s.proxy_id) {
+                    (managed.config.clone(), managed.rule_engine.clone())
+                } else {
+                    continue;
+                }
+            };
+            let rules = rule_engine.read().await.get_rules();
 
-            // Re-create using disable/enable logic but ensuring full stop
-            if let Err(e) = self.disable_proxy(&s.proxy_id).await {
-                error!("Failed to disable proxy {}: {}", s.proxy_id, e);
+            if !self.remove_proxy_from_memory(&s.proxy_id).await {
+                error!("Failed to remove proxy {} before restart", s.proxy_id);
                 continue;
             }
 
             // Sleep briefly to allow OS to release port
             tokio::time::sleep(std::time::Duration::from_millis(100)).await;
 
-            if let Err(e) = self.enable_proxy(&s.proxy_id).await {
-                error!("Failed to enable proxy {}: {}", s.proxy_id, e);
+            if let Err(e) = self
+                .start_proxy_instance(s.proxy_id.clone(), config, Some(rules))
+                .await
+            {
+                error!("Failed to restart proxy {}: {}", s.proxy_id, e);
             } else {
                 count += 1;
             }
@@ -531,7 +613,7 @@ impl ProxyManager {
     pub async fn add_global_rule(&self, rule: GlobalRule) -> anyhow::Result<()> {
         let condition = Condition {
             r#type: ConditionType::SourceIp as i32,
-            op: Operator::Eq as i32,
+            op: source_ip_operator(&rule.source_ip),
             value: rule.source_ip.clone(),
             negate: false,
         };
@@ -599,7 +681,8 @@ impl ProxyManager {
     }
 
     pub async fn block_ip(&self, ip: String, duration_seconds: i64) -> anyhow::Result<()> {
-        let id = format!("block-{}", ip);
+        validate_ip_or_cidr(&ip)?;
+        let id = format!("global-block-{}", ip);
         let expires_at = if duration_seconds > 0 {
             Some(prost_types::Timestamp {
                 seconds: std::time::SystemTime::now()
@@ -615,7 +698,7 @@ impl ProxyManager {
 
         let rule = GlobalRule {
             id,
-            name: format!("Block IP {}", ip),
+            name: format!("Block: {}", ip),
             source_ip: ip,
             action: ActionType::Block as i32,
             expires_at,
@@ -625,7 +708,8 @@ impl ProxyManager {
     }
 
     pub async fn allow_ip(&self, ip: String, duration_seconds: i64) -> anyhow::Result<()> {
-        let id = format!("allow-{}", ip);
+        validate_ip_or_cidr(&ip)?;
+        let id = format!("global-allow-{}", ip);
         let expires_at = if duration_seconds > 0 {
             Some(prost_types::Timestamp {
                 seconds: std::time::SystemTime::now()
@@ -641,7 +725,7 @@ impl ProxyManager {
 
         let rule = GlobalRule {
             id,
-            name: format!("Allow IP {}", ip),
+            name: format!("Allow: {}", ip),
             source_ip: ip,
             action: ActionType::Allow as i32,
             expires_at,
@@ -774,11 +858,22 @@ impl ProxyManager {
         &self,
         city_db: Option<String>,
         isp_db: Option<String>,
-        remote_url: Option<String>,
+        remote_urls: Option<Vec<String>>,
         strategy: Option<String>,
     ) -> anyhow::Result<()> {
-        if let Some(url) = remote_url {
-            self.geoip.set_remote_url(url).await;
+        let is_remote_mode = remote_urls.is_some();
+        let is_local_mode = strategy.as_deref() == Some("l1,local");
+
+        if let Some(urls) = remote_urls {
+            self.geoip.set_remote_urls(urls).await;
+            self.geoip.reload_local_db(None, None).await?;
+        }
+
+        if is_local_mode {
+            self.geoip.set_remote_urls(Vec::new()).await;
+            self.geoip.reload_local_db(city_db, isp_db).await?;
+        } else if !is_remote_mode && (city_db.is_some() || isp_db.is_some()) {
+            self.geoip.reload_local_db(city_db, isp_db).await?;
         }
 
         if let Some(s) = strategy {
@@ -790,10 +885,6 @@ impl ProxyManager {
             if !parts.is_empty() {
                 self.geoip.set_strategy(parts).await;
             }
-        }
-
-        if city_db.is_some() || isp_db.is_some() {
-            self.geoip.reload_local_db(city_db, isp_db).await?;
         }
 
         Ok(())
@@ -810,6 +901,38 @@ impl ProxyManager {
     // --- Approval Management ---
 
     pub async fn cancel_approval(&self, key: &str) -> bool {
-        self.approval_manager.cancel_approval(key).await
+        self.cancel_approval_with_close(key, false).await.0
+    }
+
+    pub async fn cancel_approval_with_close(
+        &self,
+        key: &str,
+        close_connections: bool,
+    ) -> (bool, i32) {
+        if let Some((proxy_id, conn_ids)) = self.approval_manager.cancel_approval_details(key).await
+        {
+            let mut closed = 0;
+            if close_connections {
+                for conn_id in conn_ids {
+                    if self.close_connection(&proxy_id, &conn_id).await.is_ok() {
+                        closed += 1;
+                    }
+                }
+            }
+            (true, closed)
+        } else {
+            (false, 0)
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn global_rule_source_ip_operator_matches_go_exact_and_cidr_paths() {
+        assert_eq!(source_ip_operator("203.0.113.10"), Operator::Eq as i32);
+        assert_eq!(source_ip_operator("203.0.113.0/24"), Operator::Cidr as i32);
     }
 }

@@ -1,0 +1,74 @@
+# Nitella Proxy Daemon (Rust implementation)
+#
+# Includes GeoLite2 databases from MaxMind (https://www.maxmind.com)
+# License: CC BY-SA 4.0 - Commercial use allowed with attribution
+# Database source: https://github.com/P3TERX/GeoLite.mmdb
+#
+# Build from the repository root:
+#   docker build -f Dockerfile.nitellad-rs -t nitellad-rs .
+
+# Build stage
+FROM rust:1-bookworm AS builder
+
+RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+    build-essential \
+    ca-certificates \
+    libprotobuf-dev \
+    pkg-config \
+    protobuf-compiler \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+ENV PROTOC_INCLUDE=/usr/include
+
+# nitellad-rs/build.rs compiles protobufs from the repo-level api directory.
+COPY api ./api
+COPY nitellad-rs/Cargo.toml nitellad-rs/Cargo.lock nitellad-rs/build.rs ./nitellad-rs/
+COPY nitellad-rs/bench/*.rs ./nitellad-rs/bench/
+COPY nitellad-rs/src/lib.rs nitellad-rs/src/main.rs ./nitellad-rs/src/
+
+RUN cargo fetch --locked --manifest-path nitellad-rs/Cargo.toml
+
+COPY nitellad-rs/src ./nitellad-rs/src
+
+RUN cargo build --locked --release --manifest-path nitellad-rs/Cargo.toml --bin nitellad-rs \
+    && strip nitellad-rs/target/release/nitellad-rs
+
+# Runtime stage
+FROM debian:bookworm-slim
+
+RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+    ca-certificates \
+    curl \
+    libgcc-s1 \
+    tzdata \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+COPY --from=builder /app/nitellad-rs/target/release/nitellad-rs /app/nitellad-rs
+
+RUN mkdir -p /app/data /app/db /app/config /app/data/admin-certs
+
+# Download GeoLite2 databases (see license info at top of file).
+RUN curl -fsSL -o /app/db/GeoLite2-City.mmdb https://github.com/P3TERX/GeoLite.mmdb/raw/download/GeoLite2-City.mmdb \
+    && curl -fsSL -o /app/db/GeoLite2-ASN.mmdb https://github.com/P3TERX/GeoLite.mmdb/raw/download/GeoLite2-ASN.mmdb
+
+# Default ports
+# 8080: Proxy port (configurable)
+# 50051: Admin gRPC API
+EXPOSE 8080 50051
+
+# Volume for persistent data and config
+VOLUME ["/app/data", "/app/config"]
+
+# Runtime accepts NITELLA_TOKEN when supplied with docker run -e.
+
+ENTRYPOINT ["/app/nitellad-rs"]
+CMD ["--listen", ":8080", "--admin-port", "50051", \
+     "--db-path", "/app/data/nitella.db", \
+     "--stats-db", "/app/data/stats.db", \
+     "--admin-data-dir", "/app/data/admin-certs", \
+     "--geoip-city", "/app/db/GeoLite2-City.mmdb", \
+     "--geoip-isp", "/app/db/GeoLite2-ASN.mmdb", \
+     "--geoip-cache", "/app/data/geoip_cache.db"]

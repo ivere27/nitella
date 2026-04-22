@@ -8,7 +8,7 @@ set -x
 # Compares Go (nitellad) and Rust (nitellad-rs) across standard and process
 # modes using wrk for load generation and /proc-based resource monitoring.
 #
-# Prerequisites: wrk, go (for building backend), curl
+# Prerequisites: wrk, go, cargo, curl
 # =============================================================================
 
 # Configuration
@@ -18,7 +18,7 @@ GO_BIN="/tmp/nitella_bench_go"
 RUST_BIN="/tmp/nitella_bench_rust"
 RESULTS_DIR="$CURRENT_DIR/results"
 MONITOR_SCRIPT="$CURRENT_DIR/monitor.sh"
-BACKEND_SRC="$CURRENT_DIR/backend.go"
+BACKEND_BIN_NAME="bench_backend"
 BACKEND_BIN="/tmp/nitella_bench_backend"
 
 PROXY_PORT=8081
@@ -29,14 +29,22 @@ PPROF_PORT=6060
 # Tunable parameters
 RUNS=${RUNS:-3}
 WRK_THREADS=${WRK_THREADS:-4}
-WARMUP_CONNS=10
-WARMUP_DURATION=10
-LOAD_CONNS=50
-LOAD_DURATION=30
-LEAK_CONNS=50
-LEAK_DURATION=60
-LEAK_CYCLES=3
-LEAK_REST=10
+WARMUP_CONNS=${WARMUP_CONNS:-10}
+WARMUP_DURATION=${WARMUP_DURATION:-10}
+LOAD_CONNS=${LOAD_CONNS:-50}
+LOAD_DURATION=${LOAD_DURATION:-30}
+LEAK_CONNS=${LEAK_CONNS:-50}
+LEAK_DURATION=${LEAK_DURATION:-60}
+LEAK_CYCLES=${LEAK_CYCLES:-3}
+LEAK_REST=${LEAK_REST:-10}
+BACKEND_KIND="static_tcp"
+BENCH_SCENARIOS=${BENCH_SCENARIOS:-small_req}
+LARGE_BYTES=${LARGE_BYTES:-1048576}
+STREAM_CHUNKS=${STREAM_CHUNKS:-128}
+STREAM_CHUNK_SIZE=${STREAM_CHUNK_SIZE:-8192}
+STREAM_DELAY_MS=${STREAM_DELAY_MS:-0}
+BACKEND_TASKSET=${BACKEND_TASKSET:-}
+DAEMON_TASKSET=${DAEMON_TASKSET:-}
 
 # Colors for output
 RED='\033[0;31m'
@@ -51,6 +59,55 @@ log_warn()  { echo -e "${YELLOW}[WARN]${NC}  $*"; }
 log_err()   { echo -e "${RED}[ERROR]${NC} $*"; }
 log_phase() { echo -e "\n${CYAN}=== $* ===${NC}"; }
 
+scenario_path() {
+    case "$1" in
+        small_req)
+            printf '/'
+            ;;
+        large_1m)
+            printf '/bytes/%s' "$LARGE_BYTES"
+            ;;
+        stream_1m)
+            printf '/stream/%s/%s/%s' "$STREAM_CHUNKS" "$STREAM_CHUNK_SIZE" "$STREAM_DELAY_MS"
+            ;;
+        /*)
+            printf '%s' "$1"
+            ;;
+        *)
+            log_err "Unknown benchmark scenario: $1"
+            log_err "Known scenarios: small_req, large_1m, stream_1m, or a raw path beginning with /"
+            exit 2
+            ;;
+    esac
+}
+
+scenario_tag() {
+    local tag=$1
+    tag=${tag#/}
+    tag=${tag//\//_}
+    tag=${tag//[^a-zA-Z0-9_]/_}
+    if [ -z "$tag" ]; then
+        tag="root"
+    fi
+    printf '%s' "$tag"
+}
+
+variant_tag() {
+    local BASE=$1
+    local SCENARIO=$2
+    local SCENARIO_TAG=$3
+
+    if [ "$SCENARIO_COUNT" -eq 1 ] && [ "$SCENARIO" = "small_req" ]; then
+        printf '%s' "$BASE"
+    else
+        printf '%s_%s' "$BASE" "$SCENARIO_TAG"
+    fi
+}
+
+json_escape() {
+    printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'
+}
+
 # =============================================================================
 # Pre-flight checks
 # =============================================================================
@@ -61,14 +118,14 @@ preflight() {
 
     # Check build tools
     if ! command -v go &>/dev/null; then
-        log_err "go not found (needed to build Go binary and backend)"
+        log_err "go not found (needed to build Go binary)"
         fail=1
     else
         log_ok "go: $(go version | awk '{print $3}')"
     fi
 
     if ! command -v cargo &>/dev/null; then
-        log_err "cargo not found (needed to build Rust binary)"
+        log_err "cargo not found (needed to build Rust binaries)"
         fail=1
     else
         log_ok "cargo: $(cargo --version)"
@@ -88,6 +145,11 @@ preflight() {
         fail=1
     else
         log_ok "curl available"
+    fi
+
+    if { [ -n "$BACKEND_TASKSET" ] || [ -n "$DAEMON_TASKSET" ]; } && ! command -v taskset &>/dev/null; then
+        log_err "taskset not found but BACKEND_TASKSET/DAEMON_TASKSET was configured"
+        fail=1
     fi
 
     # Check source directories exist
@@ -119,8 +181,10 @@ preflight() {
 cleanup_all() {
     log_info "Cleaning up..."
     kill "$BACKEND_PID" 2>/dev/null || true
-    pkill -x "nitellad" 2>/dev/null || pkill -f "nitella_bench_go" 2>/dev/null || true
-    pkill -x "nitellad-rs" 2>/dev/null || pkill -f "nitella_bench_rust" 2>/dev/null || true
+    pkill -x "nitellad" 2>/dev/null || true
+    pkill -f "nitella_bench_go" 2>/dev/null || true
+    pkill -x "nitellad-rs" 2>/dev/null || true
+    pkill -f "nitella_bench_rust" 2>/dev/null || true
     pkill -f "monitor.sh" 2>/dev/null || true
     kill "$MONITOR_PID" 2>/dev/null || true
     rm -f "$BACKEND_BIN" "$GO_BIN" "$RUST_BIN"
@@ -143,14 +207,20 @@ build_all() {
     cp "$ROOT_DIR/nitellad-rs/target/release/nitellad-rs" "$RUST_BIN"
     log_ok "Rust binary: $RUST_BIN"
 
-    log_info "Building backend server..."
-    go build -o "$BACKEND_BIN" "$BACKEND_SRC"
-    log_ok "Backend: $BACKEND_BIN"
+    log_info "Building static TCP backend server..."
+    cargo build --release --manifest-path "$ROOT_DIR/nitellad-rs/Cargo.toml" --bin "$BACKEND_BIN_NAME"
+    cp "$ROOT_DIR/nitellad-rs/target/release/$BACKEND_BIN_NAME" "$BACKEND_BIN"
+    log_ok "Static TCP backend: $BACKEND_BIN"
 }
 
 start_backend() {
     log_info "Starting backend on :$BACKEND_PORT..."
-    "$BACKEND_BIN" -port "$BACKEND_PORT" &
+    if [ -n "$BACKEND_TASKSET" ]; then
+        log_info "Backend CPU affinity: $BACKEND_TASKSET"
+        taskset -c "$BACKEND_TASKSET" "$BACKEND_BIN" -port "$BACKEND_PORT" &
+    else
+        "$BACKEND_BIN" -port "$BACKEND_PORT" &
+    fi
     BACKEND_PID=$!
     sleep 1
 
@@ -204,9 +274,13 @@ PPEOF
 # =============================================================================
 wait_for_proxy() {
     local port=$1
+    local pid=$2
     local max_retries=10
     local i=0
     while [ $i -lt $max_retries ]; do
+        if ! kill -0 "$pid" 2>/dev/null; then
+            return 1
+        fi
         if curl -sf "http://127.0.0.1:$port/" -o /dev/null 2>/dev/null; then
             return 0
         fi
@@ -214,6 +288,64 @@ wait_for_proxy() {
         i=$((i + 1))
     done
     return 1
+}
+
+kill_port_listeners() {
+    local port=$1
+    local pids
+    pids=$(lsof -ti ":$port" 2>/dev/null || true)
+    for pid in $pids; do
+        if [ -n "${BACKEND_PID:-}" ] && [ "$pid" = "$BACKEND_PID" ]; then
+            continue
+        fi
+        if is_benchmark_process "$pid"; then
+            kill "$pid" 2>/dev/null || true
+        else
+            log_warn "Port $port is held by non-benchmark PID $pid; leaving it running"
+        fi
+    done
+}
+
+is_benchmark_process() {
+    local pid=$1
+    local cmdline
+    cmdline=$(ps -p "$pid" -o args= 2>/dev/null || true)
+    case "$cmdline" in
+        *nitella_bench_go*|*nitella_bench_rust*|*nitellad-rs*|*nitellad*)
+            return 0
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+}
+
+wait_for_port_free() {
+    local port=$1
+    local i=0
+    while [ $i -lt 20 ]; do
+        if ! lsof -i ":$port" -t &>/dev/null; then
+            return 0
+        fi
+        sleep 0.2
+        i=$((i + 1))
+    done
+    return 1
+}
+
+stop_daemon() {
+    local pid=$1
+
+    pkill -P "$pid" 2>/dev/null || true
+    kill "$pid" 2>/dev/null || true
+    sleep 1
+    pkill -P "$pid" 2>/dev/null || true
+    kill_port_listeners "$PROXY_PORT"
+    kill_port_listeners "$PPROF_PORT"
+    wait "$pid" 2>/dev/null || true
+
+    wait_for_port_free "$PROXY_PORT" || log_warn "Proxy port $PROXY_PORT still in use after cleanup"
+    wait_for_port_free "$PPROF_PORT" || log_warn "pprof port $PPROF_PORT still in use after cleanup"
 }
 
 # =============================================================================
@@ -243,15 +375,29 @@ run_single_test() {
     local BIN=$2
     local EXTRA_ARGS=$3
     local RUN_NUM=$4
+    local URL_PATH=$5
 
     local RUN_TAG="${NAME}_run${RUN_NUM}"
+    local LOAD_URL="http://127.0.0.1:$PROXY_PORT$URL_PATH"
 
     log_info "--- $NAME (run $RUN_NUM/$RUNS) ---"
+    log_info "Traffic target: $URL_PATH"
 
     # Prepare DB and admin port
     local DB_PATH="$RESULTS_DIR/${RUN_TAG}.db"
     rm -f "$DB_PATH"
     local THIS_ADMIN_PORT=$((ADMIN_PORT + RANDOM % 100))
+
+    wait_for_port_free "$PROXY_PORT" || {
+        log_warn "Proxy port $PROXY_PORT was still in use before $RUN_TAG; killing stale listener"
+        kill_port_listeners "$PROXY_PORT"
+        wait_for_port_free "$PROXY_PORT" || return 1
+    }
+    wait_for_port_free "$PPROF_PORT" || {
+        log_warn "pprof port $PPROF_PORT was still in use before $RUN_TAG; killing stale listener"
+        kill_port_listeners "$PPROF_PORT"
+        wait_for_port_free "$PPROF_PORT" || return 1
+    }
 
     # Start daemon with explicit address binding
     # Go binaries get --pprof-port (built with -tags pprof); Rust ignores unknown flags
@@ -260,22 +406,35 @@ run_single_test() {
     if echo "$BIN" | grep -q "go"; then
         PPROF_FLAG="--pprof-port $PPROF_PORT"
     fi
-    $BIN $EXTRA_ARGS \
-        --listen "$LISTEN_ADDR" \
-        --backend "127.0.0.1:$BACKEND_PORT" \
-        --admin-port "$THIS_ADMIN_PORT" \
-        --db-path "$DB_PATH" \
-        $PPROF_FLAG \
-        > "$RESULTS_DIR/${RUN_TAG}.log" 2>&1 &
+    if [ -n "$DAEMON_TASKSET" ]; then
+        taskset -c "$DAEMON_TASKSET" "$BIN" $EXTRA_ARGS \
+            --listen "$LISTEN_ADDR" \
+            --backend "127.0.0.1:$BACKEND_PORT" \
+            --admin-port "$THIS_ADMIN_PORT" \
+            --db-path "$DB_PATH" \
+            $PPROF_FLAG \
+            > "$RESULTS_DIR/${RUN_TAG}.log" 2>&1 &
+    else
+        "$BIN" $EXTRA_ARGS \
+            --listen "$LISTEN_ADDR" \
+            --backend "127.0.0.1:$BACKEND_PORT" \
+            --admin-port "$THIS_ADMIN_PORT" \
+            --db-path "$DB_PATH" \
+            $PPROF_FLAG \
+            > "$RESULTS_DIR/${RUN_TAG}.log" 2>&1 &
+    fi
     local DAEMON_PID=$!
 
     log_info "Daemon PID: $DAEMON_PID"
+    if [ -n "$DAEMON_TASKSET" ]; then
+        log_info "Daemon CPU affinity: $DAEMON_TASKSET"
+    fi
 
     # Wait for proxy to accept connections
-    if ! wait_for_proxy "$PROXY_PORT"; then
+    if ! wait_for_proxy "$PROXY_PORT" "$DAEMON_PID"; then
         log_err "Proxy failed to start. Logs:"
         tail -20 "$RESULTS_DIR/${RUN_TAG}.log" 2>/dev/null || true
-        kill "$DAEMON_PID" 2>/dev/null || true
+        stop_daemon "$DAEMON_PID"
         return 1
     fi
 
@@ -284,7 +443,7 @@ run_single_test() {
     PROBE=$(curl -sf "http://127.0.0.1:$PROXY_PORT/")
     if [ "$PROBE" != "Hello from backend" ]; then
         log_err "Proxy not forwarding correctly. Got: '$PROBE'"
-        kill "$DAEMON_PID" 2>/dev/null || true
+        stop_daemon "$DAEMON_PID"
         return 1
     fi
     log_ok "Proxy verified: forwarding to backend"
@@ -292,6 +451,11 @@ run_single_test() {
     # Start resource monitor
     bash "$MONITOR_SCRIPT" "$DAEMON_PID" "$RESULTS_DIR/${RUN_TAG}_resources.csv" &
     MONITOR_PID=$!
+    local BACKEND_MONITOR_PID=""
+    if [ -n "${BACKEND_PID:-}" ]; then
+        bash "$MONITOR_SCRIPT" "$BACKEND_PID" "$RESULTS_DIR/${RUN_TAG}_backend_resources.csv" &
+        BACKEND_MONITOR_PID=$!
+    fi
 
     # Snapshot pprof before warmup
     snapshot_pprof "$RESULTS_DIR/${RUN_TAG}_pprof_before.json" && \
@@ -300,7 +464,7 @@ run_single_test() {
     # Phase 1: Warmup
     log_info "Phase 1: Warmup (${WARMUP_DURATION}s, ${WARMUP_CONNS} connections)..."
     wrk -t"$WRK_THREADS" -c"$WARMUP_CONNS" -d"${WARMUP_DURATION}s" \
-        "http://127.0.0.1:$PROXY_PORT/" > /dev/null 2>&1
+        "$LOAD_URL" > /dev/null 2>&1
 
     # Snapshot pprof after warmup
     snapshot_pprof "$RESULTS_DIR/${RUN_TAG}_pprof_after_warmup.json" && \
@@ -309,7 +473,7 @@ run_single_test() {
     # Phase 2: High load
     log_info "Phase 2: High load (${LOAD_DURATION}s, ${LOAD_CONNS} connections)..."
     wrk -t"$WRK_THREADS" -c"$LOAD_CONNS" -d"${LOAD_DURATION}s" \
-        --latency "http://127.0.0.1:$PROXY_PORT/" \
+        --latency "$LOAD_URL" \
         > "$RESULTS_DIR/${RUN_TAG}_wrk_load.txt" 2>&1
 
     # Snapshot pprof after load
@@ -328,7 +492,7 @@ run_single_test() {
         snapshot_pprof "$RESULTS_DIR/${RUN_TAG}_pprof_leak_cycle${cycle}_before.json"
 
         wrk -t"$WRK_THREADS" -c"$LEAK_CONNS" -d"${LEAK_DURATION}s" \
-            "http://127.0.0.1:$PROXY_PORT/" \
+            "$LOAD_URL" \
             > "$RESULTS_DIR/${RUN_TAG}_wrk_leak_cycle${cycle}.txt" 2>&1
 
         sleep "$LEAK_REST"
@@ -347,13 +511,13 @@ run_single_test() {
     # Stop monitor
     kill "$MONITOR_PID" 2>/dev/null || true
     wait "$MONITOR_PID" 2>/dev/null || true
+    if [ -n "$BACKEND_MONITOR_PID" ]; then
+        kill "$BACKEND_MONITOR_PID" 2>/dev/null || true
+        wait "$BACKEND_MONITOR_PID" 2>/dev/null || true
+    fi
 
-    # Stop daemon gracefully
-    kill "$DAEMON_PID" 2>/dev/null || true
-    sleep 1
-    # Force kill children (process mode)
-    pkill -P "$DAEMON_PID" 2>/dev/null || true
-    wait "$DAEMON_PID" 2>/dev/null || true
+    # Stop daemon and any process-mode children before the next variant starts.
+    stop_daemon "$DAEMON_PID"
 
     log_ok "Completed $NAME run $RUN_NUM"
     return 0
@@ -366,13 +530,15 @@ run_variant() {
     local NAME=$1
     local BIN=$2
     local EXTRA_ARGS=$3
+    local URL_PATH=$4
 
     log_phase "Benchmarking: $NAME ($RUNS runs)"
     log_info "Binary: $BIN $EXTRA_ARGS"
+    log_info "Scenario URL path: $URL_PATH"
 
     local failures=0
     for run in $(seq 1 "$RUNS"); do
-        if ! run_single_test "$NAME" "$BIN" "$EXTRA_ARGS" "$run"; then
+        if ! run_single_test "$NAME" "$BIN" "$EXTRA_ARGS" "$run" "$URL_PATH"; then
             log_warn "Run $run failed for $NAME, continuing..."
             failures=$((failures + 1))
         fi
@@ -392,8 +558,10 @@ preflight
 
 # Ensure clean slate
 log_phase "Cleanup"
-pkill -x "nitellad" 2>/dev/null || pkill -f "nitella_bench_go" 2>/dev/null || true
-pkill -x "nitellad-rs" 2>/dev/null || pkill -f "nitella_bench_rust" 2>/dev/null || true
+pkill -x "nitellad" 2>/dev/null || true
+pkill -f "nitella_bench_go" 2>/dev/null || true
+pkill -x "nitellad-rs" 2>/dev/null || true
+pkill -f "nitella_bench_rust" 2>/dev/null || true
 pkill -f "monitor.sh" 2>/dev/null || true
 sleep 2
 
@@ -407,6 +575,30 @@ for port in $PROXY_PORT $BACKEND_PORT; do
 done
 
 mkdir -p "$RESULTS_DIR"
+
+IFS=',' read -r -a SCENARIO_LIST <<< "$BENCH_SCENARIOS"
+SCENARIO_COUNT=${#SCENARIO_LIST[@]}
+VARIANTS_JSON=""
+SCENARIOS_JSON=""
+for SCENARIO in "${SCENARIO_LIST[@]}"; do
+    SCENARIO_TAG=$(scenario_tag "$SCENARIO")
+    URL_PATH=$(scenario_path "$SCENARIO")
+    ESCAPED_SCENARIO=$(json_escape "$SCENARIO")
+    ESCAPED_PATH=$(json_escape "$URL_PATH")
+    if [ -n "$SCENARIOS_JSON" ]; then
+        SCENARIOS_JSON="$SCENARIOS_JSON,"
+    fi
+    SCENARIOS_JSON="$SCENARIOS_JSON\"$ESCAPED_SCENARIO\":\"$ESCAPED_PATH\""
+
+    for BASE in go_standard go_process rust_standard rust_process; do
+        TAG=$(variant_tag "$BASE" "$SCENARIO" "$SCENARIO_TAG")
+        ESCAPED_TAG=$(json_escape "$TAG")
+        if [ -n "$VARIANTS_JSON" ]; then
+            VARIANTS_JSON="$VARIANTS_JSON,"
+        fi
+        VARIANTS_JSON="$VARIANTS_JSON\"$ESCAPED_TAG\""
+    done
+done
 
 # Build all binaries and start backend
 build_all
@@ -426,15 +618,32 @@ cat > "$RESULTS_DIR/config.json" <<EOF
     "leak_duration": $LEAK_DURATION,
     "leak_cycles": $LEAK_CYCLES,
     "leak_rest": $LEAK_REST,
-    "variants": ["go_standard", "go_process", "rust_standard", "rust_process"]
+    "backend": "$BACKEND_KIND",
+    "bench_scenarios": "$(json_escape "$BENCH_SCENARIOS")",
+    "large_bytes": $LARGE_BYTES,
+    "stream_chunks": $STREAM_CHUNKS,
+    "stream_chunk_size": $STREAM_CHUNK_SIZE,
+    "stream_delay_ms": $STREAM_DELAY_MS,
+    "env": {
+        "GOMAXPROCS": "${GOMAXPROCS:-unset}",
+        "BACKEND_TASKSET": "${BACKEND_TASKSET:-unset}",
+        "DAEMON_TASKSET": "${DAEMON_TASKSET:-unset}"
+    },
+    "scenarios": {$SCENARIOS_JSON},
+    "variants": [$VARIANTS_JSON]
 }
 EOF
 
-# Run all variants
-run_variant "go_standard"   "$GO_BIN"   ""
-run_variant "go_process"    "$GO_BIN"   "--process-mode"
-run_variant "rust_standard" "$RUST_BIN" ""
-run_variant "rust_process"  "$RUST_BIN" "--process-mode"
+# Run all variants for each selected scenario.
+for SCENARIO in "${SCENARIO_LIST[@]}"; do
+    SCENARIO_TAG=$(scenario_tag "$SCENARIO")
+    URL_PATH=$(scenario_path "$SCENARIO")
+
+    run_variant "$(variant_tag "go_standard" "$SCENARIO" "$SCENARIO_TAG")"   "$GO_BIN"   ""               "$URL_PATH"
+    run_variant "$(variant_tag "go_process" "$SCENARIO" "$SCENARIO_TAG")"    "$GO_BIN"   "--process-mode" "$URL_PATH"
+    run_variant "$(variant_tag "rust_standard" "$SCENARIO" "$SCENARIO_TAG")" "$RUST_BIN" ""               "$URL_PATH"
+    run_variant "$(variant_tag "rust_process" "$SCENARIO" "$SCENARIO_TAG")"  "$RUST_BIN" "--process-mode" "$URL_PATH"
+done
 
 # Generate analysis
 log_phase "Analysis"

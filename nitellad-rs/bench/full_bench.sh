@@ -17,7 +17,7 @@ GO_BIN="/tmp/nitella_bench_go"
 RUST_BIN="/tmp/nitella_bench_rust"
 RESULTS_DIR="$CURRENT_DIR/results_full"
 MONITOR_SCRIPT="$CURRENT_DIR/monitor_full.sh"
-BACKEND_SRC="$CURRENT_DIR/backend.go"
+BACKEND_BIN_NAME="bench_backend"
 BACKEND_BIN="/tmp/nitella_bench_backend"
 
 PROXY_PORT=8082
@@ -60,8 +60,10 @@ log_phase() { echo -e "\n${CYAN}=== $* ===${NC}"; }
 cleanup_all() {
     log_info "Cleaning up..."
     kill "$BACKEND_PID" 2>/dev/null || true
-    pkill -f "nitellad" 2>/dev/null || true
-    pkill -f "nitellad-rs" 2>/dev/null || true
+    pkill -x "nitellad" 2>/dev/null || true
+    pkill -f "nitella_bench_go" 2>/dev/null || true
+    pkill -x "nitellad-rs" 2>/dev/null || true
+    pkill -f "nitella_bench_rust" 2>/dev/null || true
     pkill -f "monitor_full.sh" 2>/dev/null || true
     rm -f "$BACKEND_BIN" "$GO_BIN" "$RUST_BIN"
 }
@@ -73,11 +75,12 @@ build_all() {
     go build -tags pprof -o "$GO_BIN" "$ROOT_DIR/cmd/nitellad"
     
     log_info "Building Rust..."
-    cargo build --release --manifest-path "$ROOT_DIR/rust/Cargo.toml"
-    cp "$ROOT_DIR/rust/target/release/nitellad-rs" "$RUST_BIN"
+    cargo build --release --manifest-path "$ROOT_DIR/nitellad-rs/Cargo.toml"
+    cp "$ROOT_DIR/nitellad-rs/target/release/nitellad-rs" "$RUST_BIN"
 
-    log_info "Building Backend..."
-    go build -o "$BACKEND_BIN" "$BACKEND_SRC"
+    log_info "Building Rust Backend..."
+    cargo build --release --manifest-path "$ROOT_DIR/nitellad-rs/Cargo.toml" --bin "$BACKEND_BIN_NAME"
+    cp "$ROOT_DIR/nitellad-rs/target/release/$BACKEND_BIN_NAME" "$BACKEND_BIN"
 }
 
 start_backend() {
@@ -210,7 +213,10 @@ run_single_test() {
 # Main Loop
 # =============================================================================
 mkdir -p "$RESULTS_DIR"
-pkill -f "nitellad" 2>/dev/null || true
+pkill -x "nitellad" 2>/dev/null || true
+pkill -f "nitella_bench_go" 2>/dev/null || true
+pkill -x "nitellad-rs" 2>/dev/null || true
+pkill -f "nitella_bench_rust" 2>/dev/null || true
 
 build_all
 start_backend

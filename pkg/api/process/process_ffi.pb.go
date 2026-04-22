@@ -18,19 +18,19 @@ import (
 )
 
 // =============================================================================
-// FFI Server Interface
+// ProcessControl FFI Server Interface
 // =============================================================================
 
-type FfiServer interface {
+type ProcessControlFfiServer interface {
 	ProcessControlServer
 	StreamEventsInternal(context.Context, *StreamEventsRequest) (*Event, error)
 }
 
 // =============================================================================
-// Invoke - returns []byte (for TCP/UDS)
+// ProcessControl Invoke - returns []byte (for TCP/UDS)
 // =============================================================================
 
-func Invoke(s FfiServer, ctx context.Context, method string, data []byte) ([]byte, error) {
+func ProcessControlInvoke(s ProcessControlFfiServer, ctx context.Context, method string, data []byte) ([]byte, error) {
 	switch method {
 	case "/nitella.process.ProcessControl/StartListener":
 		req := &StartListenerRequest{}
@@ -148,13 +148,13 @@ func Invoke(s FfiServer, ctx context.Context, method string, data []byte) ([]byt
 }
 
 // =============================================================================
-// InvokeFfi - returns C pointer (for zero-copy FFI)
+// ProcessControl InvokeFfi - returns C pointer (for zero-copy FFI)
 // =============================================================================
 
-// InvokeFfi is the zero-copy variant for FFI mode.
+// ProcessControlInvokeFfi is the zero-copy variant for FFI mode.
 // It allocates C memory and serializes directly into it.
 // Caller is responsible for freeing the returned pointer via C.free().
-func InvokeFfi(s FfiServer, ctx context.Context, method string, data []byte) (unsafe.Pointer, int64, error) {
+func ProcessControlInvokeFfi(s ProcessControlFfiServer, ctx context.Context, method string, data []byte) (unsafe.Pointer, int64, error) {
 	switch method {
 	case "/nitella.process.ProcessControl/StartListener":
 		req := &StartListenerRequest{}
@@ -426,10 +426,10 @@ func InvokeFfi(s FfiServer, ctx context.Context, method string, data []byte) (un
 }
 
 // =============================================================================
-// InvokeStream - dispatches streaming RPC calls
+// ProcessControl InvokeStream - dispatches streaming RPC calls
 // =============================================================================
 
-func InvokeStream(s FfiServer, ctx context.Context, method string, stream grpc.ServerStream) error {
+func ProcessControlInvokeStream(s ProcessControlFfiServer, ctx context.Context, method string, stream grpc.ServerStream) error {
 	switch method {
 	case "/nitella.process.ProcessControl/StreamEvents":
 		req := &StreamEventsRequest{}
@@ -443,32 +443,18 @@ func InvokeStream(s FfiServer, ctx context.Context, method string, stream grpc.S
 }
 
 // =============================================================================
-// gRPC Stream Wrappers
+// ProcessControl FFI Invoker - wraps ProcessControlFfiServer
 // =============================================================================
 
-type grpcProcessControlStreamEventsStream struct {
-	grpc.ServerStream
-}
-
-func (s *grpcProcessControlStreamEventsStream) Send(m *Event) error {
-	return s.ServerStream.SendMsg(m)
-}
-
-var _ ProcessControl_StreamEventsServer = (*grpcProcessControlStreamEventsStream)(nil)
-
-// =============================================================================
-// FFI Invoker - wraps FfiServer to implement synurang.Invoker interface
-// =============================================================================
-
-// ffiInvoker wraps FfiServer to implement the synurang.Invoker interface.
+// processControlFfiInvoker wraps ProcessControlFfiServer to implement the synurang.Invoker interface.
 // This allows using the synurang runtime's FfiClientConn with generated code.
 // Uses zero-copy: proto.Message pointers are passed directly without serialization.
-type ffiInvoker struct {
-	server FfiServer
+type processControlFfiInvoker struct {
+	server ProcessControlFfiServer
 }
 
 // Invoke implements synurang.UnaryInvoker (zero-copy).
-func (i *ffiInvoker) Invoke(ctx context.Context, method string, req, reply proto.Message) error {
+func (i *processControlFfiInvoker) Invoke(ctx context.Context, method string, req, reply proto.Message) error {
 	switch method {
 	case "/nitella.process.ProcessControl/StartListener":
 		resp, err := i.server.StartListener(ctx, req.(*StartListenerRequest))
@@ -564,7 +550,7 @@ func (i *ffiInvoker) Invoke(ctx context.Context, method string, req, reply proto
 }
 
 // InvokeStream implements synurang.StreamInvoker (zero-copy).
-func (i *ffiInvoker) InvokeStream(ctx context.Context, method string, stream synurang.ServerStream) error {
+func (i *processControlFfiInvoker) InvokeStream(ctx context.Context, method string, stream synurang.ServerStream) error {
 	switch method {
 	case "/nitella.process.ProcessControl/StreamEvents":
 		// Server streaming (zero-copy)
@@ -578,6 +564,30 @@ func (i *ffiInvoker) InvokeStream(ctx context.Context, method string, stream syn
 		return fmt.Errorf("unknown streaming method: %s", method)
 	}
 }
+
+var _ synurang.Invoker = (*processControlFfiInvoker)(nil)
+
+// =============================================================================
+// ProcessControl FFI Client - convenience wrapper for synurang.FfiClientConn
+// =============================================================================
+
+func NewProcessControlFfiClientConn(server ProcessControlFfiServer) grpc.ClientConnInterface {
+	return synurang.NewFfiClientConn(&processControlFfiInvoker{server: server})
+}
+
+// =============================================================================
+// gRPC Stream Wrappers
+// =============================================================================
+
+type grpcProcessControlStreamEventsStream struct {
+	grpc.ServerStream
+}
+
+func (s *grpcProcessControlStreamEventsStream) Send(m *Event) error {
+	return s.ServerStream.SendMsg(m)
+}
+
+var _ ProcessControl_StreamEventsServer = (*grpcProcessControlStreamEventsStream)(nil)
 
 // =============================================================================
 // Stream Wrappers (zero-copy)
@@ -597,13 +607,3 @@ func (s *ffiProcessControlStreamEventsStream) Send(m *Event) error {
 }
 
 var _ ProcessControl_StreamEventsServer = (*ffiProcessControlStreamEventsStream)(nil)
-
-var _ synurang.Invoker = (*ffiInvoker)(nil)
-
-// =============================================================================
-// FFI Client - convenience wrapper for synurang.FfiClientConn
-// =============================================================================
-
-func NewFfiClientConn(server FfiServer) grpc.ClientConnInterface {
-	return synurang.NewFfiClientConn(&ffiInvoker{server: server})
-}

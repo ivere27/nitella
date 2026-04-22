@@ -528,6 +528,7 @@ func (s *HubServer) seedInviteCodes() {
 func (s *HubServer) AuthInterceptor(ctx context.Context, req interface{}, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (interface{}, error) {
 	// Skip auth for public endpoints
 	if info.FullMethod == "/nitella.hub.NodeService/Register" ||
+		info.FullMethod == "/nitella.hub.NodeService/CheckCertificate" ||
 		strings.HasPrefix(info.FullMethod, "/nitella.hub.PairingService/") ||
 		strings.HasPrefix(info.FullMethod, "/nitella.hub.AuthService/Register") {
 		return handler(ctx, req)
@@ -636,7 +637,8 @@ func (s *HubServer) AuthInterceptor(ctx context.Context, req interface{}, info *
 // StreamAuthInterceptor handles authentication for streaming RPCs
 func (s *HubServer) StreamAuthInterceptor(srv interface{}, ss grpc.ServerStream, info *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
 	// Skip auth for public endpoints
-	if strings.HasPrefix(info.FullMethod, "/nitella.hub.PairingService/") {
+	if info.FullMethod == "/nitella.hub.NodeService/WatchRegistration" ||
+		strings.HasPrefix(info.FullMethod, "/nitella.hub.PairingService/") {
 		return handler(srv, ss)
 	}
 

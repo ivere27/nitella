@@ -111,6 +111,147 @@ make nitellad_build nitella_build
   --tls-cert server.crt --tls-key server.key --tls-ca ca.crt --mtls
 ```
 
+### Standalone Nitellad Proxy
+
+Standalone mode runs a local TCP proxy directly from `nitellad` command-line flags. It does not require Hub, the `nitella` CLI, YAML config, or proxy persistence.
+
+Use this mode when comparing Go `nitellad` and Rust `nitellad-rs` behavior against the same backend.
+
+```bash
+# Start an example backend on localhost:3000
+make example_backend
+
+# Go daemon
+make nitellad_run NITELLAD_ARGS="--listen :8080 --backend localhost:3000"
+
+# Rust daemon
+make nitellad_rs_run NITELLAD_ARGS="--listen :8080 --backend localhost:3000"
+```
+
+Standalone CLI rule flags:
+
+| Flag | Meaning |
+|------|---------|
+| `--default-action allow` | Allow traffic when no rule matches |
+| `--default-action block` | Block traffic when no rule matches |
+| `--default-action require_approval` | Hold unmatched traffic for approval |
+| `--fallback-action mock` | Send blocked or failed connections to a mock response |
+| `--fallback-mock <preset>` | Mock/tarpit preset for fallback, such as `ssh-tarpit` |
+| `--allow-ip <list>` | Allow exact source IPs, CIDRs, or standalone aliases |
+| `--block-ip <list>` | Block exact source IPs, CIDRs, or standalone aliases |
+| `--allow-country <list>` | Allow GeoIP country codes |
+| `--block-country <list>` | Block GeoIP country codes |
+| `--rate-limit-max-connections <n>` | Enable per-IP rate limiting on the default rule |
+| `--rate-limit-interval <seconds>` | Counting window for the limit |
+| `--rate-limit-count-only-failures` | Count only short-lived connections as failures |
+| `--rate-limit-failure-threshold <seconds>` | Failure threshold for short-lived connections |
+| `--rate-limit-auto-block[=false]` | Enable or disable temporary blocking after the limit is exceeded |
+| `--rate-limit-block-duration <seconds>` | Temporary auto-block duration |
+| `--rate-limit-block-steps <list>` | Optional escalation block durations |
+
+Exact IP and CIDR examples:
+
+```bash
+--allow-ip 127.0.0.1,::1,192.168.0.0/16,10.0.0.0/8,172.16.0.0/12
+--block-ip 203.0.113.10,198.51.100.0/24
+```
+
+CIDR matching is source-IP based. For example, `192.168.0.0/16` matches `192.168.10.20`, but not `192.169.0.1`.
+
+Standalone IP aliases are accepted only by daemon startup flags in standalone mode:
+
+| Alias | Expands to |
+|-------|------------|
+| `localhost` | `127.0.0.0/8,::1/128` |
+| `private` | `10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,fc00::/7` |
+| `local` | `localhost` + `private` + `169.254.0.0/16,fe80::/10` |
+
+These aliases are not general rule syntax for YAML, DB, Hub, or runtime admin APIs. Those paths continue to use explicit IP/CIDR values.
+
+KR-only proxy with local/LAN test traffic allowed:
+
+```bash
+make nitellad_rs_run NITELLAD_ARGS="\
+  --listen :8080 \
+  --backend localhost:3000 \
+  --default-action block \
+  --allow-country KR \
+  --allow-ip local \
+  --geoip-city /path/to/GeoLite2-City.mmdb \
+  --geoip-isp /path/to/GeoLite2-ASN.mmdb"
+```
+
+The same `NITELLAD_ARGS` can be used with `make nitellad_run` for the Go daemon.
+
+Fail2ban-style standalone protection:
+
+```bash
+make nitellad_rs_run NITELLAD_ARGS="\
+  --listen :8080 \
+  --backend localhost:3000 \
+  --rate-limit-max-connections 3 \
+  --rate-limit-interval 60 \
+  --rate-limit-count-only-failures \
+  --rate-limit-failure-threshold 20 \
+  --rate-limit-block-duration 1800 \
+  --fallback-action mock \
+  --fallback-mock ssh-tarpit"
+```
+
+This blocks a source IP for 30 minutes after 3 connections that each close in under 20 seconds within a 60-second window. While blocked, new connections are handled by the SSH tarpit instead of being closed.
+
+Block selected countries while allowing everyone else:
+
+```bash
+make nitellad_rs_run NITELLAD_ARGS="\
+  --listen :8080 \
+  --backend localhost:3000 \
+  --default-action allow \
+  --block-country US,JP \
+  --geoip-city /path/to/GeoLite2-City.mmdb \
+  --geoip-isp /path/to/GeoLite2-ASN.mmdb"
+```
+
+Rule priority in standalone mode:
+
+| Rule source | Priority |
+|-------------|----------|
+| `--block-ip`, `--block-country` | `110` |
+| `--allow-ip`, `--allow-country` | `100` |
+| default rule | `-1000` |
+
+If a connection matches both an allow and block startup rule, block wins.
+
+Local/private IPs such as `127.0.0.1`, `::1`, `10.0.0.0/8`, `172.16.0.0/12`, and `192.168.0.0/16` do not resolve to GeoIP countries. For strict country filtering during local tests, include `--allow-ip local` or explicit `--allow-ip` entries for localhost and LAN CIDRs.
+
+Startup source precedence:
+
+| Mode | Startup source |
+|------|----------------|
+| `--listen` + `--backend` | CLI standalone proxy and CLI startup rules |
+| `--config proxy.yaml` | YAML-owned proxies; CLI startup rules are not applied |
+| `--db-path nitella.db` | Restores persisted proxies/rules and persists new runtime rules |
+
+For YAML standalone config, put the equivalent setting on the entrypoint:
+
+```yaml
+entryPoints:
+  web:
+    address: ":8080"
+    defaultAction: allow
+    fallbackAction: mock
+    fallbackMock: ssh-tarpit
+    rateLimit:
+      maxConnections: 3
+      intervalSeconds: 60
+      autoBlock: true
+      blockDurationSeconds: 1800
+      countOnlyFailures: true
+      failureDurationThreshold: 20
+```
+
+Proxy persistence is disabled by default. For clean Go/Rust behavior comparisons, omit `--db-path` so no old proxies or rules are restored.
+
 ### Nitella CLI
 
 Connect to nitellad's admin API to manage proxies, rules, and connections.

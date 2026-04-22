@@ -8,13 +8,14 @@ type YAMLConfig struct {
 
 // EntryPoint defines a listener
 type EntryPoint struct {
-	Address        string     `yaml:"address"`
-	DefaultAction  string     `yaml:"defaultAction"` // "allow", "block", or "mock"
-	DefaultBackend string     `yaml:"defaultBackend,omitempty"`
-	DefaultMock    string     `yaml:"defaultMock,omitempty"` // Mock preset for defaultAction=mock
-	FallbackAction string     `yaml:"fallbackAction,omitempty"` // "close" or "mock"
-	FallbackMock   string     `yaml:"fallbackMock,omitempty"`   // Mock preset for fallbackAction=mock
-	TLS            *TLSConfig `yaml:"tls,omitempty"`
+	Address        string           `yaml:"address"`
+	DefaultAction  string           `yaml:"defaultAction"` // "allow", "block", or "mock"
+	DefaultBackend string           `yaml:"defaultBackend,omitempty"`
+	DefaultMock    string           `yaml:"defaultMock,omitempty"`    // Mock preset for defaultAction=mock
+	FallbackAction string           `yaml:"fallbackAction,omitempty"` // "close" or "mock"
+	FallbackMock   string           `yaml:"fallbackMock,omitempty"`   // Mock preset for fallbackAction=mock
+	TLS            *TLSConfig       `yaml:"tls,omitempty"`
+	RateLimit      *RateLimitConfig `yaml:"rateLimit,omitempty"`
 }
 
 // TLSConfig for mTLS settings
@@ -55,7 +56,7 @@ type LoadBalancerConfig struct {
 
 // Server defines a backend server
 type Server struct {
-	Address string `yaml:"address"` // "url" in Traefik, but we stick to "address" for TCP consistency
+	Address string `yaml:"address"`       // "url" in Traefik, but we stick to "address" for TCP consistency
 	URL     string `yaml:"url,omitempty"` // For HTTP/Traefik compatibility
 }
 
