@@ -1,13 +1,17 @@
-FROM golang:1.24-alpine AS builder
+# syntax=docker/dockerfile:1
 
-RUN apk add --no-cache gcc musl-dev sqlite-dev
+ARG BUILDER_IMAGE=nitella-builder:unstable
+FROM ${BUILDER_IMAGE} AS builder
 
 WORKDIR /app
 COPY go.mod go.sum ./
-RUN go mod download
+RUN --mount=type=cache,id=go-mod-cache,target=/go/pkg/mod \
+    go mod download
 
 COPY . .
-RUN go build -o hubctl ./cmd/hubctl
+RUN --mount=type=cache,id=go-build-cache,target=/root/.cache/go-build \
+    --mount=type=cache,id=go-mod-cache,target=/go/pkg/mod \
+    go build -o hubctl ./cmd/hubctl
 
 FROM alpine:3.19
 RUN apk add --no-cache ca-certificates netcat-openbsd

@@ -4,21 +4,25 @@
 # License: CC BY-SA 4.0 - Commercial use allowed with attribution
 # Database source: https://github.com/P3TERX/GeoLite.mmdb
 
-# Build stage
-FROM golang:1.24-alpine AS builder
+# syntax=docker/dockerfile:1
 
-RUN apk add --no-cache git gcc musl-dev
+# Build stage
+ARG BUILDER_IMAGE=nitella-builder:unstable
+FROM ${BUILDER_IMAGE} AS builder
 
 WORKDIR /app
 
 COPY go.mod go.sum ./
-RUN go mod download
+RUN --mount=type=cache,id=go-mod-cache,target=/go/pkg/mod \
+    go mod download
 
 COPY . .
 
 # Build with CGO enabled for SQLite support
-RUN CGO_ENABLED=1 go build -ldflags="-s -w" -o /app/bin/geoip-server ./cmd/geoip-server
-RUN CGO_ENABLED=1 go build -ldflags="-s -w" -o /app/bin/geoip ./cmd/geoip
+RUN --mount=type=cache,id=go-build-cache,target=/root/.cache/go-build \
+    --mount=type=cache,id=go-mod-cache,target=/go/pkg/mod \
+    CGO_ENABLED=1 go build -ldflags="-s -w" -o /app/bin/geoip-server ./cmd/geoip-server \
+    && CGO_ENABLED=1 go build -ldflags="-s -w" -o /app/bin/geoip ./cmd/geoip
 
 # Runtime stage
 FROM alpine:3.19

@@ -1,11 +1,17 @@
-FROM golang:1.24-alpine AS builder
+# syntax=docker/dockerfile:1
+
+ARG BUILDER_IMAGE=nitella-builder:unstable
+FROM ${BUILDER_IMAGE} AS builder
 
 WORKDIR /app
 COPY go.mod go.sum ./
-RUN go mod download
+RUN --mount=type=cache,id=go-mod-cache,target=/go/pkg/mod \
+    go mod download
 
 COPY . .
-RUN CGO_ENABLED=0 go build -o mock ./cmd/mock
+RUN --mount=type=cache,id=go-build-cache,target=/root/.cache/go-build \
+    --mount=type=cache,id=go-mod-cache,target=/go/pkg/mod \
+    CGO_ENABLED=0 go build -o mock ./cmd/mock
 
 FROM alpine:3.19
 RUN apk add --no-cache ca-certificates

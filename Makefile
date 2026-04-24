@@ -55,6 +55,15 @@ help:
 	@echo "  make nitellad_rs_run NITELLAD_ARGS=\"--listen :8080 --backend localhost:3000\""
 	@echo "                                     Build and run Rust nitellad-rs"
 	@echo "                                     NITELLAD_RS_ARGS is also accepted"
+	@echo "  make docker_builder_build          Build shared Go/Rust Docker builder image"
+	@echo "  make docker_nitellad_build         Build Go nitellad Docker image"
+	@echo "  make docker_nitellad_publish       Build and push Go nitellad to docker.io/$(DOCKER_NAMESPACE)"
+	@echo "  make docker_nitellad_rs_build      Build Rust nitellad-rs Docker image"
+	@echo "  make docker_nitellad_rs_publish    Build and push Rust nitellad-rs to docker.io/$(DOCKER_NAMESPACE)"
+	@echo "  make docker_nitella_build          Build combined Docker image with all binaries"
+	@echo "  make docker_nitella_publish        Build and push combined image to docker.io/$(DOCKER_NAMESPACE)"
+	@echo "  make docker_publish_all            Build and push nitella, nitellad, and nitellad-rs"
+	@echo "                                     Override DOCKER_NAMESPACE=... or DOCKER_TAG=latest"
 	@echo "  GeoIP example:"
 	@echo "    NITELLAD_ARGS=\"--listen :8080 --backend localhost:3000 --geoip-city /path/GeoLite2-City.mmdb --geoip-isp /path/GeoLite2-ASN.mmdb\""
 	@echo "  KR-only example:"
@@ -385,7 +394,10 @@ geoip_clean:
 # Nitellad Proxy Daemon
 # ============================================================================
 
-.PHONY: nitellad_build nitellad_run nitellad_rs_build nitellad_rs_run nitellad_test nitellad_test_integration nitella_build nitella_run nitellad_docker_build nitellad_docker_run
+.PHONY: nitellad_build nitellad_run nitellad_rs_build nitellad_rs_run nitellad_test nitellad_test_integration nitella_build nitella_run
+.PHONY: docker_builder_build docker_nitella_build docker_nitella_publish docker_publish_all
+.PHONY: docker_nitellad_build docker_nitellad_run docker_nitellad_publish docker_nitellad_rs_build docker_nitellad_rs_publish docker_nitellad_publish_all docker_namespace_required
+.PHONY: nitellad_docker_build nitellad_docker_run nitellad_docker_publish nitellad_rs_docker_build nitellad_rs_docker_publish nitellad_docker_publish_all
 
 nitellad_build: proto
 	@mkdir -p $(BUILD_DIR)
@@ -462,8 +474,33 @@ clean:
 # Docker
 # ============================================================================
 
-geoip_docker_build:
-	docker build -f Dockerfile.geoip -t nitella-geoip .
+DOCKER_REGISTRY ?= docker.io
+DOCKER_NAMESPACE ?= ivere27
+DOCKER_TAG ?= $(TAG)
+DOCKER_BUILDER_IMAGE ?= nitella-builder
+DOCKER_BUILDER_REF = $(DOCKER_BUILDER_IMAGE):$(DOCKER_TAG)
+NITELLA_DOCKER_IMAGE ?= nitella
+NITELLAD_DOCKER_IMAGE ?= nitellad
+NITELLAD_RS_DOCKER_IMAGE ?= nitellad-rs
+NITELLA_DOCKER_PUBLISH_IMAGE = $(DOCKER_REGISTRY)/$(DOCKER_NAMESPACE)/$(NITELLA_DOCKER_IMAGE):$(DOCKER_TAG)
+NITELLAD_DOCKER_PUBLISH_IMAGE = $(DOCKER_REGISTRY)/$(DOCKER_NAMESPACE)/$(NITELLAD_DOCKER_IMAGE):$(DOCKER_TAG)
+NITELLAD_RS_DOCKER_PUBLISH_IMAGE = $(DOCKER_REGISTRY)/$(DOCKER_NAMESPACE)/$(NITELLAD_RS_DOCKER_IMAGE):$(DOCKER_TAG)
+
+docker_namespace_required:
+	@if [ -z "$(DOCKER_NAMESPACE)" ]; then \
+		echo "DOCKER_NAMESPACE is required for Docker Hub publishing."; \
+		echo "Examples:"; \
+		echo "  make docker_nitella_publish DOCKER_NAMESPACE=your-dockerhub-user DOCKER_TAG=latest"; \
+		echo "  make docker_nitellad_publish DOCKER_NAMESPACE=your-dockerhub-user DOCKER_TAG=latest"; \
+		echo "  make docker_nitellad_rs_publish DOCKER_NAMESPACE=your-dockerhub-user DOCKER_TAG=latest"; \
+		exit 1; \
+	fi
+
+docker_builder_build:
+	DOCKER_BUILDKIT=1 docker build -f Dockerfile.builder -t $(DOCKER_BUILDER_IMAGE) -t $(DOCKER_BUILDER_REF) .
+
+geoip_docker_build: docker_builder_build
+	DOCKER_BUILDKIT=1 docker build --build-arg BUILDER_IMAGE=$(DOCKER_BUILDER_REF) -f Dockerfile.geoip -t nitella-geoip .
 
 # Run docker container (includes GeoLite2 databases)
 # Usage: make geoip_docker_run
@@ -494,20 +531,56 @@ geoip_docker_run: geoip_docker_build
 	fi
 
 # Nitellad Docker
-nitellad_docker_build:
-	docker build -f Dockerfile.nitellad -t nitellad .
+docker_nitellad_build: docker_builder_build
+	DOCKER_BUILDKIT=1 docker build --build-arg BUILDER_IMAGE=$(DOCKER_BUILDER_REF) -f Dockerfile.nitellad -t $(NITELLAD_DOCKER_IMAGE) -t $(NITELLAD_DOCKER_IMAGE):$(DOCKER_TAG) .
+
+docker_nitellad_publish: docker_namespace_required
+	$(MAKE) docker_nitellad_build
+	docker tag $(NITELLAD_DOCKER_IMAGE):$(DOCKER_TAG) $(NITELLAD_DOCKER_PUBLISH_IMAGE)
+	docker push $(NITELLAD_DOCKER_PUBLISH_IMAGE)
+
+docker_nitellad_rs_build: docker_builder_build
+	DOCKER_BUILDKIT=1 docker build --build-arg BUILDER_IMAGE=$(DOCKER_BUILDER_REF) -f Dockerfile.nitellad-rs -t $(NITELLAD_RS_DOCKER_IMAGE) -t $(NITELLAD_RS_DOCKER_IMAGE):$(DOCKER_TAG) .
+
+docker_nitellad_rs_publish: docker_namespace_required
+	$(MAKE) docker_nitellad_rs_build
+	docker tag $(NITELLAD_RS_DOCKER_IMAGE):$(DOCKER_TAG) $(NITELLAD_RS_DOCKER_PUBLISH_IMAGE)
+	docker push $(NITELLAD_RS_DOCKER_PUBLISH_IMAGE)
+
+docker_nitella_build: docker_builder_build
+	DOCKER_BUILDKIT=1 docker build --build-arg BUILDER_IMAGE=$(DOCKER_BUILDER_REF) -f Dockerfile.nitella -t $(NITELLA_DOCKER_IMAGE) -t $(NITELLA_DOCKER_IMAGE):$(DOCKER_TAG) .
+
+docker_nitella_publish: docker_namespace_required
+	$(MAKE) docker_nitella_build
+	docker tag $(NITELLA_DOCKER_IMAGE):$(DOCKER_TAG) $(NITELLA_DOCKER_PUBLISH_IMAGE)
+	docker push $(NITELLA_DOCKER_PUBLISH_IMAGE)
+
+docker_nitellad_publish_all: docker_namespace_required
+	$(MAKE) docker_nitellad_publish
+	$(MAKE) docker_nitellad_rs_publish
+
+docker_publish_all: docker_namespace_required
+	$(MAKE) docker_nitella_publish
+	$(MAKE) docker_nitellad_publish
+	$(MAKE) docker_nitellad_rs_publish
+
+nitellad_docker_build: docker_nitellad_build
+nitellad_docker_publish: docker_nitellad_publish
+nitellad_rs_docker_build: docker_nitellad_rs_build
+nitellad_rs_docker_publish: docker_nitellad_rs_publish
+nitellad_docker_publish_all: docker_nitellad_publish_all
 
 # Run nitellad docker container (includes GeoLite2 databases)
-# Usage: make nitellad_docker_run
-#        make nitellad_docker_run NITELLA_TOKEN=my-secret-token
-#        make nitellad_docker_run NITELLA_CONFIG=my_config.yaml BACKEND=host.docker.internal:3000
-#        make nitellad_docker_run PROXY_PORT=9090 ADMIN_PORT=50051
+# Usage: make docker_nitellad_run
+#        make docker_nitellad_run NITELLA_TOKEN=my-secret-token
+#        make docker_nitellad_run NITELLA_CONFIG=my_config.yaml BACKEND=host.docker.internal:3000
+#        make docker_nitellad_run PROXY_PORT=9090 ADMIN_PORT=50051
 NITELLA_TOKEN ?=
 NITELLA_CONFIG ?=
 PROXY_PORT ?= 8080
 ADMIN_PORT ?= 50051
 BACKEND ?=
-nitellad_docker_run: nitellad_docker_build
+docker_nitellad_run: docker_nitellad_build
 	@mkdir -p data
 	@if [ -n "$(NITELLA_CONFIG)" ] && [ -f "$(NITELLA_CONFIG)" ]; then \
 		echo "Running with config: $(NITELLA_CONFIG)"; \
@@ -536,6 +609,8 @@ nitellad_docker_run: nitellad_docker_build
 			--admin-port 50051 \
 			$(if $(BACKEND),--backend $(BACKEND)); \
 	fi
+
+nitellad_docker_run: docker_nitellad_run
 
 # ============================================================================
 # Mock Server Module
@@ -577,8 +652,8 @@ mock_clean:
 	rm -f $(BUILD_DIR)/mock $(BUILD_DIR)/rust-backend
 
 # Docker
-mock_docker_build:
-	docker build -f Dockerfile.mock -t nitella-mock .
+mock_docker_build: docker_builder_build
+	DOCKER_BUILDKIT=1 docker build --build-arg BUILDER_IMAGE=$(DOCKER_BUILDER_REF) -f Dockerfile.mock -t nitella-mock .
 
 # Run mock docker container
 # Usage: make mock_docker_run PORT=2222 PROTOCOL=ssh
@@ -594,7 +669,7 @@ mock_docker_run: mock_docker_build
 # ============================================================================
 
 .PHONY: hub_build hub_server hubctl_build hub_proto hub_test hub_test_integration
-.PHONY: hub_run hubctl_run hub_docker_build hub_docker_run hub_clean
+.PHONY: hub_run hubctl_run hub_docker_build hubctl_docker_build hub_docker_run hub_clean
 
 hub_build: hub_proto hub_server hubctl_build
 
@@ -698,8 +773,11 @@ hub_clean:
 	rm -f pkg/api/hub/*.pb.go
 
 # Docker
-hub_docker_build:
-	docker build -f Dockerfile.hub -t nitella-hub .
+hub_docker_build: docker_builder_build
+	DOCKER_BUILDKIT=1 docker build --build-arg BUILDER_IMAGE=$(DOCKER_BUILDER_REF) -f Dockerfile.hub -t nitella-hub .
+
+hubctl_docker_build: docker_builder_build
+	DOCKER_BUILDKIT=1 docker build --build-arg BUILDER_IMAGE=$(DOCKER_BUILDER_REF) -f Dockerfile.hubctl -t nitella-hubctl .
 
 # Run Hub docker container
 # Usage: make hub_docker_run
