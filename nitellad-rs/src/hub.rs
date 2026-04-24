@@ -407,6 +407,36 @@ mod tests {
         assert!(payload.is_empty());
     }
 
+    #[test]
+    fn template_tls_rejects_partial_config() {
+        let dir =
+            std::env::temp_dir().join(format!("nitellad-rs-template-tls-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let cert_path = dir.join("cert.pem");
+        std::fs::write(&cert_path, "cert").unwrap();
+
+        let ep = crate::config::EntryPoint {
+            address: "127.0.0.1:0".to_string(),
+            default_action: String::new(),
+            default_mock: String::new(),
+            default_backend: String::new(),
+            fallback_action: String::new(),
+            fallback_mock: String::new(),
+            tls: Some(crate::config::TlsConfig {
+                cert_file: cert_path.to_string_lossy().to_string(),
+                key_file: String::new(),
+                client_ca: String::new(),
+                client_auth: String::new(),
+            }),
+            rate_limit: None,
+        };
+
+        let err = resolve_template_entrypoint_tls(&ep).unwrap_err();
+        assert!(err.to_string().contains("certificate and private key"));
+
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
     #[tokio::test]
     async fn hub_legacy_apply_proxy_returns_proxy_status_and_unapplies() {
         let hub = test_hub_client().await;
@@ -2006,6 +2036,7 @@ fn string_to_mock_preset(s: &str) -> i32 {
     }
 }
 
+#[derive(Debug)]
 struct TemplateSecurity {
     cert_pem: String,
     key_pem: String,
@@ -2013,19 +2044,19 @@ struct TemplateSecurity {
     client_auth_type: i32,
 }
 
-fn resolve_template_entrypoint_tls(ep: &crate::config::EntryPoint) -> TemplateSecurity {
+fn resolve_template_entrypoint_tls(ep: &crate::config::EntryPoint) -> Result<TemplateSecurity> {
     let Some(tls) = &ep.tls else {
-        return TemplateSecurity {
+        return Ok(TemplateSecurity {
             cert_pem: String::new(),
             key_pem: String::new(),
             ca_pem: String::new(),
             client_auth_type: ClientAuthType::ClientAuthNone as i32,
-        };
+        });
     };
 
-    let cert_pem = read_template_tls_file(&tls.cert_file, "entrypoint TLS certificate");
-    let key_pem = read_template_tls_file(&tls.key_file, "entrypoint TLS private key");
-    let ca_pem = read_template_tls_file(&tls.client_ca, "entrypoint TLS client CA");
+    let cert_pem = read_template_tls_file(&tls.cert_file, "entrypoint TLS certificate")?;
+    let key_pem = read_template_tls_file(&tls.key_file, "entrypoint TLS private key")?;
+    let ca_pem = read_template_tls_file(&tls.client_ca, "entrypoint TLS client CA")?;
     let client_auth_type = match tls.client_auth.to_lowercase().as_str() {
         "none" => ClientAuthType::ClientAuthNone as i32,
         "optional" | "request" => ClientAuthType::ClientAuthRequest as i32,
@@ -2037,34 +2068,49 @@ fn resolve_template_entrypoint_tls(ep: &crate::config::EntryPoint) -> TemplateSe
                 ClientAuthType::ClientAuthRequest as i32
             }
         }
-        other => {
-            warn!(
-                "Unknown template entrypoint TLS clientAuth {:?}; using none",
-                other
-            );
-            ClientAuthType::ClientAuthNone as i32
-        }
+        other => anyhow::bail!("unknown template entrypoint TLS clientAuth {other:?}"),
     };
 
-    TemplateSecurity {
+    let security = TemplateSecurity {
         cert_pem,
         key_pem,
         ca_pem,
         client_auth_type,
-    }
+    };
+    let tls_requested = !tls.cert_file.is_empty()
+        || !tls.key_file.is_empty()
+        || !tls.client_ca.is_empty()
+        || !tls.client_auth.is_empty();
+    validate_template_security(&security, tls_requested)?;
+    Ok(security)
 }
 
-fn read_template_tls_file(path: &str, label: &str) -> String {
+fn validate_template_security(security: &TemplateSecurity, tls_requested: bool) -> Result<()> {
+    if !tls_requested
+        && security.cert_pem.is_empty()
+        && security.key_pem.is_empty()
+        && security.ca_pem.is_empty()
+        && security.client_auth_type == ClientAuthType::ClientAuthNone as i32
+    {
+        return Ok(());
+    }
+    if security.cert_pem.is_empty() || security.key_pem.is_empty() {
+        anyhow::bail!("template TLS requires both certificate and private key");
+    }
+    if (security.client_auth_type == ClientAuthType::ClientAuthRequire as i32
+        || security.client_auth_type == ClientAuthType::ClientAuthRequest as i32)
+        && security.ca_pem.is_empty()
+    {
+        anyhow::bail!("template TLS client certificate verification requires a CA");
+    }
+    Ok(())
+}
+
+fn read_template_tls_file(path: &str, label: &str) -> Result<String> {
     if path.is_empty() {
-        return String::new();
+        return Ok(String::new());
     }
-    match std::fs::read_to_string(path) {
-        Ok(data) => data,
-        Err(e) => {
-            warn!("Failed to read {} {}: {}", label, path, e);
-            String::new()
-        }
-    }
+    std::fs::read_to_string(path).map_err(|e| anyhow!("failed to read {label} {path}: {e}"))
 }
 
 fn proxy_name_prefix(proxy_id: &str) -> &str {
@@ -3187,11 +3233,13 @@ impl HubClient {
             }
 
             // Verify signature (matches Go's VerifySignature check)
-            if let Some(ca_pk) = &ca_pubkey {
-                if let Err(e) = crypto::verify_signature(enc, ca_pk) {
-                    error!("[SECURITY] Command signature verification failed: {}", e);
-                    continue;
-                }
+            let Some(ca_pk) = &ca_pubkey else {
+                error!("[SECURITY CRITICAL] Cannot verify command signature: CA key missing");
+                continue;
+            };
+            if let Err(e) = crypto::verify_signature(enc, ca_pk) {
+                error!("[SECURITY] Command signature verification failed: {}", e);
+                continue;
             }
 
             // Decrypt
@@ -3242,6 +3290,11 @@ impl HubClient {
 
             info!("[Hub] Decrypted command type: {}", payload.r#type);
 
+            let Some(viewer_pk) = &viewer_pubkey else {
+                error!("[SECURITY CRITICAL] Cannot execute command: viewer public key not set (encrypted response impossible)");
+                continue;
+            };
+
             // Extend metrics streaming window when stats are requested (matches Go's EnableStatsStreaming)
             if payload.r#type == command_types::STATUS
                 || payload.r#type == command_types::GET_METRICS
@@ -3254,17 +3307,12 @@ impl HubClient {
 
             // Build and send encrypted response
             let result_bytes = result.encode_to_vec();
-            let encrypted_data = if let Some(viewer_pk) = &viewer_pubkey {
-                match crypto::encrypt(&result_bytes, viewer_pk, &signing_key, &fingerprint) {
-                    Ok(enc) => Some(enc),
-                    Err(e) => {
-                        warn!("[Hub] Failed to encrypt response: {}", e);
-                        None
-                    }
+            let encrypted_data = match crypto::encrypt(&result_bytes, viewer_pk, &signing_key, &fingerprint) {
+                Ok(enc) => Some(enc),
+                Err(e) => {
+                    warn!("[Hub] Failed to encrypt response: {}", e);
+                    None
                 }
-            } else {
-                debug!("[Hub] No viewer public key - response cannot be encrypted");
-                None
             };
 
             let response = CommandResponse {
@@ -3601,7 +3649,15 @@ impl HubClient {
         if let Some(eps) = &yaml_config.entry_points {
             for (name, ep) in eps {
                 let resolved = yaml_config.resolve_entry_point(name, ep);
-                let security = resolve_template_entrypoint_tls(ep);
+                let security = match resolve_template_entrypoint_tls(ep) {
+                    Ok(security) => security,
+                    Err(e) => {
+                        let msg = format!("Invalid TLS for entryPoint {}: {}", name, e);
+                        error!("[Hub] {}", msg);
+                        last_error = Some(msg);
+                        continue;
+                    }
+                };
                 let rate_limit = match crate::config::rate_limit_to_proto(&ep.rate_limit) {
                     Ok(rate_limit) => rate_limit,
                     Err(e) => {
@@ -4680,14 +4736,11 @@ impl HubClient {
             }
         }
 
-        if let Some(result) =
-            Self::dispatch_raw_p2p_command(&data, &manager, &applied_proxies, &data_dir).await
-        {
-            dc_send
-                .send(&bytes::Bytes::from(result.encode_to_vec()))
-                .await?;
-            return Ok(());
-        }
+        let peer_key = peer_pubkey
+            .read()
+            .await
+            .clone()
+            .ok_or_else(|| anyhow!("P2P peer is not authenticated"))?;
 
         let (request_id, cmd_type, payload) = decrypt_p2p_command_message(&data, &signing_key)?;
         let result = Self::dispatch_secure_or_inner_command(
@@ -4699,11 +4752,6 @@ impl HubClient {
         )
         .await;
 
-        let peer_key = peer_pubkey
-            .read()
-            .await
-            .clone()
-            .ok_or_else(|| anyhow!("P2P peer is not authenticated"))?;
         let response = encrypt_p2p_command_response(
             &request_id,
             &result,
@@ -4715,41 +4763,6 @@ impl HubClient {
         Ok(())
     }
 
-    async fn dispatch_raw_p2p_command(
-        data: &[u8],
-        manager: &Arc<ProxyManager>,
-        applied_proxies: &Arc<RwLock<HashMap<String, AppliedProxy>>>,
-        data_dir: &str,
-    ) -> Option<CommandResult> {
-        if let Ok(payload) = EncryptedCommandPayload::decode(data) {
-            return Some(
-                Self::static_dispatch(
-                    payload.r#type,
-                    payload.payload,
-                    manager,
-                    applied_proxies,
-                    data_dir,
-                )
-                .await,
-            );
-        }
-        if let Ok(secure) = SecureCommandPayload::decode(data) {
-            if let Ok(payload) = EncryptedCommandPayload::decode(secure.data.as_slice()) {
-                return Some(
-                    Self::static_dispatch(
-                        payload.r#type,
-                        payload.payload,
-                        manager,
-                        applied_proxies,
-                        data_dir,
-                    )
-                    .await,
-                );
-            }
-        }
-        None
-    }
-
     async fn dispatch_secure_or_inner_command(
         fallback_cmd_type: i32,
         payload: Vec<u8>,
@@ -4757,6 +4770,8 @@ impl HubClient {
         applied_proxies: &Arc<RwLock<HashMap<String, AppliedProxy>>>,
         data_dir: &str,
     ) -> CommandResult {
+        // Safe to accept the compact inner envelopes here: callers already
+        // required an authenticated P2P peer and decrypted the outer wrapper.
         if let Ok(secure) = SecureCommandPayload::decode(payload.as_slice()) {
             if let Ok(inner) = EncryptedCommandPayload::decode(secure.data.as_slice()) {
                 return Self::static_dispatch(

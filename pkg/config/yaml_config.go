@@ -23,7 +23,7 @@ type TLSConfig struct {
 	CertFile   string `yaml:"certFile,omitempty"`
 	KeyFile    string `yaml:"keyFile,omitempty"`
 	ClientCA   string `yaml:"clientCA,omitempty"`
-	ClientAuth string `yaml:"clientAuth,omitempty"` // "none", "optional", "require"
+	ClientAuth string `yaml:"clientAuth,omitempty"` // "none", "optional", "request", "require", "auto"
 }
 
 // TCPConfig holds routers, services, and middlewares

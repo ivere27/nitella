@@ -305,16 +305,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     info!("Nitella Proxy Daemon (Rust) starting...");
 
-    let cert_pem = read_optional_file(args.tls_cert.as_deref(), "TLS certificate");
-    let key_pem = read_optional_file(args.tls_key.as_deref(), "TLS private key");
-    let ca_pem = read_optional_file(args.tls_ca.as_deref(), "TLS CA certificate");
-    let client_auth_type = if args.mtls {
-        ClientAuthType::ClientAuthRequire as i32
-    } else if !ca_pem.is_empty() {
-        ClientAuthType::ClientAuthRequest as i32
-    } else {
-        ClientAuthType::ClientAuthNone as i32
-    };
+    let default_security = load_cli_tls_security(&args)?;
 
     // 0. Handle Offline Pairing
     if args.pair_offline {
@@ -486,13 +477,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     if let Some(eps) = &yaml.entry_points {
                         for (name, ep) in eps {
                             let resolved = yaml.resolve_entry_point(name, ep);
-                            let security = resolve_entrypoint_tls(
-                                ep,
-                                &cert_pem,
-                                &key_pem,
-                                &ca_pem,
-                                client_auth_type,
-                            );
+                            let security = resolve_entrypoint_tls(ep, &default_security)?;
                             let rate_limit = match config::rate_limit_to_proto(&ep.rate_limit) {
                                 Ok(rate_limit) => rate_limit,
                                 Err(e) => {
@@ -602,10 +587,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     default_action: cli_default_action,
                     fallback_action: cli_fallback_action,
                     fallback_mock: cli_fallback_mock,
-                    cert_pem,
-                    key_pem,
-                    ca_pem,
-                    client_auth_type,
+                    cert_pem: default_security.cert_pem.clone(),
+                    key_pem: default_security.key_pem.clone(),
+                    ca_pem: default_security.ca_pem.clone(),
+                    client_auth_type: default_security.client_auth_type,
                     ..Default::default()
                 };
 
@@ -1298,6 +1283,7 @@ fn normalize_default_action(default_action: i32, default_mock: i32) -> i32 {
     }
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
 struct ListenerSecurity {
     cert_pem: String,
     key_pem: String,
@@ -1305,36 +1291,52 @@ struct ListenerSecurity {
     client_auth_type: i32,
 }
 
+fn load_cli_tls_security(args: &Args) -> Result<ListenerSecurity, Box<dyn std::error::Error>> {
+    let cert_pem = read_optional_file(args.tls_cert.as_deref(), "TLS certificate")?;
+    let key_pem = read_optional_file(args.tls_key.as_deref(), "TLS private key")?;
+    let ca_pem = read_optional_file(args.tls_ca.as_deref(), "TLS CA certificate")?;
+    let client_auth_type = if args.mtls {
+        ClientAuthType::ClientAuthRequire as i32
+    } else if !ca_pem.is_empty() {
+        ClientAuthType::ClientAuthRequest as i32
+    } else {
+        ClientAuthType::ClientAuthNone as i32
+    };
+    let tls_requested =
+        args.tls_cert.is_some() || args.tls_key.is_some() || args.tls_ca.is_some() || args.mtls;
+
+    let security = ListenerSecurity {
+        cert_pem,
+        key_pem,
+        ca_pem,
+        client_auth_type,
+    };
+    validate_listener_security(&security, tls_requested, "CLI TLS")?;
+    Ok(security)
+}
+
 fn resolve_entrypoint_tls(
     ep: &config::EntryPoint,
-    default_cert_pem: &str,
-    default_key_pem: &str,
-    default_ca_pem: &str,
-    default_client_auth_type: i32,
-) -> ListenerSecurity {
+    default_security: &ListenerSecurity,
+) -> Result<ListenerSecurity, Box<dyn std::error::Error>> {
     let Some(tls) = &ep.tls else {
-        return ListenerSecurity {
-            cert_pem: default_cert_pem.to_string(),
-            key_pem: default_key_pem.to_string(),
-            ca_pem: default_ca_pem.to_string(),
-            client_auth_type: default_client_auth_type,
-        };
+        return Ok(default_security.clone());
     };
 
     let cert_pem = if tls.cert_file.is_empty() {
-        default_cert_pem.to_string()
+        default_security.cert_pem.clone()
     } else {
-        read_optional_file(Some(&tls.cert_file), "entrypoint TLS certificate")
+        read_optional_file(Some(&tls.cert_file), "entrypoint TLS certificate")?
     };
     let key_pem = if tls.key_file.is_empty() {
-        default_key_pem.to_string()
+        default_security.key_pem.clone()
     } else {
-        read_optional_file(Some(&tls.key_file), "entrypoint TLS private key")
+        read_optional_file(Some(&tls.key_file), "entrypoint TLS private key")?
     };
     let ca_pem = if tls.client_ca.is_empty() {
-        default_ca_pem.to_string()
+        default_security.ca_pem.clone()
     } else {
-        read_optional_file(Some(&tls.client_ca), "entrypoint TLS client CA")
+        read_optional_file(Some(&tls.client_ca), "entrypoint TLS client CA")?
     };
 
     let client_auth_type = match tls.client_auth.to_lowercase().as_str() {
@@ -1356,24 +1358,29 @@ fn resolve_entrypoint_tls(
                     ClientAuthType::ClientAuthRequest as i32
                 }
             } else {
-                default_client_auth_type
+                default_security.client_auth_type
             }
         }
         other => {
-            warn!(
-                "Unknown entrypoint TLS clientAuth {:?}; using process default",
-                other
-            );
-            default_client_auth_type
+            return Err(format!("unknown entrypoint TLS clientAuth {other:?}").into());
         }
     };
 
-    ListenerSecurity {
+    let security = ListenerSecurity {
         cert_pem,
         key_pem,
         ca_pem,
         client_auth_type,
-    }
+    };
+    let tls_requested = !tls.cert_file.is_empty()
+        || !tls.key_file.is_empty()
+        || !tls.client_ca.is_empty()
+        || !tls.client_auth.is_empty()
+        || !security.cert_pem.is_empty()
+        || !security.key_pem.is_empty()
+        || !security.ca_pem.is_empty();
+    validate_listener_security(&security, tls_requested, "entrypoint TLS")?;
+    Ok(security)
 }
 
 fn parse_go_duration(input: &str) -> Result<Duration, std::io::Error> {
@@ -1463,20 +1470,43 @@ fn invalid_duration(input: &str, reason: &str) -> std::io::Error {
     )
 }
 
-fn read_optional_file(path: Option<&str>, label: &str) -> String {
+fn validate_listener_security(
+    security: &ListenerSecurity,
+    tls_requested: bool,
+    label: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    if !tls_requested
+        && security.cert_pem.is_empty()
+        && security.key_pem.is_empty()
+        && security.ca_pem.is_empty()
+        && security.client_auth_type == ClientAuthType::ClientAuthNone as i32
+    {
+        return Ok(());
+    }
+
+    if security.cert_pem.is_empty() || security.key_pem.is_empty() {
+        return Err(format!("{label} requires both certificate and private key").into());
+    }
+
+    if (security.client_auth_type == ClientAuthType::ClientAuthRequire as i32
+        || security.client_auth_type == ClientAuthType::ClientAuthRequest as i32)
+        && security.ca_pem.is_empty()
+    {
+        return Err(format!("{label} client certificate verification requires a CA").into());
+    }
+
+    Ok(())
+}
+
+fn read_optional_file(path: Option<&str>, label: &str) -> std::io::Result<String> {
     let Some(path) = path else {
-        return String::new();
+        return Ok(String::new());
     };
     if path.is_empty() {
-        return String::new();
+        return Ok(String::new());
     }
-    match std_fs::read_to_string(path) {
-        Ok(data) => data,
-        Err(e) => {
-            warn!("Failed to read {} {}: {}", label, path, e);
-            String::new()
-        }
-    }
+    std_fs::read_to_string(path)
+        .map_err(|e| std::io::Error::new(e.kind(), format!("failed to read {label} {path}: {e}")))
 }
 
 fn resolve_stats_db_path(config_path: Option<&str>, stats_db: Option<&str>) -> String {
@@ -1684,6 +1714,91 @@ mod tests {
                 "127.0.0.1".to_string(),
             ]
         );
+    }
+
+    #[test]
+    fn cli_tls_security_rejects_partial_tls() {
+        let dir = std::env::temp_dir().join(format!("nitellad-rs-tls-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let cert_path = dir.join("cert.pem");
+        std::fs::write(&cert_path, "cert").unwrap();
+
+        let args = Args::try_parse_from(["nitellad-rs", "--tls-cert", cert_path.to_str().unwrap()])
+            .unwrap();
+        let err = load_cli_tls_security(&args).unwrap_err();
+        assert!(err.to_string().contains("certificate and private key"));
+
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn cli_tls_security_rejects_mtls_without_ca() {
+        let dir = std::env::temp_dir().join(format!("nitellad-rs-mtls-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let cert_path = dir.join("cert.pem");
+        let key_path = dir.join("key.pem");
+        std::fs::write(&cert_path, "cert").unwrap();
+        std::fs::write(&key_path, "key").unwrap();
+
+        let args = Args::try_parse_from([
+            "nitellad-rs",
+            "--tls-cert",
+            cert_path.to_str().unwrap(),
+            "--tls-key",
+            key_path.to_str().unwrap(),
+            "--mtls",
+        ])
+        .unwrap();
+        let err = load_cli_tls_security(&args).unwrap_err();
+        assert!(err.to_string().contains("requires a CA"));
+
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn entrypoint_tls_loads_yaml_files() {
+        let dir =
+            std::env::temp_dir().join(format!("nitellad-rs-entry-tls-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let cert_path = dir.join("cert.pem");
+        let key_path = dir.join("key.pem");
+        let ca_path = dir.join("ca.pem");
+        std::fs::write(&cert_path, "cert").unwrap();
+        std::fs::write(&key_path, "key").unwrap();
+        std::fs::write(&ca_path, "ca").unwrap();
+
+        let ep = config::EntryPoint {
+            address: "127.0.0.1:0".to_string(),
+            default_action: String::new(),
+            default_mock: String::new(),
+            default_backend: String::new(),
+            fallback_action: String::new(),
+            fallback_mock: String::new(),
+            tls: Some(config::TlsConfig {
+                cert_file: cert_path.to_string_lossy().to_string(),
+                key_file: key_path.to_string_lossy().to_string(),
+                client_ca: ca_path.to_string_lossy().to_string(),
+                client_auth: "require".to_string(),
+            }),
+            rate_limit: None,
+        };
+        let default_security = ListenerSecurity {
+            cert_pem: String::new(),
+            key_pem: String::new(),
+            ca_pem: String::new(),
+            client_auth_type: ClientAuthType::ClientAuthNone as i32,
+        };
+
+        let got = resolve_entrypoint_tls(&ep, &default_security).unwrap();
+        assert_eq!(got.cert_pem, "cert");
+        assert_eq!(got.key_pem, "key");
+        assert_eq!(got.ca_pem, "ca");
+        assert_eq!(
+            got.client_auth_type,
+            ClientAuthType::ClientAuthRequire as i32
+        );
+
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]

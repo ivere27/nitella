@@ -142,28 +142,9 @@ func main() {
 		}
 	}
 
-	// Load TLS files
-	loadFile := func(path string) string {
-		if path == "" {
-			return ""
-		}
-		data, err := os.ReadFile(path)
-		if err != nil {
-			log.Printf("[WARN] Failed to read file %s: %v", path, err)
-			return ""
-		}
-		return string(data)
-	}
-
-	certPEM := loadFile(*tlsCert)
-	keyPEM := loadFile(*tlsKey)
-	caPEM := loadFile(*tlsCA)
-
-	clientAuth := pb.ClientAuthType_CLIENT_AUTH_NONE
-	if *mtls {
-		clientAuth = pb.ClientAuthType_CLIENT_AUTH_REQUIRE
-	} else if caPEM != "" {
-		clientAuth = pb.ClientAuthType_CLIENT_AUTH_REQUEST
+	globalTLS, err := loadTLSMaterial(*tlsCert, *tlsKey, *tlsCA, *mtls, "CLI TLS")
+	if err != nil {
+		log.Fatalf("Invalid TLS configuration: %v", err)
 	}
 
 	// Initialize GeoIP
@@ -292,6 +273,14 @@ func main() {
 			if err != nil {
 				log.Fatalf("Invalid rateLimit for entryPoint %q: %v", name, err)
 			}
+			entryTLS := globalTLS
+			if ep.TLS != nil {
+				var err error
+				entryTLS, err = resolveEntryPointTLS(ep.TLS, globalTLS, name)
+				if err != nil {
+					log.Fatalf("Invalid TLS configuration for entryPoint %q: %v", name, err)
+				}
+			}
 			lc := listenerConfig{
 				name:           name,
 				listenAddr:     ep.Address,
@@ -299,10 +288,10 @@ func main() {
 				defaultMock:    ep.DefaultMock,
 				fallbackAction: fallbackActionFromString(ep.FallbackAction),
 				fallbackMock:   node.StringToMockPreset(ep.FallbackMock),
-				certPEM:        certPEM,
-				keyPEM:         keyPEM,
-				caPEM:          caPEM,
-				clientAuth:     clientAuth,
+				certPEM:        entryTLS.certPEM,
+				keyPEM:         entryTLS.keyPEM,
+				caPEM:          entryTLS.caPEM,
+				clientAuth:     entryTLS.clientAuth,
 				rateLimit:      rateLimit,
 			}
 			// Find associated service
@@ -342,10 +331,10 @@ func main() {
 			defaultAction:  *defaultActionFlag,
 			fallbackAction: cliFallbackAction,
 			fallbackMock:   cliFallbackMock,
-			certPEM:        certPEM,
-			keyPEM:         keyPEM,
-			caPEM:          caPEM,
-			clientAuth:     clientAuth,
+			certPEM:        globalTLS.certPEM,
+			keyPEM:         globalTLS.keyPEM,
+			caPEM:          globalTLS.caPEM,
+			clientAuth:     globalTLS.clientAuth,
 			rateLimit:      cliRateLimit,
 		})
 	} else if isHubPairingMode() || isHubOnlyMode() {
@@ -518,6 +507,136 @@ func containsString(slice []string, s string) bool {
 		}
 	}
 	return false
+}
+
+type tlsMaterial struct {
+	certPEM    string
+	keyPEM     string
+	caPEM      string
+	clientAuth pb.ClientAuthType
+}
+
+func loadTLSMaterial(certPath, keyPath, caPath string, requireClientCert bool, label string) (tlsMaterial, error) {
+	material := tlsMaterial{clientAuth: pb.ClientAuthType_CLIENT_AUTH_NONE}
+	var err error
+	if certPath != "" {
+		material.certPEM, err = readTLSFile(certPath, "TLS certificate")
+		if err != nil {
+			return material, err
+		}
+	}
+	if keyPath != "" {
+		material.keyPEM, err = readTLSFile(keyPath, "TLS private key")
+		if err != nil {
+			return material, err
+		}
+	}
+	if caPath != "" {
+		material.caPEM, err = readTLSFile(caPath, "TLS client CA")
+		if err != nil {
+			return material, err
+		}
+	}
+
+	if requireClientCert {
+		material.clientAuth = pb.ClientAuthType_CLIENT_AUTH_REQUIRE
+	} else if material.caPEM != "" {
+		material.clientAuth = pb.ClientAuthType_CLIENT_AUTH_REQUEST
+	}
+
+	tlsRequested := certPath != "" || keyPath != "" || caPath != "" || requireClientCert
+	return material, validateTLSMaterial(material, tlsRequested, label)
+}
+
+func resolveEntryPointTLS(cfg *cfgpkg.TLSConfig, fallback tlsMaterial, name string) (tlsMaterial, error) {
+	if cfg == nil {
+		return fallback, nil
+	}
+
+	material := fallback
+	var err error
+	if cfg.CertFile != "" {
+		material.certPEM, err = readTLSFile(cfg.CertFile, "entrypoint TLS certificate")
+		if err != nil {
+			return material, err
+		}
+	}
+	if cfg.KeyFile != "" {
+		material.keyPEM, err = readTLSFile(cfg.KeyFile, "entrypoint TLS private key")
+		if err != nil {
+			return material, err
+		}
+	}
+	if cfg.ClientCA != "" {
+		material.caPEM, err = readTLSFile(cfg.ClientCA, "entrypoint TLS client CA")
+		if err != nil {
+			return material, err
+		}
+	}
+
+	switch strings.ToLower(strings.TrimSpace(cfg.ClientAuth)) {
+	case "":
+		if cfg.ClientCA != "" {
+			if material.caPEM == "" {
+				material.clientAuth = pb.ClientAuthType_CLIENT_AUTH_NONE
+			} else {
+				material.clientAuth = pb.ClientAuthType_CLIENT_AUTH_REQUEST
+			}
+		}
+	case "none":
+		material.clientAuth = pb.ClientAuthType_CLIENT_AUTH_NONE
+	case "optional", "request":
+		material.clientAuth = pb.ClientAuthType_CLIENT_AUTH_REQUEST
+	case "require", "required", "mtls":
+		material.clientAuth = pb.ClientAuthType_CLIENT_AUTH_REQUIRE
+	case "auto":
+		if material.caPEM == "" {
+			material.clientAuth = pb.ClientAuthType_CLIENT_AUTH_NONE
+		} else {
+			material.clientAuth = pb.ClientAuthType_CLIENT_AUTH_REQUEST
+		}
+	default:
+		return material, fmt.Errorf("unknown clientAuth %q", cfg.ClientAuth)
+	}
+
+	tlsRequested := cfg.CertFile != "" ||
+		cfg.KeyFile != "" ||
+		cfg.ClientCA != "" ||
+		cfg.ClientAuth != "" ||
+		material.certPEM != "" ||
+		material.keyPEM != "" ||
+		material.caPEM != ""
+	return material, validateTLSMaterial(material, tlsRequested, fmt.Sprintf("entryPoint %q TLS", name))
+}
+
+func validateTLSMaterial(material tlsMaterial, tlsRequested bool, label string) error {
+	if !tlsRequested &&
+		material.certPEM == "" &&
+		material.keyPEM == "" &&
+		material.caPEM == "" &&
+		material.clientAuth == pb.ClientAuthType_CLIENT_AUTH_NONE {
+		return nil
+	}
+
+	if material.certPEM == "" || material.keyPEM == "" {
+		return fmt.Errorf("%s requires both certificate and private key", label)
+	}
+
+	if (material.clientAuth == pb.ClientAuthType_CLIENT_AUTH_REQUIRE ||
+		material.clientAuth == pb.ClientAuthType_CLIENT_AUTH_REQUEST) &&
+		material.caPEM == "" {
+		return fmt.Errorf("%s client certificate verification requires a CA", label)
+	}
+
+	return nil
+}
+
+func readTLSFile(path, label string) (string, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "", fmt.Errorf("failed to read %s %s: %w", label, path, err)
+	}
+	return string(data), nil
 }
 
 func actionTypeFromString(action string) (common.ActionType, bool) {

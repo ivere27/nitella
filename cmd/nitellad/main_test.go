@@ -1,11 +1,14 @@
 package main
 
 import (
+	"os"
+	"path/filepath"
 	"reflect"
 	"testing"
 
 	"github.com/ivere27/nitella/pkg/api/common"
 	pb "github.com/ivere27/nitella/pkg/api/proxy"
+	cfgpkg "github.com/ivere27/nitella/pkg/config"
 )
 
 func TestActionTypeFromString(t *testing.T) {
@@ -87,6 +90,68 @@ func TestParseSourceIPListExpandsStandaloneAliases(t *testing.T) {
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("parseSourceIPList() = %#v, want %#v", got, want)
+	}
+}
+
+func TestLoadTLSMaterialRejectsPartialTLS(t *testing.T) {
+	dir := t.TempDir()
+	certPath := filepath.Join(dir, "cert.pem")
+	if err := os.WriteFile(certPath, []byte("cert"), 0600); err != nil {
+		t.Fatalf("write cert: %v", err)
+	}
+
+	_, err := loadTLSMaterial(certPath, "", "", false, "test TLS")
+	if err == nil {
+		t.Fatal("expected partial TLS config to fail")
+	}
+}
+
+func TestLoadTLSMaterialRejectsMTLSWithoutCA(t *testing.T) {
+	dir := t.TempDir()
+	certPath := filepath.Join(dir, "cert.pem")
+	keyPath := filepath.Join(dir, "key.pem")
+	if err := os.WriteFile(certPath, []byte("cert"), 0600); err != nil {
+		t.Fatalf("write cert: %v", err)
+	}
+	if err := os.WriteFile(keyPath, []byte("key"), 0600); err != nil {
+		t.Fatalf("write key: %v", err)
+	}
+
+	_, err := loadTLSMaterial(certPath, keyPath, "", true, "test TLS")
+	if err == nil {
+		t.Fatal("expected mTLS without CA to fail")
+	}
+}
+
+func TestResolveEntryPointTLSLoadsYAMLFiles(t *testing.T) {
+	dir := t.TempDir()
+	certPath := filepath.Join(dir, "cert.pem")
+	keyPath := filepath.Join(dir, "key.pem")
+	caPath := filepath.Join(dir, "ca.pem")
+	if err := os.WriteFile(certPath, []byte("cert"), 0600); err != nil {
+		t.Fatalf("write cert: %v", err)
+	}
+	if err := os.WriteFile(keyPath, []byte("key"), 0600); err != nil {
+		t.Fatalf("write key: %v", err)
+	}
+	if err := os.WriteFile(caPath, []byte("ca"), 0600); err != nil {
+		t.Fatalf("write ca: %v", err)
+	}
+
+	got, err := resolveEntryPointTLS(&cfgpkg.TLSConfig{
+		CertFile:   certPath,
+		KeyFile:    keyPath,
+		ClientCA:   caPath,
+		ClientAuth: "require",
+	}, tlsMaterial{clientAuth: pb.ClientAuthType_CLIENT_AUTH_NONE}, "web")
+	if err != nil {
+		t.Fatalf("resolveEntryPointTLS failed: %v", err)
+	}
+	if got.certPEM != "cert" || got.keyPEM != "key" || got.caPEM != "ca" {
+		t.Fatalf("unexpected TLS material: %+v", got)
+	}
+	if got.clientAuth != pb.ClientAuthType_CLIENT_AUTH_REQUIRE {
+		t.Fatalf("clientAuth = %v", got.clientAuth)
 	}
 }
 
