@@ -5,7 +5,10 @@
 # Includes the CLI plus Go/Rust daemon binaries and server utilities.
 
 ARG BUILDER_IMAGE=nitella-builder:unstable
-FROM ${BUILDER_IMAGE} AS builder
+FROM --platform=$BUILDPLATFORM ${BUILDER_IMAGE} AS builder
+ARG TARGETPLATFORM
+ARG TARGETARCH
+ARG TARGETVARIANT
 
 WORKDIR /app
 
@@ -22,22 +25,35 @@ COPY nitellad-rs/src ./nitellad-rs/src
 
 RUN --mount=type=cache,id=go-build-cache,target=/root/.cache/go-build \
     --mount=type=cache,id=go-mod-cache,target=/go/pkg/mod \
-    mkdir -p /app/bin \
-    && CGO_ENABLED=1 go build -ldflags="-s -w" -o /app/bin/nitella ./cmd/nitella \
-    && CGO_ENABLED=1 go build -ldflags="-s -w" -o /app/bin/nitellad ./cmd/nitellad \
-    && CGO_ENABLED=1 go build -tags release -ldflags="-s -w" -o /app/bin/hub ./cmd/hub \
-    && go build -ldflags="-s -w" -o /app/bin/hubctl ./cmd/hubctl \
-    && CGO_ENABLED=1 go build -ldflags="-s -w" -o /app/bin/geoip-server ./cmd/geoip-server \
-    && CGO_ENABLED=1 go build -ldflags="-s -w" -o /app/bin/geoip ./cmd/geoip \
-    && CGO_ENABLED=0 go build -ldflags="-s -w" -o /app/bin/mock ./cmd/mock
+    set -eux; \
+    xx-apk add --no-cache xx-c-essentials; \
+    mkdir -p /app/bin; \
+    CGO_ENABLED=1 xx-go build -ldflags="-s -w" -o /app/bin/nitella ./cmd/nitella; \
+    CGO_ENABLED=1 xx-go build -ldflags="-s -w" -o /app/bin/nitellad ./cmd/nitellad; \
+    CGO_ENABLED=1 xx-go build -tags release -ldflags="-s -w" -o /app/bin/hub ./cmd/hub; \
+    CGO_ENABLED=0 xx-go build -ldflags="-s -w" -o /app/bin/hubctl ./cmd/hubctl; \
+    CGO_ENABLED=1 xx-go build -ldflags="-s -w" -o /app/bin/geoip-server ./cmd/geoip-server; \
+    CGO_ENABLED=1 xx-go build -ldflags="-s -w" -o /app/bin/geoip ./cmd/geoip; \
+    CGO_ENABLED=0 xx-go build -ldflags="-s -w" -o /app/bin/mock ./cmd/mock; \
+    xx-verify /app/bin/nitella /app/bin/nitellad /app/bin/hub /app/bin/hubctl /app/bin/geoip-server /app/bin/geoip /app/bin/mock
 
 RUN --mount=type=cache,id=cargo-registry-cache,target=/usr/local/cargo/registry \
     --mount=type=cache,id=cargo-git-cache,target=/usr/local/cargo/git \
-    --mount=type=cache,id=cargo-target-cache,target=/app/nitellad-rs/target \
-    RUSTFLAGS="-C target-feature=-crt-static" \
-    cargo build --locked --release --manifest-path nitellad-rs/Cargo.toml --bin nitellad-rs \
-    && cp nitellad-rs/target/release/nitellad-rs /app/bin/nitellad-rs \
-    && strip /app/bin/nitellad-rs
+    --mount=type=cache,id=cargo-target-cache-${TARGETARCH}${TARGETVARIANT},target=/app/nitellad-rs/target \
+    set -eux; \
+    xx-apk add --no-cache xx-c-essentials; \
+    xx-apk add --no-cache sqlite-dev; \
+    RUST_TARGET="$(xx-info)"; \
+    RUST_TARGET_ENV="$(printf '%s' "$RUST_TARGET" | tr '[:lower:]-' '[:upper:]_')"; \
+    RUST_TARGET_CC="$(printf '%s' "$RUST_TARGET" | tr '-' '_')"; \
+    xx-cargo --setup-target-triple; \
+    export "CARGO_TARGET_${RUST_TARGET_ENV}_LINKER=${RUST_TARGET}-clang"; \
+    export "CC_${RUST_TARGET_CC}=${RUST_TARGET}-clang"; \
+    export "PKG_CONFIG=${RUST_TARGET}-pkg-config"; \
+    export RUSTFLAGS="-C target-feature=-crt-static -C strip=symbols"; \
+    cargo build --locked --release --target "$RUST_TARGET" --target-dir /app/nitellad-rs/target --manifest-path nitellad-rs/Cargo.toml --bin nitellad-rs; \
+    cp "/app/nitellad-rs/target/${RUST_TARGET}/release/nitellad-rs" /app/bin/nitellad-rs; \
+    xx-verify /app/bin/nitellad-rs
 
 FROM alpine:3.19
 

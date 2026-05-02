@@ -56,14 +56,11 @@ help:
 	@echo "                                     Build and run Rust nitellad-rs"
 	@echo "                                     NITELLAD_RS_ARGS is also accepted"
 	@echo "  make docker_builder_build          Build shared Go/Rust Docker builder image"
-	@echo "  make docker_nitellad_build         Build Go nitellad Docker image"
-	@echo "  make docker_nitellad_publish       Build and push Go nitellad to docker.io/$(DOCKER_NAMESPACE)"
-	@echo "  make docker_nitellad_rs_build      Build Rust nitellad-rs Docker image"
-	@echo "  make docker_nitellad_rs_publish    Build and push Rust nitellad-rs to docker.io/$(DOCKER_NAMESPACE)"
-	@echo "  make docker_nitella_build          Build combined Docker image with all binaries"
-	@echo "  make docker_nitella_publish        Build and push combined image to docker.io/$(DOCKER_NAMESPACE)"
-	@echo "  make docker_publish_all            Build and push nitella, nitellad, and nitellad-rs"
-	@echo "                                     Override DOCKER_NAMESPACE=... or DOCKER_TAG=latest"
+	@echo "  make docker_build_all              Build nitella, nitellad, and nitellad-rs Docker images"
+	@echo "  make docker_publish_all            Build and push all images for amd64, 386, arm64, and arm/v7"
+	@echo "  make docker_publish_all_multiarch  Alias for docker_publish_all"
+	@echo "                                     Override DOCKER_NAMESPACE=..., DOCKER_TAG=latest, or DOCKER_PLATFORMS=..."
+	@echo "                                     Builder image uses DOCKER_BUILDER_PLATFORM=$(DOCKER_BUILDER_PLATFORM)"
 	@echo "  GeoIP example:"
 	@echo "    NITELLAD_ARGS=\"--listen :8080 --backend localhost:3000 --geoip-city /path/GeoLite2-City.mmdb --geoip-isp /path/GeoLite2-ASN.mmdb\""
 	@echo "  KR-only example:"
@@ -395,8 +392,11 @@ geoip_clean:
 # ============================================================================
 
 .PHONY: nitellad_build nitellad_run nitellad_rs_build nitellad_rs_run nitellad_test nitellad_test_integration nitella_build nitella_run
-.PHONY: docker_builder_build docker_nitella_build docker_nitella_publish docker_publish_all
+.PHONY: docker_builder_build docker_builder_publish_multiarch docker_build_all docker_nitella_build docker_nitella_publish docker_nitella_publish_multiarch docker_publish_all docker_publish_all_multiarch
 .PHONY: docker_nitellad_build docker_nitellad_run docker_nitellad_publish docker_nitellad_rs_build docker_nitellad_rs_publish docker_nitellad_publish_all docker_namespace_required
+.PHONY: docker_nitellad_publish_multiarch docker_nitellad_rs_publish_multiarch
+.PHONY: _docker_nitella_build _docker_nitellad_build _docker_nitellad_rs_build
+.PHONY: _docker_nitella_publish_multiarch _docker_nitellad_publish_multiarch _docker_nitellad_rs_publish_multiarch
 .PHONY: nitellad_docker_build nitellad_docker_run nitellad_docker_publish nitellad_rs_docker_build nitellad_rs_docker_publish nitellad_docker_publish_all
 
 nitellad_build: proto
@@ -477,8 +477,11 @@ clean:
 DOCKER_REGISTRY ?= docker.io
 DOCKER_NAMESPACE ?= ivere27
 DOCKER_TAG ?= $(TAG)
+DOCKER_PLATFORMS ?= linux/amd64,linux/386,linux/arm64,linux/arm/v7
+DOCKER_BUILDER_PLATFORM ?= linux/amd64
 DOCKER_BUILDER_IMAGE ?= nitella-builder
 DOCKER_BUILDER_REF = $(DOCKER_BUILDER_IMAGE):$(DOCKER_TAG)
+DOCKER_BUILDER_PUBLISH_IMAGE = $(DOCKER_REGISTRY)/$(DOCKER_NAMESPACE)/$(DOCKER_BUILDER_IMAGE):$(DOCKER_TAG)
 NITELLA_DOCKER_IMAGE ?= nitella
 NITELLAD_DOCKER_IMAGE ?= nitellad
 NITELLAD_RS_DOCKER_IMAGE ?= nitellad-rs
@@ -490,14 +493,15 @@ docker_namespace_required:
 	@if [ -z "$(DOCKER_NAMESPACE)" ]; then \
 		echo "DOCKER_NAMESPACE is required for Docker Hub publishing."; \
 		echo "Examples:"; \
-		echo "  make docker_nitella_publish DOCKER_NAMESPACE=your-dockerhub-user DOCKER_TAG=latest"; \
-		echo "  make docker_nitellad_publish DOCKER_NAMESPACE=your-dockerhub-user DOCKER_TAG=latest"; \
-		echo "  make docker_nitellad_rs_publish DOCKER_NAMESPACE=your-dockerhub-user DOCKER_TAG=latest"; \
+		echo "  make docker_publish_all DOCKER_NAMESPACE=your-dockerhub-user DOCKER_TAG=latest"; \
 		exit 1; \
 	fi
 
 docker_builder_build:
 	DOCKER_BUILDKIT=1 docker build -f Dockerfile.builder -t $(DOCKER_BUILDER_IMAGE) -t $(DOCKER_BUILDER_REF) .
+
+docker_builder_publish_multiarch: docker_namespace_required
+	docker buildx build --platform $(DOCKER_BUILDER_PLATFORM) -f Dockerfile.builder -t $(DOCKER_BUILDER_PUBLISH_IMAGE) --push .
 
 geoip_docker_build: docker_builder_build
 	DOCKER_BUILDKIT=1 docker build --build-arg BUILDER_IMAGE=$(DOCKER_BUILDER_REF) -f Dockerfile.geoip -t nitella-geoip .
@@ -531,38 +535,53 @@ geoip_docker_run: geoip_docker_build
 	fi
 
 # Nitellad Docker
-docker_nitellad_build: docker_builder_build
+docker_nitellad_build: docker_build_all
+
+_docker_nitellad_build: docker_builder_build
 	DOCKER_BUILDKIT=1 docker build --build-arg BUILDER_IMAGE=$(DOCKER_BUILDER_REF) -f Dockerfile.nitellad -t $(NITELLAD_DOCKER_IMAGE) -t $(NITELLAD_DOCKER_IMAGE):$(DOCKER_TAG) .
 
-docker_nitellad_publish: docker_namespace_required
-	$(MAKE) docker_nitellad_build
-	docker tag $(NITELLAD_DOCKER_IMAGE):$(DOCKER_TAG) $(NITELLAD_DOCKER_PUBLISH_IMAGE)
-	docker push $(NITELLAD_DOCKER_PUBLISH_IMAGE)
+docker_nitellad_publish: docker_publish_all
 
-docker_nitellad_rs_build: docker_builder_build
+docker_nitellad_publish_multiarch: docker_publish_all
+
+_docker_nitellad_publish_multiarch: docker_namespace_required
+	docker buildx build --platform $(DOCKER_PLATFORMS) --build-arg BUILDER_IMAGE=$(DOCKER_BUILDER_PUBLISH_IMAGE) -f Dockerfile.nitellad -t $(NITELLAD_DOCKER_PUBLISH_IMAGE) --push .
+
+docker_nitellad_rs_build: docker_build_all
+
+_docker_nitellad_rs_build: docker_builder_build
 	DOCKER_BUILDKIT=1 docker build --build-arg BUILDER_IMAGE=$(DOCKER_BUILDER_REF) -f Dockerfile.nitellad-rs -t $(NITELLAD_RS_DOCKER_IMAGE) -t $(NITELLAD_RS_DOCKER_IMAGE):$(DOCKER_TAG) .
 
-docker_nitellad_rs_publish: docker_namespace_required
-	$(MAKE) docker_nitellad_rs_build
-	docker tag $(NITELLAD_RS_DOCKER_IMAGE):$(DOCKER_TAG) $(NITELLAD_RS_DOCKER_PUBLISH_IMAGE)
-	docker push $(NITELLAD_RS_DOCKER_PUBLISH_IMAGE)
+docker_nitellad_rs_publish: docker_publish_all
 
-docker_nitella_build: docker_builder_build
+docker_nitellad_rs_publish_multiarch: docker_publish_all
+
+_docker_nitellad_rs_publish_multiarch: docker_namespace_required
+	docker buildx build --platform $(DOCKER_PLATFORMS) --build-arg BUILDER_IMAGE=$(DOCKER_BUILDER_PUBLISH_IMAGE) -f Dockerfile.nitellad-rs -t $(NITELLAD_RS_DOCKER_PUBLISH_IMAGE) --push .
+
+docker_nitella_build: docker_build_all
+
+_docker_nitella_build: docker_builder_build
 	DOCKER_BUILDKIT=1 docker build --build-arg BUILDER_IMAGE=$(DOCKER_BUILDER_REF) -f Dockerfile.nitella -t $(NITELLA_DOCKER_IMAGE) -t $(NITELLA_DOCKER_IMAGE):$(DOCKER_TAG) .
 
-docker_nitella_publish: docker_namespace_required
-	$(MAKE) docker_nitella_build
-	docker tag $(NITELLA_DOCKER_IMAGE):$(DOCKER_TAG) $(NITELLA_DOCKER_PUBLISH_IMAGE)
-	docker push $(NITELLA_DOCKER_PUBLISH_IMAGE)
+docker_nitella_publish: docker_publish_all
 
-docker_nitellad_publish_all: docker_namespace_required
-	$(MAKE) docker_nitellad_publish
-	$(MAKE) docker_nitellad_rs_publish
+docker_nitella_publish_multiarch: docker_publish_all
+
+_docker_nitella_publish_multiarch: docker_namespace_required
+	docker buildx build --platform $(DOCKER_PLATFORMS) --build-arg BUILDER_IMAGE=$(DOCKER_BUILDER_PUBLISH_IMAGE) -f Dockerfile.nitella -t $(NITELLA_DOCKER_PUBLISH_IMAGE) --push .
+
+docker_build_all: _docker_nitella_build _docker_nitellad_build _docker_nitellad_rs_build
+
+docker_nitellad_publish_all: docker_publish_all
 
 docker_publish_all: docker_namespace_required
-	$(MAKE) docker_nitella_publish
-	$(MAKE) docker_nitellad_publish
-	$(MAKE) docker_nitellad_rs_publish
+	$(MAKE) docker_builder_publish_multiarch
+	$(MAKE) _docker_nitella_publish_multiarch
+	$(MAKE) _docker_nitellad_publish_multiarch
+	$(MAKE) _docker_nitellad_rs_publish_multiarch
+
+docker_publish_all_multiarch: docker_publish_all
 
 nitellad_docker_build: docker_nitellad_build
 nitellad_docker_publish: docker_nitellad_publish

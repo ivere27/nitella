@@ -629,6 +629,78 @@ make geoip_docker_run GEOIP_TOKEN=your-secret-token
 make mock_docker_run PORT=2222 PROTOCOL=ssh
 ```
 
+### Standalone Daemon Images
+
+The published daemon images can run a single standalone proxy directly from CLI flags. This mode does not require Hub or a YAML config.
+
+If the backend is running on the Docker host, use `host.docker.internal` and add Docker's host-gateway mapping on Linux:
+
+```bash
+# Go nitellad image
+docker run --rm -it \
+  --add-host=host.docker.internal:host-gateway \
+  -p 8080:8080 \
+  docker.io/ivere27/nitellad:latest \
+  --listen :8080 \
+  --backend host.docker.internal:3000 \
+  --geoip-city /app/db/GeoLite2-City.mmdb \
+  --geoip-isp /app/db/GeoLite2-ASN.mmdb
+
+# Rust nitellad-rs image
+docker run --rm -it \
+  --add-host=host.docker.internal:host-gateway \
+  -p 8080:8080 \
+  docker.io/ivere27/nitellad-rs:latest \
+  --listen :8080 \
+  --backend host.docker.internal:3000 \
+  --geoip-city /app/db/GeoLite2-City.mmdb \
+  --geoip-isp /app/db/GeoLite2-ASN.mmdb
+```
+
+To keep proxy/admin data across restarts, mount `/app/data` and provide the database paths explicitly:
+
+```bash
+mkdir -p data
+
+docker run --rm -it \
+  --add-host=host.docker.internal:host-gateway \
+  -p 8080:8080 \
+  -p 50051:50051 \
+  -e NITELLA_TOKEN=your-secret-token \
+  -v "$PWD/data:/app/data" \
+  docker.io/ivere27/nitellad:latest \
+  --listen :8080 \
+  --backend host.docker.internal:3000 \
+  --admin-port 50051 \
+  --db-path /app/data/nitella.db \
+  --stats-db /app/data/stats.db \
+  --geoip-city /app/db/GeoLite2-City.mmdb \
+  --geoip-isp /app/db/GeoLite2-ASN.mmdb \
+  --geoip-cache /app/data/geoip_cache.db
+```
+
+Use `docker.io/ivere27/nitellad-rs:latest` in the same command to run the Rust implementation. The `nitellad-rs` image uses the same `/app/nitellad` entrypoint, with `/app/nitellad` symlinked to `/app/nitellad-rs`.
+
+KR-only proxy with local/LAN test traffic allowed:
+
+```bash
+docker run --rm -it \
+  --add-host=host.docker.internal:host-gateway \
+  -p 8080:8080 \
+  docker.io/ivere27/nitellad-rs:latest \
+  --listen :8080 \
+  --backend host.docker.internal:3000 \
+  --default-action block \
+  --allow-country KR \
+  --allow-ip local \
+  --geoip-city /app/db/GeoLite2-City.mmdb \
+  --geoip-isp /app/db/GeoLite2-ASN.mmdb
+```
+
+Use `docker.io/ivere27/nitellad:latest` in the same command to run the Go implementation.
+
+When command arguments are supplied after the image name, Docker replaces the image `CMD`; include `--listen`, `--backend`, and any database or GeoIP paths you need.
+
 ### Known Issue: Firewall Blocking Docker Traffic
 
 When using `host.docker.internal` to reach services on the host, firewalls like ufw may block traffic from the Docker network.

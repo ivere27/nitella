@@ -66,7 +66,9 @@ func SpliceProxy(dst io.Writer, src io.Reader, written *int64) (int64, error) {
 
 		// Step A: Splice from SRC to PIPE
 		readErr = srcRC.Read(func(fd uintptr) bool {
-			n, errS = syscall.Splice(int(fd), nil, pipe[1], nil, maxSplice, SPLICE_F_MOVE|SPLICE_F_NONBLOCK)
+			spliced, err := syscall.Splice(int(fd), nil, pipe[1], nil, maxSplice, SPLICE_F_MOVE|SPLICE_F_NONBLOCK)
+			n = int64(spliced)
+			errS = err
 			if errS == syscall.EAGAIN {
 				return false // Wait for read readiness
 			}
@@ -89,9 +91,11 @@ func SpliceProxy(dst io.Writer, src io.Reader, written *int64) (int64, error) {
 		remain := n
 		for remain > 0 {
 			var writtenChunk int64 // Define outside closure to capture result
-			
+
 			writeErr = dstRC.Write(func(fd uintptr) bool {
-				writtenChunk, errS = syscall.Splice(pipe[0], nil, int(fd), nil, int(remain), SPLICE_F_MOVE|SPLICE_F_NONBLOCK)
+				spliced, err := syscall.Splice(pipe[0], nil, int(fd), nil, int(remain), SPLICE_F_MOVE|SPLICE_F_NONBLOCK)
+				writtenChunk = int64(spliced)
+				errS = err
 				if errS == syscall.EAGAIN {
 					return false // Wait for write readiness
 				}

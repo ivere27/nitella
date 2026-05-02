@@ -8,7 +8,8 @@
 
 # Build stage
 ARG BUILDER_IMAGE=nitella-builder:unstable
-FROM ${BUILDER_IMAGE} AS builder
+FROM --platform=$BUILDPLATFORM ${BUILDER_IMAGE} AS builder
+ARG TARGETPLATFORM
 
 WORKDIR /app
 
@@ -21,8 +22,11 @@ COPY . .
 # Build with CGO enabled for SQLite support
 RUN --mount=type=cache,id=go-build-cache,target=/root/.cache/go-build \
     --mount=type=cache,id=go-mod-cache,target=/go/pkg/mod \
-    CGO_ENABLED=1 go build -ldflags="-s -w" -o /app/bin/nitellad ./cmd/nitellad \
-    && CGO_ENABLED=1 go build -ldflags="-s -w" -o /app/bin/nitella ./cmd/nitella
+    set -eux; \
+    xx-apk add --no-cache xx-c-essentials; \
+    CGO_ENABLED=1 xx-go build -ldflags="-s -w" -o /app/bin/nitellad ./cmd/nitellad; \
+    CGO_ENABLED=1 xx-go build -ldflags="-s -w" -o /app/bin/nitella ./cmd/nitella; \
+    xx-verify /app/bin/nitellad /app/bin/nitella
 
 # Runtime stage
 FROM alpine:3.19
