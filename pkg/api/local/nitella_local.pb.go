@@ -3212,11 +3212,12 @@ type AddProxyRequest struct {
 	FallbackMock   common.MockPreset      `protobuf:"varint,8,opt,name=fallback_mock,json=fallbackMock,proto3,enum=nitella.MockPreset" json:"fallback_mock,omitempty"`
 	Tags           []string               `protobuf:"bytes,9,rep,name=tags,proto3" json:"tags,omitempty"`
 	// TLS configuration
-	CertPem       string `protobuf:"bytes,10,opt,name=cert_pem,json=certPem,proto3" json:"cert_pem,omitempty"`
-	KeyPem        string `protobuf:"bytes,11,opt,name=key_pem,json=keyPem,proto3" json:"key_pem,omitempty"`
-	CaPem         string `protobuf:"bytes,12,opt,name=ca_pem,json=caPem,proto3" json:"ca_pem,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	CertPem          string                  `protobuf:"bytes,10,opt,name=cert_pem,json=certPem,proto3" json:"cert_pem,omitempty"`
+	KeyPem           string                  `protobuf:"bytes,11,opt,name=key_pem,json=keyPem,proto3" json:"key_pem,omitempty"`
+	CaPem            string                  `protobuf:"bytes,12,opt,name=ca_pem,json=caPem,proto3" json:"ca_pem,omitempty"`
+	ApprovalBackends []*common.BackendChoice `protobuf:"bytes,13,rep,name=approval_backends,json=approvalBackends,proto3" json:"approval_backends,omitempty"`
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
 }
 
 func (x *AddProxyRequest) Reset() {
@@ -3331,6 +3332,13 @@ func (x *AddProxyRequest) GetCaPem() string {
 		return x.CaPem
 	}
 	return ""
+}
+
+func (x *AddProxyRequest) GetApprovalBackends() []*common.BackendChoice {
+	if x != nil {
+		return x.ApprovalBackends
+	}
+	return nil
 }
 
 type UpdateProxyRequest struct {
@@ -5004,23 +5012,25 @@ func (x *RemoveGlobalRuleResponse) GetError() string {
 }
 
 type ApprovalRequest struct {
-	state          protoimpl.MessageState `protogen:"open.v1"`
-	RequestId      string                 `protobuf:"bytes,1,opt,name=request_id,json=requestId,proto3" json:"request_id,omitempty"`
-	NodeId         string                 `protobuf:"bytes,2,opt,name=node_id,json=nodeId,proto3" json:"node_id,omitempty"`
-	NodeName       string                 `protobuf:"bytes,3,opt,name=node_name,json=nodeName,proto3" json:"node_name,omitempty"`
-	ProxyId        string                 `protobuf:"bytes,4,opt,name=proxy_id,json=proxyId,proto3" json:"proxy_id,omitempty"`
-	ProxyName      string                 `protobuf:"bytes,5,opt,name=proxy_name,json=proxyName,proto3" json:"proxy_name,omitempty"`
-	SourceIp       string                 `protobuf:"bytes,6,opt,name=source_ip,json=sourceIp,proto3" json:"source_ip,omitempty"`
-	SourcePort     int32                  `protobuf:"varint,7,opt,name=source_port,json=sourcePort,proto3" json:"source_port,omitempty"`
-	DestAddr       string                 `protobuf:"bytes,8,opt,name=dest_addr,json=destAddr,proto3" json:"dest_addr,omitempty"`
-	RuleId         string                 `protobuf:"bytes,9,opt,name=rule_id,json=ruleId,proto3" json:"rule_id,omitempty"`
-	RuleName       string                 `protobuf:"bytes,10,opt,name=rule_name,json=ruleName,proto3" json:"rule_name,omitempty"`
-	Geo            *common.GeoInfo        `protobuf:"bytes,11,opt,name=geo,proto3" json:"geo,omitempty"`
-	Timestamp      *timestamp.Timestamp   `protobuf:"bytes,12,opt,name=timestamp,proto3" json:"timestamp,omitempty"`
-	TlsCn          string                 `protobuf:"bytes,13,opt,name=tls_cn,json=tlsCn,proto3" json:"tls_cn,omitempty"`                            // TLS Common Name (if present)
-	TlsFingerprint string                 `protobuf:"bytes,14,opt,name=tls_fingerprint,json=tlsFingerprint,proto3" json:"tls_fingerprint,omitempty"` // TLS fingerprint (if present)
-	unknownFields  protoimpl.UnknownFields
-	sizeCache      protoimpl.SizeCache
+	state                 protoimpl.MessageState  `protogen:"open.v1"`
+	RequestId             string                  `protobuf:"bytes,1,opt,name=request_id,json=requestId,proto3" json:"request_id,omitempty"`
+	NodeId                string                  `protobuf:"bytes,2,opt,name=node_id,json=nodeId,proto3" json:"node_id,omitempty"`
+	NodeName              string                  `protobuf:"bytes,3,opt,name=node_name,json=nodeName,proto3" json:"node_name,omitempty"`
+	ProxyId               string                  `protobuf:"bytes,4,opt,name=proxy_id,json=proxyId,proto3" json:"proxy_id,omitempty"`
+	ProxyName             string                  `protobuf:"bytes,5,opt,name=proxy_name,json=proxyName,proto3" json:"proxy_name,omitempty"`
+	SourceIp              string                  `protobuf:"bytes,6,opt,name=source_ip,json=sourceIp,proto3" json:"source_ip,omitempty"`
+	SourcePort            int32                   `protobuf:"varint,7,opt,name=source_port,json=sourcePort,proto3" json:"source_port,omitempty"`
+	DestAddr              string                  `protobuf:"bytes,8,opt,name=dest_addr,json=destAddr,proto3" json:"dest_addr,omitempty"`
+	RuleId                string                  `protobuf:"bytes,9,opt,name=rule_id,json=ruleId,proto3" json:"rule_id,omitempty"`
+	RuleName              string                  `protobuf:"bytes,10,opt,name=rule_name,json=ruleName,proto3" json:"rule_name,omitempty"`
+	Geo                   *common.GeoInfo         `protobuf:"bytes,11,opt,name=geo,proto3" json:"geo,omitempty"`
+	Timestamp             *timestamp.Timestamp    `protobuf:"bytes,12,opt,name=timestamp,proto3" json:"timestamp,omitempty"`
+	TlsCn                 string                  `protobuf:"bytes,13,opt,name=tls_cn,json=tlsCn,proto3" json:"tls_cn,omitempty"`                            // TLS Common Name (if present)
+	TlsFingerprint        string                  `protobuf:"bytes,14,opt,name=tls_fingerprint,json=tlsFingerprint,proto3" json:"tls_fingerprint,omitempty"` // TLS fingerprint (if present)
+	BackendChoices        []*common.BackendChoice `protobuf:"bytes,15,rep,name=backend_choices,json=backendChoices,proto3" json:"backend_choices,omitempty"`
+	SelectedTargetBackend string                  `protobuf:"bytes,16,opt,name=selected_target_backend,json=selectedTargetBackend,proto3" json:"selected_target_backend,omitempty"` // Default for the dropdown (rule.target_backend or proxy default).
+	unknownFields         protoimpl.UnknownFields
+	sizeCache             protoimpl.SizeCache
 }
 
 func (x *ApprovalRequest) Reset() {
@@ -5147,6 +5157,20 @@ func (x *ApprovalRequest) GetTlsCn() string {
 func (x *ApprovalRequest) GetTlsFingerprint() string {
 	if x != nil {
 		return x.TlsFingerprint
+	}
+	return ""
+}
+
+func (x *ApprovalRequest) GetBackendChoices() []*common.BackendChoice {
+	if x != nil {
+		return x.BackendChoices
+	}
+	return nil
+}
+
+func (x *ApprovalRequest) GetSelectedTargetBackend() string {
+	if x != nil {
+		return x.SelectedTargetBackend
 	}
 	return ""
 }
@@ -5416,13 +5440,14 @@ func (x *GetApprovalsSnapshotResponse) GetRecommendedPollIntervalSeconds() int32
 }
 
 type ApproveRequestRequest struct {
-	state           protoimpl.MessageState       `protogen:"open.v1"`
-	RequestId       string                       `protobuf:"bytes,1,opt,name=request_id,json=requestId,proto3" json:"request_id,omitempty"`
-	RetentionMode   common.ApprovalRetentionMode `protobuf:"varint,2,opt,name=retention_mode,json=retentionMode,proto3,enum=nitella.ApprovalRetentionMode" json:"retention_mode,omitempty"` // UNSPECIFIED -> CACHE
-	DurationSeconds int64                        `protobuf:"varint,3,opt,name=duration_seconds,json=durationSeconds,proto3" json:"duration_seconds,omitempty"`                              // CACHE: cache TTL, CONNECTION_ONLY: max lifetime (0 = until close)
-	CreateRule      bool                         `protobuf:"varint,4,opt,name=create_rule,json=createRule,proto3" json:"create_rule,omitempty"`                                             // Create permanent allow rule
-	unknownFields   protoimpl.UnknownFields
-	sizeCache       protoimpl.SizeCache
+	state                 protoimpl.MessageState       `protogen:"open.v1"`
+	RequestId             string                       `protobuf:"bytes,1,opt,name=request_id,json=requestId,proto3" json:"request_id,omitempty"`
+	RetentionMode         common.ApprovalRetentionMode `protobuf:"varint,2,opt,name=retention_mode,json=retentionMode,proto3,enum=nitella.ApprovalRetentionMode" json:"retention_mode,omitempty"` // UNSPECIFIED -> CACHE
+	DurationSeconds       int64                        `protobuf:"varint,3,opt,name=duration_seconds,json=durationSeconds,proto3" json:"duration_seconds,omitempty"`                              // CACHE: cache TTL, CONNECTION_ONLY: max lifetime (0 = until close)
+	CreateRule            bool                         `protobuf:"varint,4,opt,name=create_rule,json=createRule,proto3" json:"create_rule,omitempty"`                                             // Create permanent allow rule
+	TargetBackendOverride string                       `protobuf:"bytes,5,opt,name=target_backend_override,json=targetBackendOverride,proto3" json:"target_backend_override,omitempty"`
+	unknownFields         protoimpl.UnknownFields
+	sizeCache             protoimpl.SizeCache
 }
 
 func (x *ApproveRequestRequest) Reset() {
@@ -5481,6 +5506,13 @@ func (x *ApproveRequestRequest) GetCreateRule() bool {
 		return x.CreateRule
 	}
 	return false
+}
+
+func (x *ApproveRequestRequest) GetTargetBackendOverride() string {
+	if x != nil {
+		return x.TargetBackendOverride
+	}
+	return ""
 }
 
 type ApproveRequestResponse struct {
@@ -5720,14 +5752,15 @@ func (x *DenyRequestResponse) GetHistoryError() string {
 }
 
 type ResolveApprovalDecisionRequest struct {
-	state           protoimpl.MessageState       `protogen:"open.v1"`
-	RequestId       string                       `protobuf:"bytes,1,opt,name=request_id,json=requestId,proto3" json:"request_id,omitempty"`
-	Decision        ApprovalDecision             `protobuf:"varint,2,opt,name=decision,proto3,enum=nitella.local.ApprovalDecision" json:"decision,omitempty"`
-	RetentionMode   common.ApprovalRetentionMode `protobuf:"varint,3,opt,name=retention_mode,json=retentionMode,proto3,enum=nitella.ApprovalRetentionMode" json:"retention_mode,omitempty"` // UNSPECIFIED -> CACHE
-	DurationSeconds int64                        `protobuf:"varint,4,opt,name=duration_seconds,json=durationSeconds,proto3" json:"duration_seconds,omitempty"`                              // CACHE: cache TTL, CONNECTION_ONLY: max lifetime
-	DenyBlockType   DenyBlockType                `protobuf:"varint,5,opt,name=deny_block_type,json=denyBlockType,proto3,enum=nitella.local.DenyBlockType" json:"deny_block_type,omitempty"`
-	unknownFields   protoimpl.UnknownFields
-	sizeCache       protoimpl.SizeCache
+	state                 protoimpl.MessageState       `protogen:"open.v1"`
+	RequestId             string                       `protobuf:"bytes,1,opt,name=request_id,json=requestId,proto3" json:"request_id,omitempty"`
+	Decision              ApprovalDecision             `protobuf:"varint,2,opt,name=decision,proto3,enum=nitella.local.ApprovalDecision" json:"decision,omitempty"`
+	RetentionMode         common.ApprovalRetentionMode `protobuf:"varint,3,opt,name=retention_mode,json=retentionMode,proto3,enum=nitella.ApprovalRetentionMode" json:"retention_mode,omitempty"` // UNSPECIFIED -> CACHE
+	DurationSeconds       int64                        `protobuf:"varint,4,opt,name=duration_seconds,json=durationSeconds,proto3" json:"duration_seconds,omitempty"`                              // CACHE: cache TTL, CONNECTION_ONLY: max lifetime
+	DenyBlockType         DenyBlockType                `protobuf:"varint,5,opt,name=deny_block_type,json=denyBlockType,proto3,enum=nitella.local.DenyBlockType" json:"deny_block_type,omitempty"`
+	TargetBackendOverride string                       `protobuf:"bytes,6,opt,name=target_backend_override,json=targetBackendOverride,proto3" json:"target_backend_override,omitempty"`
+	unknownFields         protoimpl.UnknownFields
+	sizeCache             protoimpl.SizeCache
 }
 
 func (x *ResolveApprovalDecisionRequest) Reset() {
@@ -5793,6 +5826,13 @@ func (x *ResolveApprovalDecisionRequest) GetDenyBlockType() DenyBlockType {
 		return x.DenyBlockType
 	}
 	return DenyBlockType_DENY_BLOCK_TYPE_NONE
+}
+
+func (x *ResolveApprovalDecisionRequest) GetTargetBackendOverride() string {
+	if x != nil {
+		return x.TargetBackendOverride
+	}
+	return ""
 }
 
 type ResolveApprovalDecisionResponse struct {
@@ -15989,7 +16029,7 @@ const file_local_nitella_local_proto_rawDesc = "" +
 	"\rtotal_proxies\x18\x03 \x01(\x05R\ftotalProxies\"E\n" +
 	"\x0fGetProxyRequest\x12\x17\n" +
 	"\anode_id\x18\x01 \x01(\tR\x06nodeId\x12\x19\n" +
-	"\bproxy_id\x18\x02 \x01(\tR\aproxyId\"\xd7\x03\n" +
+	"\bproxy_id\x18\x02 \x01(\tR\aproxyId\"\x9c\x04\n" +
 	"\x0fAddProxyRequest\x12\x17\n" +
 	"\anode_id\x18\x01 \x01(\tR\x06nodeId\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\x12\x1f\n" +
@@ -16004,7 +16044,8 @@ const file_local_nitella_local_proto_rawDesc = "" +
 	"\bcert_pem\x18\n" +
 	" \x01(\tR\acertPem\x12\x17\n" +
 	"\akey_pem\x18\v \x01(\tR\x06keyPem\x12\x15\n" +
-	"\x06ca_pem\x18\f \x01(\tR\x05caPem\"\x81\x04\n" +
+	"\x06ca_pem\x18\f \x01(\tR\x05caPem\x12C\n" +
+	"\x11approval_backends\x18\r \x03(\v2\x16.nitella.BackendChoiceR\x10approvalBackends\"\x81\x04\n" +
 	"\x12UpdateProxyRequest\x12\x17\n" +
 	"\anode_id\x18\x01 \x01(\tR\x06nodeId\x12\x19\n" +
 	"\bproxy_id\x18\x02 \x01(\tR\aproxyId\x12\x12\n" +
@@ -16127,7 +16168,7 @@ const file_local_nitella_local_proto_rawDesc = "" +
 	"\arule_id\x18\x02 \x01(\tR\x06ruleId\"J\n" +
 	"\x18RemoveGlobalRuleResponse\x12\x18\n" +
 	"\asuccess\x18\x01 \x01(\bR\asuccess\x12\x14\n" +
-	"\x05error\x18\x02 \x01(\tR\x05error\"\xcf\x03\n" +
+	"\x05error\x18\x02 \x01(\tR\x05error\"\xc8\x04\n" +
 	"\x0fApprovalRequest\x12\x1d\n" +
 	"\n" +
 	"request_id\x18\x01 \x01(\tR\trequestId\x12\x17\n" +
@@ -16146,7 +16187,9 @@ const file_local_nitella_local_proto_rawDesc = "" +
 	"\x03geo\x18\v \x01(\v2\x10.nitella.GeoInfoR\x03geo\x128\n" +
 	"\ttimestamp\x18\f \x01(\v2\x1a.google.protobuf.TimestampR\ttimestamp\x12\x15\n" +
 	"\x06tls_cn\x18\r \x01(\tR\x05tlsCn\x12'\n" +
-	"\x0ftls_fingerprint\x18\x0e \x01(\tR\x0etlsFingerprint\"6\n" +
+	"\x0ftls_fingerprint\x18\x0e \x01(\tR\x0etlsFingerprint\x12?\n" +
+	"\x0fbackend_choices\x18\x0f \x03(\v2\x16.nitella.BackendChoiceR\x0ebackendChoices\x126\n" +
+	"\x17selected_target_backend\x18\x10 \x01(\tR\x15selectedTargetBackend\"6\n" +
 	"\x1bListPendingApprovalsRequest\x12\x17\n" +
 	"\anode_id\x18\x01 \x01(\tR\x06nodeId\"{\n" +
 	"\x1cListPendingApprovalsResponse\x12:\n" +
@@ -16166,14 +16209,15 @@ const file_local_nitella_local_proto_rawDesc = "" +
 	"\x18approve_duration_options\x18\x05 \x03(\x03R\x16approveDurationOptions\x12G\n" +
 	" default_approve_duration_seconds\x18\x06 \x01(\x03R\x1ddefaultApproveDurationSeconds\x12J\n" +
 	"\x12deny_block_options\x18\a \x03(\x0e2\x1c.nitella.local.DenyBlockTypeR\x10denyBlockOptions\x12I\n" +
-	"!recommended_poll_interval_seconds\x18\b \x01(\x05R\x1erecommendedPollIntervalSeconds\"\xc9\x01\n" +
+	"!recommended_poll_interval_seconds\x18\b \x01(\x05R\x1erecommendedPollIntervalSeconds\"\x81\x02\n" +
 	"\x15ApproveRequestRequest\x12\x1d\n" +
 	"\n" +
 	"request_id\x18\x01 \x01(\tR\trequestId\x12E\n" +
 	"\x0eretention_mode\x18\x02 \x01(\x0e2\x1e.nitella.ApprovalRetentionModeR\rretentionMode\x12)\n" +
 	"\x10duration_seconds\x18\x03 \x01(\x03R\x0fdurationSeconds\x12\x1f\n" +
 	"\vcreate_rule\x18\x04 \x01(\bR\n" +
-	"createRule\"\xde\x01\n" +
+	"createRule\x126\n" +
+	"\x17target_backend_override\x18\x05 \x01(\tR\x15targetBackendOverride\"\xde\x01\n" +
 	"\x16ApproveRequestResponse\x12\x18\n" +
 	"\asuccess\x18\x01 \x01(\bR\asuccess\x12\x14\n" +
 	"\x05error\x18\x02 \x01(\tR\x05error\x12\x17\n" +
@@ -16194,14 +16238,15 @@ const file_local_nitella_local_proto_rawDesc = "" +
 	"\arule_id\x18\x03 \x01(\tR\x06ruleId\x12)\n" +
 	"\x10decision_applied\x18\x04 \x01(\bR\x0fdecisionApplied\x12+\n" +
 	"\x11history_persisted\x18\x05 \x01(\bR\x10historyPersisted\x12#\n" +
-	"\rhistory_error\x18\x06 \x01(\tR\fhistoryError\"\xb4\x02\n" +
+	"\rhistory_error\x18\x06 \x01(\tR\fhistoryError\"\xec\x02\n" +
 	"\x1eResolveApprovalDecisionRequest\x12\x1d\n" +
 	"\n" +
 	"request_id\x18\x01 \x01(\tR\trequestId\x12;\n" +
 	"\bdecision\x18\x02 \x01(\x0e2\x1f.nitella.local.ApprovalDecisionR\bdecision\x12E\n" +
 	"\x0eretention_mode\x18\x03 \x01(\x0e2\x1e.nitella.ApprovalRetentionModeR\rretentionMode\x12)\n" +
 	"\x10duration_seconds\x18\x04 \x01(\x03R\x0fdurationSeconds\x12D\n" +
-	"\x0fdeny_block_type\x18\x05 \x01(\x0e2\x1c.nitella.local.DenyBlockTypeR\rdenyBlockType\"\xe7\x01\n" +
+	"\x0fdeny_block_type\x18\x05 \x01(\x0e2\x1c.nitella.local.DenyBlockTypeR\rdenyBlockType\x126\n" +
+	"\x17target_backend_override\x18\x06 \x01(\tR\x15targetBackendOverride\"\xe7\x01\n" +
 	"\x1fResolveApprovalDecisionResponse\x12\x18\n" +
 	"\asuccess\x18\x01 \x01(\bR\asuccess\x12\x14\n" +
 	"\x05error\x18\x02 \x01(\tR\x05error\x12\x17\n" +
@@ -17530,18 +17575,19 @@ var file_local_nitella_local_proto_goTypes = []any{
 	(common.ActionType)(0),                   // 240: nitella.ActionType
 	(common.FallbackAction)(0),               // 241: nitella.FallbackAction
 	(common.MockPreset)(0),                   // 242: nitella.MockPreset
-	(common.ConditionType)(0),                // 243: nitella.ConditionType
-	(common.Operator)(0),                     // 244: nitella.Operator
-	(*proxy.GlobalRule)(nil),                 // 245: nitella.proxy.GlobalRule
-	(*common.GeoInfo)(nil),                   // 246: nitella.GeoInfo
-	(common.ApprovalRetentionMode)(0),        // 247: nitella.ApprovalRetentionMode
-	(common.SortOrder)(0),                    // 248: nitella.SortOrder
-	(common.P2PMode)(0),                      // 249: nitella.P2PMode
-	(*proxy.ConfigureGeoIPRequest)(nil),      // 250: nitella.proxy.ConfigureGeoIPRequest
-	(*empty.Empty)(nil),                      // 251: google.protobuf.Empty
-	(*proxy.ConfigureGeoIPResponse)(nil),     // 252: nitella.proxy.ConfigureGeoIPResponse
-	(*proxy.GetGeoIPStatusResponse)(nil),     // 253: nitella.proxy.GetGeoIPStatusResponse
-	(*proxy.RestartListenersResponse)(nil),   // 254: nitella.proxy.RestartListenersResponse
+	(*common.BackendChoice)(nil),             // 243: nitella.BackendChoice
+	(common.ConditionType)(0),                // 244: nitella.ConditionType
+	(common.Operator)(0),                     // 245: nitella.Operator
+	(*proxy.GlobalRule)(nil),                 // 246: nitella.proxy.GlobalRule
+	(*common.GeoInfo)(nil),                   // 247: nitella.GeoInfo
+	(common.ApprovalRetentionMode)(0),        // 248: nitella.ApprovalRetentionMode
+	(common.SortOrder)(0),                    // 249: nitella.SortOrder
+	(common.P2PMode)(0),                      // 250: nitella.P2PMode
+	(*proxy.ConfigureGeoIPRequest)(nil),      // 251: nitella.proxy.ConfigureGeoIPRequest
+	(*empty.Empty)(nil),                      // 252: google.protobuf.Empty
+	(*proxy.ConfigureGeoIPResponse)(nil),     // 253: nitella.proxy.ConfigureGeoIPResponse
+	(*proxy.GetGeoIPStatusResponse)(nil),     // 254: nitella.proxy.GetGeoIPStatusResponse
+	(*proxy.RestartListenersResponse)(nil),   // 255: nitella.proxy.RestartListenersResponse
 }
 var file_local_nitella_local_proto_depIdxs = []int32{
 	5,   // 0: nitella.local.BootstrapStateResponse.stage:type_name -> nitella.local.BootstrapStage
@@ -17574,383 +17620,385 @@ var file_local_nitella_local_proto_depIdxs = []int32{
 	241, // 27: nitella.local.AddProxyRequest.fallback_action:type_name -> nitella.FallbackAction
 	242, // 28: nitella.local.AddProxyRequest.default_mock:type_name -> nitella.MockPreset
 	242, // 29: nitella.local.AddProxyRequest.fallback_mock:type_name -> nitella.MockPreset
-	240, // 30: nitella.local.UpdateProxyRequest.default_action:type_name -> nitella.ActionType
-	241, // 31: nitella.local.UpdateProxyRequest.fallback_action:type_name -> nitella.FallbackAction
-	242, // 32: nitella.local.UpdateProxyRequest.default_mock:type_name -> nitella.MockPreset
-	242, // 33: nitella.local.UpdateProxyRequest.fallback_mock:type_name -> nitella.MockPreset
-	239, // 34: nitella.local.UpdateProxyRequest.update_mask:type_name -> google.protobuf.FieldMask
-	238, // 35: nitella.local.ListRulesResponse.rules:type_name -> nitella.proxy.Rule
-	57,  // 36: nitella.local.ListRulesResponse.composer_policy:type_name -> nitella.local.RuleComposerPolicy
-	243, // 37: nitella.local.RuleComposerConditionPolicy.condition_type:type_name -> nitella.ConditionType
-	244, // 38: nitella.local.RuleComposerConditionPolicy.operators:type_name -> nitella.Operator
-	244, // 39: nitella.local.RuleComposerConditionPolicy.default_operator:type_name -> nitella.Operator
-	56,  // 40: nitella.local.RuleComposerPolicy.condition_policies:type_name -> nitella.local.RuleComposerConditionPolicy
-	240, // 41: nitella.local.RuleComposerPolicy.allowed_actions:type_name -> nitella.ActionType
-	238, // 42: nitella.local.AddRuleRequest.rule:type_name -> nitella.proxy.Rule
-	240, // 43: nitella.local.AddQuickRuleRequest.action:type_name -> nitella.ActionType
-	243, // 44: nitella.local.AddQuickRuleRequest.condition_type:type_name -> nitella.ConditionType
-	238, // 45: nitella.local.UpdateRuleRequest.rule:type_name -> nitella.proxy.Rule
-	239, // 46: nitella.local.UpdateRuleRequest.update_mask:type_name -> google.protobuf.FieldMask
-	240, // 47: nitella.local.AddGlobalRuleRequest.action:type_name -> nitella.ActionType
-	245, // 48: nitella.local.ListGlobalRulesResponse.rules:type_name -> nitella.proxy.GlobalRule
-	246, // 49: nitella.local.ApprovalRequest.geo:type_name -> nitella.GeoInfo
-	237, // 50: nitella.local.ApprovalRequest.timestamp:type_name -> google.protobuf.Timestamp
-	76,  // 51: nitella.local.ListPendingApprovalsResponse.requests:type_name -> nitella.local.ApprovalRequest
-	76,  // 52: nitella.local.GetApprovalsSnapshotResponse.pending_requests:type_name -> nitella.local.ApprovalRequest
-	88,  // 53: nitella.local.GetApprovalsSnapshotResponse.history_entries:type_name -> nitella.local.ApprovalHistoryEntry
-	8,   // 54: nitella.local.GetApprovalsSnapshotResponse.deny_block_options:type_name -> nitella.local.DenyBlockType
-	247, // 55: nitella.local.ApproveRequestRequest.retention_mode:type_name -> nitella.ApprovalRetentionMode
-	247, // 56: nitella.local.DenyRequestRequest.retention_mode:type_name -> nitella.ApprovalRetentionMode
-	8,   // 57: nitella.local.DenyRequestRequest.block_type:type_name -> nitella.local.DenyBlockType
-	9,   // 58: nitella.local.ResolveApprovalDecisionRequest.decision:type_name -> nitella.local.ApprovalDecision
-	247, // 59: nitella.local.ResolveApprovalDecisionRequest.retention_mode:type_name -> nitella.ApprovalRetentionMode
-	8,   // 60: nitella.local.ResolveApprovalDecisionRequest.deny_block_type:type_name -> nitella.local.DenyBlockType
-	246, // 61: nitella.local.ApprovalHistoryEntry.geo:type_name -> nitella.GeoInfo
-	10,  // 62: nitella.local.ApprovalHistoryEntry.action:type_name -> nitella.local.ApprovalHistoryAction
-	8,   // 63: nitella.local.ApprovalHistoryEntry.block_type:type_name -> nitella.local.DenyBlockType
-	237, // 64: nitella.local.ApprovalHistoryEntry.decided_at:type_name -> google.protobuf.Timestamp
-	88,  // 65: nitella.local.ListApprovalHistoryResponse.entries:type_name -> nitella.local.ApprovalHistoryEntry
-	237, // 66: nitella.local.ConnectionInfo.start_time:type_name -> google.protobuf.Timestamp
-	246, // 67: nitella.local.ConnectionInfo.geo:type_name -> nitella.GeoInfo
-	240, // 68: nitella.local.ConnectionInfo.action:type_name -> nitella.ActionType
-	95,  // 69: nitella.local.ListConnectionsResponse.connections:type_name -> nitella.local.ConnectionInfo
-	248, // 70: nitella.local.GetIPStatsRequest.sort_by:type_name -> nitella.SortOrder
-	237, // 71: nitella.local.IPStats.first_seen:type_name -> google.protobuf.Timestamp
-	237, // 72: nitella.local.IPStats.last_seen:type_name -> google.protobuf.Timestamp
-	99,  // 73: nitella.local.GetIPStatsResponse.stats:type_name -> nitella.local.IPStats
-	0,   // 74: nitella.local.GetGeoStatsRequest.type:type_name -> nitella.local.GeoStatsType
-	0,   // 75: nitella.local.GeoStats.type:type_name -> nitella.local.GeoStatsType
-	102, // 76: nitella.local.GetGeoStatsResponse.stats:type_name -> nitella.local.GeoStats
-	11,  // 77: nitella.local.ConnectionEvent.event_type:type_name -> nitella.local.ConnectionEvent.EventType
-	237, // 78: nitella.local.ConnectionEvent.timestamp:type_name -> google.protobuf.Timestamp
-	240, // 79: nitella.local.ConnectionEvent.action_taken:type_name -> nitella.ActionType
-	246, // 80: nitella.local.ConnectionEvent.geo:type_name -> nitella.GeoInfo
-	28,  // 81: nitella.local.CompletePairingResponse.node:type_name -> nitella.local.NodeInfo
-	28,  // 82: nitella.local.FinalizePairingResponse.node:type_name -> nitella.local.NodeInfo
-	28,  // 83: nitella.local.GenerateQRReplyResponse.node:type_name -> nitella.local.NodeInfo
-	237, // 84: nitella.local.Template.created_at:type_name -> google.protobuf.Timestamp
-	237, // 85: nitella.local.Template.updated_at:type_name -> google.protobuf.Timestamp
-	128, // 86: nitella.local.Template.proxies:type_name -> nitella.local.ProxyTemplate
-	240, // 87: nitella.local.ProxyTemplate.default_action:type_name -> nitella.ActionType
-	241, // 88: nitella.local.ProxyTemplate.fallback_action:type_name -> nitella.FallbackAction
-	238, // 89: nitella.local.ProxyTemplate.rules:type_name -> nitella.proxy.Rule
-	127, // 90: nitella.local.ListTemplatesResponse.templates:type_name -> nitella.local.Template
-	127, // 91: nitella.local.ExportTemplateYamlResponse.template:type_name -> nitella.local.Template
-	127, // 92: nitella.local.ImportTemplateYamlResponse.template:type_name -> nitella.local.Template
-	249, // 93: nitella.local.Settings.p2p_mode:type_name -> nitella.P2PMode
-	1,   // 94: nitella.local.Settings.theme:type_name -> nitella.local.Theme
-	141, // 95: nitella.local.UpdateSettingsRequest.settings:type_name -> nitella.local.Settings
-	239, // 96: nitella.local.UpdateSettingsRequest.update_mask:type_name -> google.protobuf.FieldMask
-	16,  // 97: nitella.local.SettingsOverviewSnapshot.identity:type_name -> nitella.local.IdentityInfo
-	150, // 98: nitella.local.SettingsOverviewSnapshot.hub:type_name -> nitella.local.HubSettingsSnapshot
-	171, // 99: nitella.local.SettingsOverviewSnapshot.p2p:type_name -> nitella.local.P2PSettingsSnapshot
-	4,   // 100: nitella.local.RegisterFCMTokenRequest.device_type:type_name -> nitella.local.DeviceType
-	237, // 101: nitella.local.HubStatus.connected_since:type_name -> google.protobuf.Timestamp
-	149, // 102: nitella.local.HubSettingsSnapshot.status:type_name -> nitella.local.HubStatus
-	141, // 103: nitella.local.HubSettingsSnapshot.settings:type_name -> nitella.local.Settings
-	159, // 104: nitella.local.HubSettingsSnapshot.pending_trust_challenge:type_name -> nitella.local.HubTrustChallenge
-	151, // 105: nitella.local.HubDashboardSnapshot.overview:type_name -> nitella.local.HubOverview
-	28,  // 106: nitella.local.HubDashboardSnapshot.nodes:type_name -> nitella.local.NodeInfo
-	28,  // 107: nitella.local.HubDashboardSnapshot.pinned_nodes:type_name -> nitella.local.NodeInfo
-	12,  // 108: nitella.local.OnboardHubResponse.stage:type_name -> nitella.local.OnboardHubResponse.Stage
-	159, // 109: nitella.local.OnboardHubResponse.trust_challenge:type_name -> nitella.local.HubTrustChallenge
-	246, // 110: nitella.local.LookupIPResponse.geo:type_name -> nitella.GeoInfo
-	250, // 111: nitella.local.ConfigureGeoIPNodeRequest.config:type_name -> nitella.proxy.ConfigureGeoIPRequest
-	237, // 112: nitella.local.NodeStatusChange.timestamp:type_name -> google.protobuf.Timestamp
-	2,   // 113: nitella.local.Alert.severity:type_name -> nitella.local.AlertSeverity
-	237, // 114: nitella.local.Alert.timestamp:type_name -> google.protobuf.Timestamp
-	233, // 115: nitella.local.Alert.metadata:type_name -> nitella.local.Alert.MetadataEntry
-	3,   // 116: nitella.local.ToastMessage.type:type_name -> nitella.local.ToastType
-	249, // 117: nitella.local.P2PStatus.mode:type_name -> nitella.P2PMode
-	170, // 118: nitella.local.P2PSettingsSnapshot.status:type_name -> nitella.local.P2PStatus
-	141, // 119: nitella.local.P2PSettingsSnapshot.settings:type_name -> nitella.local.Settings
-	249, // 120: nitella.local.SetP2PModeRequest.mode:type_name -> nitella.P2PMode
-	237, // 121: nitella.local.LocalProxyConfig.created_at:type_name -> google.protobuf.Timestamp
-	237, // 122: nitella.local.LocalProxyConfig.updated_at:type_name -> google.protobuf.Timestamp
-	237, // 123: nitella.local.LocalProxyConfig.synced_at:type_name -> google.protobuf.Timestamp
-	173, // 124: nitella.local.ListLocalProxyConfigsResponse.proxies:type_name -> nitella.local.LocalProxyConfig
-	173, // 125: nitella.local.GetLocalProxyConfigResponse.proxy:type_name -> nitella.local.LocalProxyConfig
-	173, // 126: nitella.local.ImportLocalProxyConfigResponse.proxy:type_name -> nitella.local.LocalProxyConfig
-	173, // 127: nitella.local.SaveLocalProxyConfigResponse.proxy:type_name -> nitella.local.LocalProxyConfig
-	173, // 128: nitella.local.PushLocalProxyRevisionResponse.local_proxy:type_name -> nitella.local.LocalProxyConfig
-	173, // 129: nitella.local.PullProxyRevisionResponse.local_proxy:type_name -> nitella.local.LocalProxyConfig
-	196, // 130: nitella.local.ListProxyRevisionsResponse.revisions:type_name -> nitella.local.ProxyRevisionMeta
-	237, // 131: nitella.local.ProxyRevisionMeta.created_at:type_name -> google.protobuf.Timestamp
-	201, // 132: nitella.local.ListProxyConfigsResponse.proxies:type_name -> nitella.local.ProxyConfigInfo
-	237, // 133: nitella.local.ProxyConfigInfo.updated_at:type_name -> google.protobuf.Timestamp
-	212, // 134: nitella.local.GetAppliedProxiesResponse.proxies:type_name -> nitella.local.AppliedProxy
-	218, // 135: nitella.local.DebugRuntimeStats.grpc_connections:type_name -> nitella.local.DebugGrpcConnection
-	219, // 136: nitella.local.DebugRuntimeStats.goroutine_diff_entries:type_name -> nitella.local.DebugGoroutineDiffEntry
-	237, // 137: nitella.local.DebugRuntimeStats.goroutine_diff_prev_at:type_name -> google.protobuf.Timestamp
-	237, // 138: nitella.local.DebugRuntimeStats.goroutine_diff_curr_at:type_name -> google.protobuf.Timestamp
-	237, // 139: nitella.local.GetLogsStatsResponse.oldest_log:type_name -> google.protobuf.Timestamp
-	237, // 140: nitella.local.GetLogsStatsResponse.newest_log:type_name -> google.protobuf.Timestamp
-	234, // 141: nitella.local.GetLogsStatsResponse.logs_by_routing_token:type_name -> nitella.local.GetLogsStatsResponse.LogsByRoutingTokenEntry
-	235, // 142: nitella.local.GetLogsStatsResponse.storage_by_routing_token:type_name -> nitella.local.GetLogsStatsResponse.StorageByRoutingTokenEntry
-	224, // 143: nitella.local.ListLogsResponse.logs:type_name -> nitella.local.LogEntry
-	237, // 144: nitella.local.LogEntry.timestamp:type_name -> google.protobuf.Timestamp
-	237, // 145: nitella.local.DeleteLogsRequest.before:type_name -> google.protobuf.Timestamp
-	236, // 146: nitella.local.CleanupOldLogsResponse.deleted_by_routing_token:type_name -> nitella.local.CleanupOldLogsResponse.DeletedByRoutingTokenEntry
-	237, // 147: nitella.local.GetNodeFromHubResponse.last_seen:type_name -> google.protobuf.Timestamp
-	13,  // 148: nitella.local.MobileLogicService.Initialize:input_type -> nitella.local.InitializeRequest
-	251, // 149: nitella.local.MobileLogicService.Shutdown:input_type -> google.protobuf.Empty
-	251, // 150: nitella.local.MobileLogicService.GetBootstrapState:input_type -> google.protobuf.Empty
-	251, // 151: nitella.local.MobileLogicService.GetIdentity:input_type -> google.protobuf.Empty
-	17,  // 152: nitella.local.MobileLogicService.CreateIdentity:input_type -> nitella.local.CreateIdentityRequest
-	19,  // 153: nitella.local.MobileLogicService.RestoreIdentity:input_type -> nitella.local.RestoreIdentityRequest
-	21,  // 154: nitella.local.MobileLogicService.ImportIdentity:input_type -> nitella.local.ImportIdentityRequest
-	23,  // 155: nitella.local.MobileLogicService.UnlockIdentity:input_type -> nitella.local.UnlockIdentityRequest
-	251, // 156: nitella.local.MobileLogicService.LockIdentity:input_type -> google.protobuf.Empty
-	25,  // 157: nitella.local.MobileLogicService.ChangePassphrase:input_type -> nitella.local.ChangePassphraseRequest
-	26,  // 158: nitella.local.MobileLogicService.EvaluatePassphrase:input_type -> nitella.local.EvaluatePassphraseRequest
-	251, // 159: nitella.local.MobileLogicService.ResetIdentity:input_type -> google.protobuf.Empty
-	30,  // 160: nitella.local.MobileLogicService.ListNodes:input_type -> nitella.local.ListNodesRequest
-	32,  // 161: nitella.local.MobileLogicService.GetNode:input_type -> nitella.local.GetNodeRequest
-	33,  // 162: nitella.local.MobileLogicService.GetNodeDetailSnapshot:input_type -> nitella.local.GetNodeDetailSnapshotRequest
-	36,  // 163: nitella.local.MobileLogicService.UpdateNode:input_type -> nitella.local.UpdateNodeRequest
-	37,  // 164: nitella.local.MobileLogicService.RemoveNode:input_type -> nitella.local.RemoveNodeRequest
-	38,  // 165: nitella.local.MobileLogicService.AddNodeDirect:input_type -> nitella.local.AddNodeDirectRequest
-	40,  // 166: nitella.local.MobileLogicService.TestDirectConnection:input_type -> nitella.local.TestDirectConnectionRequest
-	43,  // 167: nitella.local.MobileLogicService.ListProxies:input_type -> nitella.local.ListProxiesRequest
-	45,  // 168: nitella.local.MobileLogicService.GetProxiesSnapshot:input_type -> nitella.local.GetProxiesSnapshotRequest
-	48,  // 169: nitella.local.MobileLogicService.GetProxy:input_type -> nitella.local.GetProxyRequest
-	49,  // 170: nitella.local.MobileLogicService.AddProxy:input_type -> nitella.local.AddProxyRequest
-	50,  // 171: nitella.local.MobileLogicService.UpdateProxy:input_type -> nitella.local.UpdateProxyRequest
-	52,  // 172: nitella.local.MobileLogicService.SetNodeProxiesRunning:input_type -> nitella.local.SetNodeProxiesRunningRequest
-	51,  // 173: nitella.local.MobileLogicService.RemoveProxy:input_type -> nitella.local.RemoveProxyRequest
-	54,  // 174: nitella.local.MobileLogicService.ListRules:input_type -> nitella.local.ListRulesRequest
-	58,  // 175: nitella.local.MobileLogicService.GetRule:input_type -> nitella.local.GetRuleRequest
-	59,  // 176: nitella.local.MobileLogicService.AddRule:input_type -> nitella.local.AddRuleRequest
-	60,  // 177: nitella.local.MobileLogicService.AddQuickRule:input_type -> nitella.local.AddQuickRuleRequest
-	62,  // 178: nitella.local.MobileLogicService.UpdateRule:input_type -> nitella.local.UpdateRuleRequest
-	63,  // 179: nitella.local.MobileLogicService.RemoveRule:input_type -> nitella.local.RemoveRuleRequest
-	64,  // 180: nitella.local.MobileLogicService.BlockIP:input_type -> nitella.local.BlockIPRequest
-	66,  // 181: nitella.local.MobileLogicService.BlockISP:input_type -> nitella.local.BlockISPRequest
-	68,  // 182: nitella.local.MobileLogicService.BlockCountry:input_type -> nitella.local.BlockCountryRequest
-	70,  // 183: nitella.local.MobileLogicService.AddGlobalRule:input_type -> nitella.local.AddGlobalRuleRequest
-	72,  // 184: nitella.local.MobileLogicService.ListGlobalRules:input_type -> nitella.local.ListGlobalRulesRequest
-	74,  // 185: nitella.local.MobileLogicService.RemoveGlobalRule:input_type -> nitella.local.RemoveGlobalRuleRequest
-	77,  // 186: nitella.local.MobileLogicService.ListPendingApprovals:input_type -> nitella.local.ListPendingApprovalsRequest
-	79,  // 187: nitella.local.MobileLogicService.GetApprovalsSnapshot:input_type -> nitella.local.GetApprovalsSnapshotRequest
-	81,  // 188: nitella.local.MobileLogicService.ApproveRequest:input_type -> nitella.local.ApproveRequestRequest
-	83,  // 189: nitella.local.MobileLogicService.DenyRequest:input_type -> nitella.local.DenyRequestRequest
-	85,  // 190: nitella.local.MobileLogicService.ResolveApprovalDecision:input_type -> nitella.local.ResolveApprovalDecisionRequest
-	87,  // 191: nitella.local.MobileLogicService.StreamApprovals:input_type -> nitella.local.StreamApprovalsRequest
-	89,  // 192: nitella.local.MobileLogicService.ListApprovalHistory:input_type -> nitella.local.ListApprovalHistoryRequest
-	91,  // 193: nitella.local.MobileLogicService.ClearApprovalHistory:input_type -> nitella.local.ClearApprovalHistoryRequest
-	94,  // 194: nitella.local.MobileLogicService.GetConnectionStats:input_type -> nitella.local.GetConnectionStatsRequest
-	96,  // 195: nitella.local.MobileLogicService.ListConnections:input_type -> nitella.local.ListConnectionsRequest
-	98,  // 196: nitella.local.MobileLogicService.GetIPStats:input_type -> nitella.local.GetIPStatsRequest
-	101, // 197: nitella.local.MobileLogicService.GetGeoStats:input_type -> nitella.local.GetGeoStatsRequest
-	104, // 198: nitella.local.MobileLogicService.StreamConnections:input_type -> nitella.local.StreamConnectionsRequest
-	106, // 199: nitella.local.MobileLogicService.CloseConnection:input_type -> nitella.local.CloseConnectionRequest
-	108, // 200: nitella.local.MobileLogicService.CloseAllConnections:input_type -> nitella.local.CloseAllConnectionsRequest
-	110, // 201: nitella.local.MobileLogicService.CloseAllNodeConnections:input_type -> nitella.local.CloseAllNodeConnectionsRequest
-	112, // 202: nitella.local.MobileLogicService.StartPairing:input_type -> nitella.local.StartPairingRequest
-	114, // 203: nitella.local.MobileLogicService.JoinPairing:input_type -> nitella.local.JoinPairingRequest
-	116, // 204: nitella.local.MobileLogicService.CompletePairing:input_type -> nitella.local.CompletePairingRequest
-	118, // 205: nitella.local.MobileLogicService.FinalizePairing:input_type -> nitella.local.FinalizePairingRequest
-	120, // 206: nitella.local.MobileLogicService.CancelPairing:input_type -> nitella.local.CancelPairingRequest
-	121, // 207: nitella.local.MobileLogicService.GenerateQRCode:input_type -> nitella.local.GenerateQRCodeRequest
-	123, // 208: nitella.local.MobileLogicService.ScanQRCode:input_type -> nitella.local.ScanQRCodeRequest
-	125, // 209: nitella.local.MobileLogicService.GenerateQRResponse:input_type -> nitella.local.GenerateQRReplyRequest
-	129, // 210: nitella.local.MobileLogicService.ListTemplates:input_type -> nitella.local.ListTemplatesRequest
-	131, // 211: nitella.local.MobileLogicService.GetTemplate:input_type -> nitella.local.GetTemplateRequest
-	132, // 212: nitella.local.MobileLogicService.CreateTemplate:input_type -> nitella.local.CreateTemplateRequest
-	133, // 213: nitella.local.MobileLogicService.ApplyTemplate:input_type -> nitella.local.ApplyTemplateRequest
-	135, // 214: nitella.local.MobileLogicService.DeleteTemplate:input_type -> nitella.local.DeleteTemplateRequest
-	251, // 215: nitella.local.MobileLogicService.SyncTemplates:input_type -> google.protobuf.Empty
-	137, // 216: nitella.local.MobileLogicService.ExportTemplateYaml:input_type -> nitella.local.ExportTemplateYamlRequest
-	139, // 217: nitella.local.MobileLogicService.ImportTemplateYaml:input_type -> nitella.local.ImportTemplateYamlRequest
-	251, // 218: nitella.local.MobileLogicService.GetSettings:input_type -> google.protobuf.Empty
-	251, // 219: nitella.local.MobileLogicService.GetSettingsOverviewSnapshot:input_type -> google.protobuf.Empty
-	142, // 220: nitella.local.MobileLogicService.UpdateSettings:input_type -> nitella.local.UpdateSettingsRequest
-	144, // 221: nitella.local.MobileLogicService.RegisterFCMToken:input_type -> nitella.local.RegisterFCMTokenRequest
-	251, // 222: nitella.local.MobileLogicService.UnregisterFCMToken:input_type -> google.protobuf.Empty
-	145, // 223: nitella.local.MobileLogicService.ConnectToHub:input_type -> nitella.local.ConnectToHubRequest
-	251, // 224: nitella.local.MobileLogicService.DisconnectFromHub:input_type -> google.protobuf.Empty
-	251, // 225: nitella.local.MobileLogicService.GetHubStatus:input_type -> google.protobuf.Empty
-	251, // 226: nitella.local.MobileLogicService.GetHubSettingsSnapshot:input_type -> google.protobuf.Empty
-	251, // 227: nitella.local.MobileLogicService.GetHubOverview:input_type -> google.protobuf.Empty
-	152, // 228: nitella.local.MobileLogicService.GetHubDashboardSnapshot:input_type -> nitella.local.GetHubDashboardSnapshotRequest
-	154, // 229: nitella.local.MobileLogicService.RegisterUser:input_type -> nitella.local.RegisterUserRequest
-	146, // 230: nitella.local.MobileLogicService.FetchHubCA:input_type -> nitella.local.FetchHubCARequest
-	156, // 231: nitella.local.MobileLogicService.OnboardHub:input_type -> nitella.local.OnboardHubRequest
-	158, // 232: nitella.local.MobileLogicService.EnsureHubConnected:input_type -> nitella.local.EnsureHubConnectedRequest
-	157, // 233: nitella.local.MobileLogicService.EnsureHubRegistered:input_type -> nitella.local.EnsureHubRegisteredRequest
-	160, // 234: nitella.local.MobileLogicService.ResolveHubTrustChallenge:input_type -> nitella.local.ResolveHubTrustChallengeRequest
-	251, // 235: nitella.local.MobileLogicService.GetP2PStatus:input_type -> google.protobuf.Empty
-	251, // 236: nitella.local.MobileLogicService.GetP2PSettingsSnapshot:input_type -> google.protobuf.Empty
-	251, // 237: nitella.local.MobileLogicService.StreamP2PStatus:input_type -> google.protobuf.Empty
-	172, // 238: nitella.local.MobileLogicService.SetP2PMode:input_type -> nitella.local.SetP2PModeRequest
-	162, // 239: nitella.local.MobileLogicService.LookupIP:input_type -> nitella.local.LookupIPRequest
-	164, // 240: nitella.local.MobileLogicService.ConfigureGeoIP:input_type -> nitella.local.ConfigureGeoIPNodeRequest
-	165, // 241: nitella.local.MobileLogicService.GetGeoIPStatus:input_type -> nitella.local.GetGeoIPStatusNodeRequest
-	166, // 242: nitella.local.MobileLogicService.RestartListeners:input_type -> nitella.local.RestartListenersNodeRequest
-	174, // 243: nitella.local.MobileLogicService.ListLocalProxyConfigs:input_type -> nitella.local.ListLocalProxyConfigsRequest
-	176, // 244: nitella.local.MobileLogicService.GetLocalProxyConfig:input_type -> nitella.local.GetLocalProxyConfigRequest
-	178, // 245: nitella.local.MobileLogicService.ImportLocalProxyConfig:input_type -> nitella.local.ImportLocalProxyConfigRequest
-	180, // 246: nitella.local.MobileLogicService.SaveLocalProxyConfig:input_type -> nitella.local.SaveLocalProxyConfigRequest
-	182, // 247: nitella.local.MobileLogicService.DeleteLocalProxyConfig:input_type -> nitella.local.DeleteLocalProxyConfigRequest
-	184, // 248: nitella.local.MobileLogicService.ValidateLocalProxyConfig:input_type -> nitella.local.ValidateLocalProxyConfigRequest
-	186, // 249: nitella.local.MobileLogicService.PushProxyRevision:input_type -> nitella.local.PushProxyRevisionRequest
-	188, // 250: nitella.local.MobileLogicService.PushLocalProxyRevision:input_type -> nitella.local.PushLocalProxyRevisionRequest
-	190, // 251: nitella.local.MobileLogicService.PullProxyRevision:input_type -> nitella.local.PullProxyRevisionRequest
-	192, // 252: nitella.local.MobileLogicService.DiffProxyRevisions:input_type -> nitella.local.DiffProxyRevisionsRequest
-	194, // 253: nitella.local.MobileLogicService.ListProxyRevisions:input_type -> nitella.local.ListProxyRevisionsRequest
-	197, // 254: nitella.local.MobileLogicService.FlushProxyRevisions:input_type -> nitella.local.FlushProxyRevisionsRequest
-	199, // 255: nitella.local.MobileLogicService.ListProxyConfigs:input_type -> nitella.local.ListProxyConfigsRequest
-	202, // 256: nitella.local.MobileLogicService.CreateProxyConfig:input_type -> nitella.local.CreateProxyConfigRequest
-	204, // 257: nitella.local.MobileLogicService.DeleteProxyConfig:input_type -> nitella.local.DeleteProxyConfigRequest
-	206, // 258: nitella.local.MobileLogicService.ApplyProxyToNode:input_type -> nitella.local.ApplyProxyToNodeRequest
-	208, // 259: nitella.local.MobileLogicService.UnapplyProxyFromNode:input_type -> nitella.local.UnapplyProxyFromNodeRequest
-	210, // 260: nitella.local.MobileLogicService.GetAppliedProxies:input_type -> nitella.local.GetAppliedProxiesRequest
-	213, // 261: nitella.local.MobileLogicService.AllowIP:input_type -> nitella.local.AllowIPRequest
-	215, // 262: nitella.local.MobileLogicService.StreamMetrics:input_type -> nitella.local.StreamMetricsRequest
-	216, // 263: nitella.local.MobileLogicService.GetDebugRuntimeStats:input_type -> nitella.local.GetDebugRuntimeStatsRequest
-	220, // 264: nitella.local.MobileLogicService.GetLogsStats:input_type -> nitella.local.GetLogsStatsRequest
-	222, // 265: nitella.local.MobileLogicService.ListLogs:input_type -> nitella.local.ListLogsRequest
-	225, // 266: nitella.local.MobileLogicService.DeleteLogs:input_type -> nitella.local.DeleteLogsRequest
-	227, // 267: nitella.local.MobileLogicService.CleanupOldLogs:input_type -> nitella.local.CleanupOldLogsRequest
-	229, // 268: nitella.local.MobileLogicService.GetNodeFromHub:input_type -> nitella.local.GetNodeFromHubRequest
-	231, // 269: nitella.local.MobileLogicService.RegisterNodeWithHub:input_type -> nitella.local.RegisterNodeWithHubRequest
-	76,  // 270: nitella.local.MobileUIService.OnApprovalRequest:input_type -> nitella.local.ApprovalRequest
-	167, // 271: nitella.local.MobileUIService.OnNodeStatusChange:input_type -> nitella.local.NodeStatusChange
-	105, // 272: nitella.local.MobileUIService.OnConnectionEvent:input_type -> nitella.local.ConnectionEvent
-	168, // 273: nitella.local.MobileUIService.OnAlert:input_type -> nitella.local.Alert
-	169, // 274: nitella.local.MobileUIService.OnToast:input_type -> nitella.local.ToastMessage
-	14,  // 275: nitella.local.MobileLogicService.Initialize:output_type -> nitella.local.InitializeResponse
-	251, // 276: nitella.local.MobileLogicService.Shutdown:output_type -> google.protobuf.Empty
-	15,  // 277: nitella.local.MobileLogicService.GetBootstrapState:output_type -> nitella.local.BootstrapStateResponse
-	16,  // 278: nitella.local.MobileLogicService.GetIdentity:output_type -> nitella.local.IdentityInfo
-	18,  // 279: nitella.local.MobileLogicService.CreateIdentity:output_type -> nitella.local.CreateIdentityResponse
-	20,  // 280: nitella.local.MobileLogicService.RestoreIdentity:output_type -> nitella.local.RestoreIdentityResponse
-	22,  // 281: nitella.local.MobileLogicService.ImportIdentity:output_type -> nitella.local.ImportIdentityResponse
-	24,  // 282: nitella.local.MobileLogicService.UnlockIdentity:output_type -> nitella.local.UnlockIdentityResponse
-	251, // 283: nitella.local.MobileLogicService.LockIdentity:output_type -> google.protobuf.Empty
-	251, // 284: nitella.local.MobileLogicService.ChangePassphrase:output_type -> google.protobuf.Empty
-	27,  // 285: nitella.local.MobileLogicService.EvaluatePassphrase:output_type -> nitella.local.EvaluatePassphraseResponse
-	251, // 286: nitella.local.MobileLogicService.ResetIdentity:output_type -> google.protobuf.Empty
-	31,  // 287: nitella.local.MobileLogicService.ListNodes:output_type -> nitella.local.ListNodesResponse
-	28,  // 288: nitella.local.MobileLogicService.GetNode:output_type -> nitella.local.NodeInfo
-	35,  // 289: nitella.local.MobileLogicService.GetNodeDetailSnapshot:output_type -> nitella.local.NodeDetailSnapshot
-	28,  // 290: nitella.local.MobileLogicService.UpdateNode:output_type -> nitella.local.NodeInfo
-	251, // 291: nitella.local.MobileLogicService.RemoveNode:output_type -> google.protobuf.Empty
-	39,  // 292: nitella.local.MobileLogicService.AddNodeDirect:output_type -> nitella.local.AddNodeDirectResponse
-	41,  // 293: nitella.local.MobileLogicService.TestDirectConnection:output_type -> nitella.local.TestDirectConnectionResponse
-	44,  // 294: nitella.local.MobileLogicService.ListProxies:output_type -> nitella.local.ListProxiesResponse
-	47,  // 295: nitella.local.MobileLogicService.GetProxiesSnapshot:output_type -> nitella.local.GetProxiesSnapshotResponse
-	42,  // 296: nitella.local.MobileLogicService.GetProxy:output_type -> nitella.local.ProxyInfo
-	42,  // 297: nitella.local.MobileLogicService.AddProxy:output_type -> nitella.local.ProxyInfo
-	42,  // 298: nitella.local.MobileLogicService.UpdateProxy:output_type -> nitella.local.ProxyInfo
-	53,  // 299: nitella.local.MobileLogicService.SetNodeProxiesRunning:output_type -> nitella.local.SetNodeProxiesRunningResponse
-	251, // 300: nitella.local.MobileLogicService.RemoveProxy:output_type -> google.protobuf.Empty
-	55,  // 301: nitella.local.MobileLogicService.ListRules:output_type -> nitella.local.ListRulesResponse
-	238, // 302: nitella.local.MobileLogicService.GetRule:output_type -> nitella.proxy.Rule
-	238, // 303: nitella.local.MobileLogicService.AddRule:output_type -> nitella.proxy.Rule
-	61,  // 304: nitella.local.MobileLogicService.AddQuickRule:output_type -> nitella.local.AddQuickRuleResponse
-	238, // 305: nitella.local.MobileLogicService.UpdateRule:output_type -> nitella.proxy.Rule
-	251, // 306: nitella.local.MobileLogicService.RemoveRule:output_type -> google.protobuf.Empty
-	65,  // 307: nitella.local.MobileLogicService.BlockIP:output_type -> nitella.local.BlockIPResponse
-	67,  // 308: nitella.local.MobileLogicService.BlockISP:output_type -> nitella.local.BlockISPResponse
-	69,  // 309: nitella.local.MobileLogicService.BlockCountry:output_type -> nitella.local.BlockCountryResponse
-	71,  // 310: nitella.local.MobileLogicService.AddGlobalRule:output_type -> nitella.local.AddGlobalRuleResponse
-	73,  // 311: nitella.local.MobileLogicService.ListGlobalRules:output_type -> nitella.local.ListGlobalRulesResponse
-	75,  // 312: nitella.local.MobileLogicService.RemoveGlobalRule:output_type -> nitella.local.RemoveGlobalRuleResponse
-	78,  // 313: nitella.local.MobileLogicService.ListPendingApprovals:output_type -> nitella.local.ListPendingApprovalsResponse
-	80,  // 314: nitella.local.MobileLogicService.GetApprovalsSnapshot:output_type -> nitella.local.GetApprovalsSnapshotResponse
-	82,  // 315: nitella.local.MobileLogicService.ApproveRequest:output_type -> nitella.local.ApproveRequestResponse
-	84,  // 316: nitella.local.MobileLogicService.DenyRequest:output_type -> nitella.local.DenyRequestResponse
-	86,  // 317: nitella.local.MobileLogicService.ResolveApprovalDecision:output_type -> nitella.local.ResolveApprovalDecisionResponse
-	76,  // 318: nitella.local.MobileLogicService.StreamApprovals:output_type -> nitella.local.ApprovalRequest
-	90,  // 319: nitella.local.MobileLogicService.ListApprovalHistory:output_type -> nitella.local.ListApprovalHistoryResponse
-	92,  // 320: nitella.local.MobileLogicService.ClearApprovalHistory:output_type -> nitella.local.ClearApprovalHistoryResponse
-	93,  // 321: nitella.local.MobileLogicService.GetConnectionStats:output_type -> nitella.local.ConnectionStats
-	97,  // 322: nitella.local.MobileLogicService.ListConnections:output_type -> nitella.local.ListConnectionsResponse
-	100, // 323: nitella.local.MobileLogicService.GetIPStats:output_type -> nitella.local.GetIPStatsResponse
-	103, // 324: nitella.local.MobileLogicService.GetGeoStats:output_type -> nitella.local.GetGeoStatsResponse
-	105, // 325: nitella.local.MobileLogicService.StreamConnections:output_type -> nitella.local.ConnectionEvent
-	107, // 326: nitella.local.MobileLogicService.CloseConnection:output_type -> nitella.local.CloseConnectionResponse
-	109, // 327: nitella.local.MobileLogicService.CloseAllConnections:output_type -> nitella.local.CloseAllConnectionsResponse
-	111, // 328: nitella.local.MobileLogicService.CloseAllNodeConnections:output_type -> nitella.local.CloseAllNodeConnectionsResponse
-	113, // 329: nitella.local.MobileLogicService.StartPairing:output_type -> nitella.local.StartPairingResponse
-	115, // 330: nitella.local.MobileLogicService.JoinPairing:output_type -> nitella.local.JoinPairingResponse
-	117, // 331: nitella.local.MobileLogicService.CompletePairing:output_type -> nitella.local.CompletePairingResponse
-	119, // 332: nitella.local.MobileLogicService.FinalizePairing:output_type -> nitella.local.FinalizePairingResponse
-	251, // 333: nitella.local.MobileLogicService.CancelPairing:output_type -> google.protobuf.Empty
-	122, // 334: nitella.local.MobileLogicService.GenerateQRCode:output_type -> nitella.local.GenerateQRCodeResponse
-	124, // 335: nitella.local.MobileLogicService.ScanQRCode:output_type -> nitella.local.ScanQRCodeResponse
-	126, // 336: nitella.local.MobileLogicService.GenerateQRResponse:output_type -> nitella.local.GenerateQRReplyResponse
-	130, // 337: nitella.local.MobileLogicService.ListTemplates:output_type -> nitella.local.ListTemplatesResponse
-	127, // 338: nitella.local.MobileLogicService.GetTemplate:output_type -> nitella.local.Template
-	127, // 339: nitella.local.MobileLogicService.CreateTemplate:output_type -> nitella.local.Template
-	134, // 340: nitella.local.MobileLogicService.ApplyTemplate:output_type -> nitella.local.ApplyTemplateResponse
-	251, // 341: nitella.local.MobileLogicService.DeleteTemplate:output_type -> google.protobuf.Empty
-	136, // 342: nitella.local.MobileLogicService.SyncTemplates:output_type -> nitella.local.SyncTemplatesResponse
-	138, // 343: nitella.local.MobileLogicService.ExportTemplateYaml:output_type -> nitella.local.ExportTemplateYamlResponse
-	140, // 344: nitella.local.MobileLogicService.ImportTemplateYaml:output_type -> nitella.local.ImportTemplateYamlResponse
-	141, // 345: nitella.local.MobileLogicService.GetSettings:output_type -> nitella.local.Settings
-	143, // 346: nitella.local.MobileLogicService.GetSettingsOverviewSnapshot:output_type -> nitella.local.SettingsOverviewSnapshot
-	141, // 347: nitella.local.MobileLogicService.UpdateSettings:output_type -> nitella.local.Settings
-	251, // 348: nitella.local.MobileLogicService.RegisterFCMToken:output_type -> google.protobuf.Empty
-	251, // 349: nitella.local.MobileLogicService.UnregisterFCMToken:output_type -> google.protobuf.Empty
-	148, // 350: nitella.local.MobileLogicService.ConnectToHub:output_type -> nitella.local.ConnectToHubResponse
-	251, // 351: nitella.local.MobileLogicService.DisconnectFromHub:output_type -> google.protobuf.Empty
-	149, // 352: nitella.local.MobileLogicService.GetHubStatus:output_type -> nitella.local.HubStatus
-	150, // 353: nitella.local.MobileLogicService.GetHubSettingsSnapshot:output_type -> nitella.local.HubSettingsSnapshot
-	151, // 354: nitella.local.MobileLogicService.GetHubOverview:output_type -> nitella.local.HubOverview
-	153, // 355: nitella.local.MobileLogicService.GetHubDashboardSnapshot:output_type -> nitella.local.HubDashboardSnapshot
-	155, // 356: nitella.local.MobileLogicService.RegisterUser:output_type -> nitella.local.RegisterUserResponse
-	147, // 357: nitella.local.MobileLogicService.FetchHubCA:output_type -> nitella.local.FetchHubCAResponse
-	161, // 358: nitella.local.MobileLogicService.OnboardHub:output_type -> nitella.local.OnboardHubResponse
-	161, // 359: nitella.local.MobileLogicService.EnsureHubConnected:output_type -> nitella.local.OnboardHubResponse
-	161, // 360: nitella.local.MobileLogicService.EnsureHubRegistered:output_type -> nitella.local.OnboardHubResponse
-	161, // 361: nitella.local.MobileLogicService.ResolveHubTrustChallenge:output_type -> nitella.local.OnboardHubResponse
-	170, // 362: nitella.local.MobileLogicService.GetP2PStatus:output_type -> nitella.local.P2PStatus
-	171, // 363: nitella.local.MobileLogicService.GetP2PSettingsSnapshot:output_type -> nitella.local.P2PSettingsSnapshot
-	170, // 364: nitella.local.MobileLogicService.StreamP2PStatus:output_type -> nitella.local.P2PStatus
-	251, // 365: nitella.local.MobileLogicService.SetP2PMode:output_type -> google.protobuf.Empty
-	163, // 366: nitella.local.MobileLogicService.LookupIP:output_type -> nitella.local.LookupIPResponse
-	252, // 367: nitella.local.MobileLogicService.ConfigureGeoIP:output_type -> nitella.proxy.ConfigureGeoIPResponse
-	253, // 368: nitella.local.MobileLogicService.GetGeoIPStatus:output_type -> nitella.proxy.GetGeoIPStatusResponse
-	254, // 369: nitella.local.MobileLogicService.RestartListeners:output_type -> nitella.proxy.RestartListenersResponse
-	175, // 370: nitella.local.MobileLogicService.ListLocalProxyConfigs:output_type -> nitella.local.ListLocalProxyConfigsResponse
-	177, // 371: nitella.local.MobileLogicService.GetLocalProxyConfig:output_type -> nitella.local.GetLocalProxyConfigResponse
-	179, // 372: nitella.local.MobileLogicService.ImportLocalProxyConfig:output_type -> nitella.local.ImportLocalProxyConfigResponse
-	181, // 373: nitella.local.MobileLogicService.SaveLocalProxyConfig:output_type -> nitella.local.SaveLocalProxyConfigResponse
-	183, // 374: nitella.local.MobileLogicService.DeleteLocalProxyConfig:output_type -> nitella.local.DeleteLocalProxyConfigResponse
-	185, // 375: nitella.local.MobileLogicService.ValidateLocalProxyConfig:output_type -> nitella.local.ValidateLocalProxyConfigResponse
-	187, // 376: nitella.local.MobileLogicService.PushProxyRevision:output_type -> nitella.local.PushProxyRevisionResponse
-	189, // 377: nitella.local.MobileLogicService.PushLocalProxyRevision:output_type -> nitella.local.PushLocalProxyRevisionResponse
-	191, // 378: nitella.local.MobileLogicService.PullProxyRevision:output_type -> nitella.local.PullProxyRevisionResponse
-	193, // 379: nitella.local.MobileLogicService.DiffProxyRevisions:output_type -> nitella.local.DiffProxyRevisionsResponse
-	195, // 380: nitella.local.MobileLogicService.ListProxyRevisions:output_type -> nitella.local.ListProxyRevisionsResponse
-	198, // 381: nitella.local.MobileLogicService.FlushProxyRevisions:output_type -> nitella.local.FlushProxyRevisionsResponse
-	200, // 382: nitella.local.MobileLogicService.ListProxyConfigs:output_type -> nitella.local.ListProxyConfigsResponse
-	203, // 383: nitella.local.MobileLogicService.CreateProxyConfig:output_type -> nitella.local.CreateProxyConfigResponse
-	205, // 384: nitella.local.MobileLogicService.DeleteProxyConfig:output_type -> nitella.local.DeleteProxyConfigResponse
-	207, // 385: nitella.local.MobileLogicService.ApplyProxyToNode:output_type -> nitella.local.ApplyProxyToNodeResponse
-	209, // 386: nitella.local.MobileLogicService.UnapplyProxyFromNode:output_type -> nitella.local.UnapplyProxyFromNodeResponse
-	211, // 387: nitella.local.MobileLogicService.GetAppliedProxies:output_type -> nitella.local.GetAppliedProxiesResponse
-	214, // 388: nitella.local.MobileLogicService.AllowIP:output_type -> nitella.local.AllowIPResponse
-	29,  // 389: nitella.local.MobileLogicService.StreamMetrics:output_type -> nitella.local.NodeMetrics
-	217, // 390: nitella.local.MobileLogicService.GetDebugRuntimeStats:output_type -> nitella.local.DebugRuntimeStats
-	221, // 391: nitella.local.MobileLogicService.GetLogsStats:output_type -> nitella.local.GetLogsStatsResponse
-	223, // 392: nitella.local.MobileLogicService.ListLogs:output_type -> nitella.local.ListLogsResponse
-	226, // 393: nitella.local.MobileLogicService.DeleteLogs:output_type -> nitella.local.DeleteLogsResponse
-	228, // 394: nitella.local.MobileLogicService.CleanupOldLogs:output_type -> nitella.local.CleanupOldLogsResponse
-	230, // 395: nitella.local.MobileLogicService.GetNodeFromHub:output_type -> nitella.local.GetNodeFromHubResponse
-	232, // 396: nitella.local.MobileLogicService.RegisterNodeWithHub:output_type -> nitella.local.RegisterNodeWithHubResponse
-	251, // 397: nitella.local.MobileUIService.OnApprovalRequest:output_type -> google.protobuf.Empty
-	251, // 398: nitella.local.MobileUIService.OnNodeStatusChange:output_type -> google.protobuf.Empty
-	251, // 399: nitella.local.MobileUIService.OnConnectionEvent:output_type -> google.protobuf.Empty
-	251, // 400: nitella.local.MobileUIService.OnAlert:output_type -> google.protobuf.Empty
-	251, // 401: nitella.local.MobileUIService.OnToast:output_type -> google.protobuf.Empty
-	275, // [275:402] is the sub-list for method output_type
-	148, // [148:275] is the sub-list for method input_type
-	148, // [148:148] is the sub-list for extension type_name
-	148, // [148:148] is the sub-list for extension extendee
-	0,   // [0:148] is the sub-list for field type_name
+	243, // 30: nitella.local.AddProxyRequest.approval_backends:type_name -> nitella.BackendChoice
+	240, // 31: nitella.local.UpdateProxyRequest.default_action:type_name -> nitella.ActionType
+	241, // 32: nitella.local.UpdateProxyRequest.fallback_action:type_name -> nitella.FallbackAction
+	242, // 33: nitella.local.UpdateProxyRequest.default_mock:type_name -> nitella.MockPreset
+	242, // 34: nitella.local.UpdateProxyRequest.fallback_mock:type_name -> nitella.MockPreset
+	239, // 35: nitella.local.UpdateProxyRequest.update_mask:type_name -> google.protobuf.FieldMask
+	238, // 36: nitella.local.ListRulesResponse.rules:type_name -> nitella.proxy.Rule
+	57,  // 37: nitella.local.ListRulesResponse.composer_policy:type_name -> nitella.local.RuleComposerPolicy
+	244, // 38: nitella.local.RuleComposerConditionPolicy.condition_type:type_name -> nitella.ConditionType
+	245, // 39: nitella.local.RuleComposerConditionPolicy.operators:type_name -> nitella.Operator
+	245, // 40: nitella.local.RuleComposerConditionPolicy.default_operator:type_name -> nitella.Operator
+	56,  // 41: nitella.local.RuleComposerPolicy.condition_policies:type_name -> nitella.local.RuleComposerConditionPolicy
+	240, // 42: nitella.local.RuleComposerPolicy.allowed_actions:type_name -> nitella.ActionType
+	238, // 43: nitella.local.AddRuleRequest.rule:type_name -> nitella.proxy.Rule
+	240, // 44: nitella.local.AddQuickRuleRequest.action:type_name -> nitella.ActionType
+	244, // 45: nitella.local.AddQuickRuleRequest.condition_type:type_name -> nitella.ConditionType
+	238, // 46: nitella.local.UpdateRuleRequest.rule:type_name -> nitella.proxy.Rule
+	239, // 47: nitella.local.UpdateRuleRequest.update_mask:type_name -> google.protobuf.FieldMask
+	240, // 48: nitella.local.AddGlobalRuleRequest.action:type_name -> nitella.ActionType
+	246, // 49: nitella.local.ListGlobalRulesResponse.rules:type_name -> nitella.proxy.GlobalRule
+	247, // 50: nitella.local.ApprovalRequest.geo:type_name -> nitella.GeoInfo
+	237, // 51: nitella.local.ApprovalRequest.timestamp:type_name -> google.protobuf.Timestamp
+	243, // 52: nitella.local.ApprovalRequest.backend_choices:type_name -> nitella.BackendChoice
+	76,  // 53: nitella.local.ListPendingApprovalsResponse.requests:type_name -> nitella.local.ApprovalRequest
+	76,  // 54: nitella.local.GetApprovalsSnapshotResponse.pending_requests:type_name -> nitella.local.ApprovalRequest
+	88,  // 55: nitella.local.GetApprovalsSnapshotResponse.history_entries:type_name -> nitella.local.ApprovalHistoryEntry
+	8,   // 56: nitella.local.GetApprovalsSnapshotResponse.deny_block_options:type_name -> nitella.local.DenyBlockType
+	248, // 57: nitella.local.ApproveRequestRequest.retention_mode:type_name -> nitella.ApprovalRetentionMode
+	248, // 58: nitella.local.DenyRequestRequest.retention_mode:type_name -> nitella.ApprovalRetentionMode
+	8,   // 59: nitella.local.DenyRequestRequest.block_type:type_name -> nitella.local.DenyBlockType
+	9,   // 60: nitella.local.ResolveApprovalDecisionRequest.decision:type_name -> nitella.local.ApprovalDecision
+	248, // 61: nitella.local.ResolveApprovalDecisionRequest.retention_mode:type_name -> nitella.ApprovalRetentionMode
+	8,   // 62: nitella.local.ResolveApprovalDecisionRequest.deny_block_type:type_name -> nitella.local.DenyBlockType
+	247, // 63: nitella.local.ApprovalHistoryEntry.geo:type_name -> nitella.GeoInfo
+	10,  // 64: nitella.local.ApprovalHistoryEntry.action:type_name -> nitella.local.ApprovalHistoryAction
+	8,   // 65: nitella.local.ApprovalHistoryEntry.block_type:type_name -> nitella.local.DenyBlockType
+	237, // 66: nitella.local.ApprovalHistoryEntry.decided_at:type_name -> google.protobuf.Timestamp
+	88,  // 67: nitella.local.ListApprovalHistoryResponse.entries:type_name -> nitella.local.ApprovalHistoryEntry
+	237, // 68: nitella.local.ConnectionInfo.start_time:type_name -> google.protobuf.Timestamp
+	247, // 69: nitella.local.ConnectionInfo.geo:type_name -> nitella.GeoInfo
+	240, // 70: nitella.local.ConnectionInfo.action:type_name -> nitella.ActionType
+	95,  // 71: nitella.local.ListConnectionsResponse.connections:type_name -> nitella.local.ConnectionInfo
+	249, // 72: nitella.local.GetIPStatsRequest.sort_by:type_name -> nitella.SortOrder
+	237, // 73: nitella.local.IPStats.first_seen:type_name -> google.protobuf.Timestamp
+	237, // 74: nitella.local.IPStats.last_seen:type_name -> google.protobuf.Timestamp
+	99,  // 75: nitella.local.GetIPStatsResponse.stats:type_name -> nitella.local.IPStats
+	0,   // 76: nitella.local.GetGeoStatsRequest.type:type_name -> nitella.local.GeoStatsType
+	0,   // 77: nitella.local.GeoStats.type:type_name -> nitella.local.GeoStatsType
+	102, // 78: nitella.local.GetGeoStatsResponse.stats:type_name -> nitella.local.GeoStats
+	11,  // 79: nitella.local.ConnectionEvent.event_type:type_name -> nitella.local.ConnectionEvent.EventType
+	237, // 80: nitella.local.ConnectionEvent.timestamp:type_name -> google.protobuf.Timestamp
+	240, // 81: nitella.local.ConnectionEvent.action_taken:type_name -> nitella.ActionType
+	247, // 82: nitella.local.ConnectionEvent.geo:type_name -> nitella.GeoInfo
+	28,  // 83: nitella.local.CompletePairingResponse.node:type_name -> nitella.local.NodeInfo
+	28,  // 84: nitella.local.FinalizePairingResponse.node:type_name -> nitella.local.NodeInfo
+	28,  // 85: nitella.local.GenerateQRReplyResponse.node:type_name -> nitella.local.NodeInfo
+	237, // 86: nitella.local.Template.created_at:type_name -> google.protobuf.Timestamp
+	237, // 87: nitella.local.Template.updated_at:type_name -> google.protobuf.Timestamp
+	128, // 88: nitella.local.Template.proxies:type_name -> nitella.local.ProxyTemplate
+	240, // 89: nitella.local.ProxyTemplate.default_action:type_name -> nitella.ActionType
+	241, // 90: nitella.local.ProxyTemplate.fallback_action:type_name -> nitella.FallbackAction
+	238, // 91: nitella.local.ProxyTemplate.rules:type_name -> nitella.proxy.Rule
+	127, // 92: nitella.local.ListTemplatesResponse.templates:type_name -> nitella.local.Template
+	127, // 93: nitella.local.ExportTemplateYamlResponse.template:type_name -> nitella.local.Template
+	127, // 94: nitella.local.ImportTemplateYamlResponse.template:type_name -> nitella.local.Template
+	250, // 95: nitella.local.Settings.p2p_mode:type_name -> nitella.P2PMode
+	1,   // 96: nitella.local.Settings.theme:type_name -> nitella.local.Theme
+	141, // 97: nitella.local.UpdateSettingsRequest.settings:type_name -> nitella.local.Settings
+	239, // 98: nitella.local.UpdateSettingsRequest.update_mask:type_name -> google.protobuf.FieldMask
+	16,  // 99: nitella.local.SettingsOverviewSnapshot.identity:type_name -> nitella.local.IdentityInfo
+	150, // 100: nitella.local.SettingsOverviewSnapshot.hub:type_name -> nitella.local.HubSettingsSnapshot
+	171, // 101: nitella.local.SettingsOverviewSnapshot.p2p:type_name -> nitella.local.P2PSettingsSnapshot
+	4,   // 102: nitella.local.RegisterFCMTokenRequest.device_type:type_name -> nitella.local.DeviceType
+	237, // 103: nitella.local.HubStatus.connected_since:type_name -> google.protobuf.Timestamp
+	149, // 104: nitella.local.HubSettingsSnapshot.status:type_name -> nitella.local.HubStatus
+	141, // 105: nitella.local.HubSettingsSnapshot.settings:type_name -> nitella.local.Settings
+	159, // 106: nitella.local.HubSettingsSnapshot.pending_trust_challenge:type_name -> nitella.local.HubTrustChallenge
+	151, // 107: nitella.local.HubDashboardSnapshot.overview:type_name -> nitella.local.HubOverview
+	28,  // 108: nitella.local.HubDashboardSnapshot.nodes:type_name -> nitella.local.NodeInfo
+	28,  // 109: nitella.local.HubDashboardSnapshot.pinned_nodes:type_name -> nitella.local.NodeInfo
+	12,  // 110: nitella.local.OnboardHubResponse.stage:type_name -> nitella.local.OnboardHubResponse.Stage
+	159, // 111: nitella.local.OnboardHubResponse.trust_challenge:type_name -> nitella.local.HubTrustChallenge
+	247, // 112: nitella.local.LookupIPResponse.geo:type_name -> nitella.GeoInfo
+	251, // 113: nitella.local.ConfigureGeoIPNodeRequest.config:type_name -> nitella.proxy.ConfigureGeoIPRequest
+	237, // 114: nitella.local.NodeStatusChange.timestamp:type_name -> google.protobuf.Timestamp
+	2,   // 115: nitella.local.Alert.severity:type_name -> nitella.local.AlertSeverity
+	237, // 116: nitella.local.Alert.timestamp:type_name -> google.protobuf.Timestamp
+	233, // 117: nitella.local.Alert.metadata:type_name -> nitella.local.Alert.MetadataEntry
+	3,   // 118: nitella.local.ToastMessage.type:type_name -> nitella.local.ToastType
+	250, // 119: nitella.local.P2PStatus.mode:type_name -> nitella.P2PMode
+	170, // 120: nitella.local.P2PSettingsSnapshot.status:type_name -> nitella.local.P2PStatus
+	141, // 121: nitella.local.P2PSettingsSnapshot.settings:type_name -> nitella.local.Settings
+	250, // 122: nitella.local.SetP2PModeRequest.mode:type_name -> nitella.P2PMode
+	237, // 123: nitella.local.LocalProxyConfig.created_at:type_name -> google.protobuf.Timestamp
+	237, // 124: nitella.local.LocalProxyConfig.updated_at:type_name -> google.protobuf.Timestamp
+	237, // 125: nitella.local.LocalProxyConfig.synced_at:type_name -> google.protobuf.Timestamp
+	173, // 126: nitella.local.ListLocalProxyConfigsResponse.proxies:type_name -> nitella.local.LocalProxyConfig
+	173, // 127: nitella.local.GetLocalProxyConfigResponse.proxy:type_name -> nitella.local.LocalProxyConfig
+	173, // 128: nitella.local.ImportLocalProxyConfigResponse.proxy:type_name -> nitella.local.LocalProxyConfig
+	173, // 129: nitella.local.SaveLocalProxyConfigResponse.proxy:type_name -> nitella.local.LocalProxyConfig
+	173, // 130: nitella.local.PushLocalProxyRevisionResponse.local_proxy:type_name -> nitella.local.LocalProxyConfig
+	173, // 131: nitella.local.PullProxyRevisionResponse.local_proxy:type_name -> nitella.local.LocalProxyConfig
+	196, // 132: nitella.local.ListProxyRevisionsResponse.revisions:type_name -> nitella.local.ProxyRevisionMeta
+	237, // 133: nitella.local.ProxyRevisionMeta.created_at:type_name -> google.protobuf.Timestamp
+	201, // 134: nitella.local.ListProxyConfigsResponse.proxies:type_name -> nitella.local.ProxyConfigInfo
+	237, // 135: nitella.local.ProxyConfigInfo.updated_at:type_name -> google.protobuf.Timestamp
+	212, // 136: nitella.local.GetAppliedProxiesResponse.proxies:type_name -> nitella.local.AppliedProxy
+	218, // 137: nitella.local.DebugRuntimeStats.grpc_connections:type_name -> nitella.local.DebugGrpcConnection
+	219, // 138: nitella.local.DebugRuntimeStats.goroutine_diff_entries:type_name -> nitella.local.DebugGoroutineDiffEntry
+	237, // 139: nitella.local.DebugRuntimeStats.goroutine_diff_prev_at:type_name -> google.protobuf.Timestamp
+	237, // 140: nitella.local.DebugRuntimeStats.goroutine_diff_curr_at:type_name -> google.protobuf.Timestamp
+	237, // 141: nitella.local.GetLogsStatsResponse.oldest_log:type_name -> google.protobuf.Timestamp
+	237, // 142: nitella.local.GetLogsStatsResponse.newest_log:type_name -> google.protobuf.Timestamp
+	234, // 143: nitella.local.GetLogsStatsResponse.logs_by_routing_token:type_name -> nitella.local.GetLogsStatsResponse.LogsByRoutingTokenEntry
+	235, // 144: nitella.local.GetLogsStatsResponse.storage_by_routing_token:type_name -> nitella.local.GetLogsStatsResponse.StorageByRoutingTokenEntry
+	224, // 145: nitella.local.ListLogsResponse.logs:type_name -> nitella.local.LogEntry
+	237, // 146: nitella.local.LogEntry.timestamp:type_name -> google.protobuf.Timestamp
+	237, // 147: nitella.local.DeleteLogsRequest.before:type_name -> google.protobuf.Timestamp
+	236, // 148: nitella.local.CleanupOldLogsResponse.deleted_by_routing_token:type_name -> nitella.local.CleanupOldLogsResponse.DeletedByRoutingTokenEntry
+	237, // 149: nitella.local.GetNodeFromHubResponse.last_seen:type_name -> google.protobuf.Timestamp
+	13,  // 150: nitella.local.MobileLogicService.Initialize:input_type -> nitella.local.InitializeRequest
+	252, // 151: nitella.local.MobileLogicService.Shutdown:input_type -> google.protobuf.Empty
+	252, // 152: nitella.local.MobileLogicService.GetBootstrapState:input_type -> google.protobuf.Empty
+	252, // 153: nitella.local.MobileLogicService.GetIdentity:input_type -> google.protobuf.Empty
+	17,  // 154: nitella.local.MobileLogicService.CreateIdentity:input_type -> nitella.local.CreateIdentityRequest
+	19,  // 155: nitella.local.MobileLogicService.RestoreIdentity:input_type -> nitella.local.RestoreIdentityRequest
+	21,  // 156: nitella.local.MobileLogicService.ImportIdentity:input_type -> nitella.local.ImportIdentityRequest
+	23,  // 157: nitella.local.MobileLogicService.UnlockIdentity:input_type -> nitella.local.UnlockIdentityRequest
+	252, // 158: nitella.local.MobileLogicService.LockIdentity:input_type -> google.protobuf.Empty
+	25,  // 159: nitella.local.MobileLogicService.ChangePassphrase:input_type -> nitella.local.ChangePassphraseRequest
+	26,  // 160: nitella.local.MobileLogicService.EvaluatePassphrase:input_type -> nitella.local.EvaluatePassphraseRequest
+	252, // 161: nitella.local.MobileLogicService.ResetIdentity:input_type -> google.protobuf.Empty
+	30,  // 162: nitella.local.MobileLogicService.ListNodes:input_type -> nitella.local.ListNodesRequest
+	32,  // 163: nitella.local.MobileLogicService.GetNode:input_type -> nitella.local.GetNodeRequest
+	33,  // 164: nitella.local.MobileLogicService.GetNodeDetailSnapshot:input_type -> nitella.local.GetNodeDetailSnapshotRequest
+	36,  // 165: nitella.local.MobileLogicService.UpdateNode:input_type -> nitella.local.UpdateNodeRequest
+	37,  // 166: nitella.local.MobileLogicService.RemoveNode:input_type -> nitella.local.RemoveNodeRequest
+	38,  // 167: nitella.local.MobileLogicService.AddNodeDirect:input_type -> nitella.local.AddNodeDirectRequest
+	40,  // 168: nitella.local.MobileLogicService.TestDirectConnection:input_type -> nitella.local.TestDirectConnectionRequest
+	43,  // 169: nitella.local.MobileLogicService.ListProxies:input_type -> nitella.local.ListProxiesRequest
+	45,  // 170: nitella.local.MobileLogicService.GetProxiesSnapshot:input_type -> nitella.local.GetProxiesSnapshotRequest
+	48,  // 171: nitella.local.MobileLogicService.GetProxy:input_type -> nitella.local.GetProxyRequest
+	49,  // 172: nitella.local.MobileLogicService.AddProxy:input_type -> nitella.local.AddProxyRequest
+	50,  // 173: nitella.local.MobileLogicService.UpdateProxy:input_type -> nitella.local.UpdateProxyRequest
+	52,  // 174: nitella.local.MobileLogicService.SetNodeProxiesRunning:input_type -> nitella.local.SetNodeProxiesRunningRequest
+	51,  // 175: nitella.local.MobileLogicService.RemoveProxy:input_type -> nitella.local.RemoveProxyRequest
+	54,  // 176: nitella.local.MobileLogicService.ListRules:input_type -> nitella.local.ListRulesRequest
+	58,  // 177: nitella.local.MobileLogicService.GetRule:input_type -> nitella.local.GetRuleRequest
+	59,  // 178: nitella.local.MobileLogicService.AddRule:input_type -> nitella.local.AddRuleRequest
+	60,  // 179: nitella.local.MobileLogicService.AddQuickRule:input_type -> nitella.local.AddQuickRuleRequest
+	62,  // 180: nitella.local.MobileLogicService.UpdateRule:input_type -> nitella.local.UpdateRuleRequest
+	63,  // 181: nitella.local.MobileLogicService.RemoveRule:input_type -> nitella.local.RemoveRuleRequest
+	64,  // 182: nitella.local.MobileLogicService.BlockIP:input_type -> nitella.local.BlockIPRequest
+	66,  // 183: nitella.local.MobileLogicService.BlockISP:input_type -> nitella.local.BlockISPRequest
+	68,  // 184: nitella.local.MobileLogicService.BlockCountry:input_type -> nitella.local.BlockCountryRequest
+	70,  // 185: nitella.local.MobileLogicService.AddGlobalRule:input_type -> nitella.local.AddGlobalRuleRequest
+	72,  // 186: nitella.local.MobileLogicService.ListGlobalRules:input_type -> nitella.local.ListGlobalRulesRequest
+	74,  // 187: nitella.local.MobileLogicService.RemoveGlobalRule:input_type -> nitella.local.RemoveGlobalRuleRequest
+	77,  // 188: nitella.local.MobileLogicService.ListPendingApprovals:input_type -> nitella.local.ListPendingApprovalsRequest
+	79,  // 189: nitella.local.MobileLogicService.GetApprovalsSnapshot:input_type -> nitella.local.GetApprovalsSnapshotRequest
+	81,  // 190: nitella.local.MobileLogicService.ApproveRequest:input_type -> nitella.local.ApproveRequestRequest
+	83,  // 191: nitella.local.MobileLogicService.DenyRequest:input_type -> nitella.local.DenyRequestRequest
+	85,  // 192: nitella.local.MobileLogicService.ResolveApprovalDecision:input_type -> nitella.local.ResolveApprovalDecisionRequest
+	87,  // 193: nitella.local.MobileLogicService.StreamApprovals:input_type -> nitella.local.StreamApprovalsRequest
+	89,  // 194: nitella.local.MobileLogicService.ListApprovalHistory:input_type -> nitella.local.ListApprovalHistoryRequest
+	91,  // 195: nitella.local.MobileLogicService.ClearApprovalHistory:input_type -> nitella.local.ClearApprovalHistoryRequest
+	94,  // 196: nitella.local.MobileLogicService.GetConnectionStats:input_type -> nitella.local.GetConnectionStatsRequest
+	96,  // 197: nitella.local.MobileLogicService.ListConnections:input_type -> nitella.local.ListConnectionsRequest
+	98,  // 198: nitella.local.MobileLogicService.GetIPStats:input_type -> nitella.local.GetIPStatsRequest
+	101, // 199: nitella.local.MobileLogicService.GetGeoStats:input_type -> nitella.local.GetGeoStatsRequest
+	104, // 200: nitella.local.MobileLogicService.StreamConnections:input_type -> nitella.local.StreamConnectionsRequest
+	106, // 201: nitella.local.MobileLogicService.CloseConnection:input_type -> nitella.local.CloseConnectionRequest
+	108, // 202: nitella.local.MobileLogicService.CloseAllConnections:input_type -> nitella.local.CloseAllConnectionsRequest
+	110, // 203: nitella.local.MobileLogicService.CloseAllNodeConnections:input_type -> nitella.local.CloseAllNodeConnectionsRequest
+	112, // 204: nitella.local.MobileLogicService.StartPairing:input_type -> nitella.local.StartPairingRequest
+	114, // 205: nitella.local.MobileLogicService.JoinPairing:input_type -> nitella.local.JoinPairingRequest
+	116, // 206: nitella.local.MobileLogicService.CompletePairing:input_type -> nitella.local.CompletePairingRequest
+	118, // 207: nitella.local.MobileLogicService.FinalizePairing:input_type -> nitella.local.FinalizePairingRequest
+	120, // 208: nitella.local.MobileLogicService.CancelPairing:input_type -> nitella.local.CancelPairingRequest
+	121, // 209: nitella.local.MobileLogicService.GenerateQRCode:input_type -> nitella.local.GenerateQRCodeRequest
+	123, // 210: nitella.local.MobileLogicService.ScanQRCode:input_type -> nitella.local.ScanQRCodeRequest
+	125, // 211: nitella.local.MobileLogicService.GenerateQRResponse:input_type -> nitella.local.GenerateQRReplyRequest
+	129, // 212: nitella.local.MobileLogicService.ListTemplates:input_type -> nitella.local.ListTemplatesRequest
+	131, // 213: nitella.local.MobileLogicService.GetTemplate:input_type -> nitella.local.GetTemplateRequest
+	132, // 214: nitella.local.MobileLogicService.CreateTemplate:input_type -> nitella.local.CreateTemplateRequest
+	133, // 215: nitella.local.MobileLogicService.ApplyTemplate:input_type -> nitella.local.ApplyTemplateRequest
+	135, // 216: nitella.local.MobileLogicService.DeleteTemplate:input_type -> nitella.local.DeleteTemplateRequest
+	252, // 217: nitella.local.MobileLogicService.SyncTemplates:input_type -> google.protobuf.Empty
+	137, // 218: nitella.local.MobileLogicService.ExportTemplateYaml:input_type -> nitella.local.ExportTemplateYamlRequest
+	139, // 219: nitella.local.MobileLogicService.ImportTemplateYaml:input_type -> nitella.local.ImportTemplateYamlRequest
+	252, // 220: nitella.local.MobileLogicService.GetSettings:input_type -> google.protobuf.Empty
+	252, // 221: nitella.local.MobileLogicService.GetSettingsOverviewSnapshot:input_type -> google.protobuf.Empty
+	142, // 222: nitella.local.MobileLogicService.UpdateSettings:input_type -> nitella.local.UpdateSettingsRequest
+	144, // 223: nitella.local.MobileLogicService.RegisterFCMToken:input_type -> nitella.local.RegisterFCMTokenRequest
+	252, // 224: nitella.local.MobileLogicService.UnregisterFCMToken:input_type -> google.protobuf.Empty
+	145, // 225: nitella.local.MobileLogicService.ConnectToHub:input_type -> nitella.local.ConnectToHubRequest
+	252, // 226: nitella.local.MobileLogicService.DisconnectFromHub:input_type -> google.protobuf.Empty
+	252, // 227: nitella.local.MobileLogicService.GetHubStatus:input_type -> google.protobuf.Empty
+	252, // 228: nitella.local.MobileLogicService.GetHubSettingsSnapshot:input_type -> google.protobuf.Empty
+	252, // 229: nitella.local.MobileLogicService.GetHubOverview:input_type -> google.protobuf.Empty
+	152, // 230: nitella.local.MobileLogicService.GetHubDashboardSnapshot:input_type -> nitella.local.GetHubDashboardSnapshotRequest
+	154, // 231: nitella.local.MobileLogicService.RegisterUser:input_type -> nitella.local.RegisterUserRequest
+	146, // 232: nitella.local.MobileLogicService.FetchHubCA:input_type -> nitella.local.FetchHubCARequest
+	156, // 233: nitella.local.MobileLogicService.OnboardHub:input_type -> nitella.local.OnboardHubRequest
+	158, // 234: nitella.local.MobileLogicService.EnsureHubConnected:input_type -> nitella.local.EnsureHubConnectedRequest
+	157, // 235: nitella.local.MobileLogicService.EnsureHubRegistered:input_type -> nitella.local.EnsureHubRegisteredRequest
+	160, // 236: nitella.local.MobileLogicService.ResolveHubTrustChallenge:input_type -> nitella.local.ResolveHubTrustChallengeRequest
+	252, // 237: nitella.local.MobileLogicService.GetP2PStatus:input_type -> google.protobuf.Empty
+	252, // 238: nitella.local.MobileLogicService.GetP2PSettingsSnapshot:input_type -> google.protobuf.Empty
+	252, // 239: nitella.local.MobileLogicService.StreamP2PStatus:input_type -> google.protobuf.Empty
+	172, // 240: nitella.local.MobileLogicService.SetP2PMode:input_type -> nitella.local.SetP2PModeRequest
+	162, // 241: nitella.local.MobileLogicService.LookupIP:input_type -> nitella.local.LookupIPRequest
+	164, // 242: nitella.local.MobileLogicService.ConfigureGeoIP:input_type -> nitella.local.ConfigureGeoIPNodeRequest
+	165, // 243: nitella.local.MobileLogicService.GetGeoIPStatus:input_type -> nitella.local.GetGeoIPStatusNodeRequest
+	166, // 244: nitella.local.MobileLogicService.RestartListeners:input_type -> nitella.local.RestartListenersNodeRequest
+	174, // 245: nitella.local.MobileLogicService.ListLocalProxyConfigs:input_type -> nitella.local.ListLocalProxyConfigsRequest
+	176, // 246: nitella.local.MobileLogicService.GetLocalProxyConfig:input_type -> nitella.local.GetLocalProxyConfigRequest
+	178, // 247: nitella.local.MobileLogicService.ImportLocalProxyConfig:input_type -> nitella.local.ImportLocalProxyConfigRequest
+	180, // 248: nitella.local.MobileLogicService.SaveLocalProxyConfig:input_type -> nitella.local.SaveLocalProxyConfigRequest
+	182, // 249: nitella.local.MobileLogicService.DeleteLocalProxyConfig:input_type -> nitella.local.DeleteLocalProxyConfigRequest
+	184, // 250: nitella.local.MobileLogicService.ValidateLocalProxyConfig:input_type -> nitella.local.ValidateLocalProxyConfigRequest
+	186, // 251: nitella.local.MobileLogicService.PushProxyRevision:input_type -> nitella.local.PushProxyRevisionRequest
+	188, // 252: nitella.local.MobileLogicService.PushLocalProxyRevision:input_type -> nitella.local.PushLocalProxyRevisionRequest
+	190, // 253: nitella.local.MobileLogicService.PullProxyRevision:input_type -> nitella.local.PullProxyRevisionRequest
+	192, // 254: nitella.local.MobileLogicService.DiffProxyRevisions:input_type -> nitella.local.DiffProxyRevisionsRequest
+	194, // 255: nitella.local.MobileLogicService.ListProxyRevisions:input_type -> nitella.local.ListProxyRevisionsRequest
+	197, // 256: nitella.local.MobileLogicService.FlushProxyRevisions:input_type -> nitella.local.FlushProxyRevisionsRequest
+	199, // 257: nitella.local.MobileLogicService.ListProxyConfigs:input_type -> nitella.local.ListProxyConfigsRequest
+	202, // 258: nitella.local.MobileLogicService.CreateProxyConfig:input_type -> nitella.local.CreateProxyConfigRequest
+	204, // 259: nitella.local.MobileLogicService.DeleteProxyConfig:input_type -> nitella.local.DeleteProxyConfigRequest
+	206, // 260: nitella.local.MobileLogicService.ApplyProxyToNode:input_type -> nitella.local.ApplyProxyToNodeRequest
+	208, // 261: nitella.local.MobileLogicService.UnapplyProxyFromNode:input_type -> nitella.local.UnapplyProxyFromNodeRequest
+	210, // 262: nitella.local.MobileLogicService.GetAppliedProxies:input_type -> nitella.local.GetAppliedProxiesRequest
+	213, // 263: nitella.local.MobileLogicService.AllowIP:input_type -> nitella.local.AllowIPRequest
+	215, // 264: nitella.local.MobileLogicService.StreamMetrics:input_type -> nitella.local.StreamMetricsRequest
+	216, // 265: nitella.local.MobileLogicService.GetDebugRuntimeStats:input_type -> nitella.local.GetDebugRuntimeStatsRequest
+	220, // 266: nitella.local.MobileLogicService.GetLogsStats:input_type -> nitella.local.GetLogsStatsRequest
+	222, // 267: nitella.local.MobileLogicService.ListLogs:input_type -> nitella.local.ListLogsRequest
+	225, // 268: nitella.local.MobileLogicService.DeleteLogs:input_type -> nitella.local.DeleteLogsRequest
+	227, // 269: nitella.local.MobileLogicService.CleanupOldLogs:input_type -> nitella.local.CleanupOldLogsRequest
+	229, // 270: nitella.local.MobileLogicService.GetNodeFromHub:input_type -> nitella.local.GetNodeFromHubRequest
+	231, // 271: nitella.local.MobileLogicService.RegisterNodeWithHub:input_type -> nitella.local.RegisterNodeWithHubRequest
+	76,  // 272: nitella.local.MobileUIService.OnApprovalRequest:input_type -> nitella.local.ApprovalRequest
+	167, // 273: nitella.local.MobileUIService.OnNodeStatusChange:input_type -> nitella.local.NodeStatusChange
+	105, // 274: nitella.local.MobileUIService.OnConnectionEvent:input_type -> nitella.local.ConnectionEvent
+	168, // 275: nitella.local.MobileUIService.OnAlert:input_type -> nitella.local.Alert
+	169, // 276: nitella.local.MobileUIService.OnToast:input_type -> nitella.local.ToastMessage
+	14,  // 277: nitella.local.MobileLogicService.Initialize:output_type -> nitella.local.InitializeResponse
+	252, // 278: nitella.local.MobileLogicService.Shutdown:output_type -> google.protobuf.Empty
+	15,  // 279: nitella.local.MobileLogicService.GetBootstrapState:output_type -> nitella.local.BootstrapStateResponse
+	16,  // 280: nitella.local.MobileLogicService.GetIdentity:output_type -> nitella.local.IdentityInfo
+	18,  // 281: nitella.local.MobileLogicService.CreateIdentity:output_type -> nitella.local.CreateIdentityResponse
+	20,  // 282: nitella.local.MobileLogicService.RestoreIdentity:output_type -> nitella.local.RestoreIdentityResponse
+	22,  // 283: nitella.local.MobileLogicService.ImportIdentity:output_type -> nitella.local.ImportIdentityResponse
+	24,  // 284: nitella.local.MobileLogicService.UnlockIdentity:output_type -> nitella.local.UnlockIdentityResponse
+	252, // 285: nitella.local.MobileLogicService.LockIdentity:output_type -> google.protobuf.Empty
+	252, // 286: nitella.local.MobileLogicService.ChangePassphrase:output_type -> google.protobuf.Empty
+	27,  // 287: nitella.local.MobileLogicService.EvaluatePassphrase:output_type -> nitella.local.EvaluatePassphraseResponse
+	252, // 288: nitella.local.MobileLogicService.ResetIdentity:output_type -> google.protobuf.Empty
+	31,  // 289: nitella.local.MobileLogicService.ListNodes:output_type -> nitella.local.ListNodesResponse
+	28,  // 290: nitella.local.MobileLogicService.GetNode:output_type -> nitella.local.NodeInfo
+	35,  // 291: nitella.local.MobileLogicService.GetNodeDetailSnapshot:output_type -> nitella.local.NodeDetailSnapshot
+	28,  // 292: nitella.local.MobileLogicService.UpdateNode:output_type -> nitella.local.NodeInfo
+	252, // 293: nitella.local.MobileLogicService.RemoveNode:output_type -> google.protobuf.Empty
+	39,  // 294: nitella.local.MobileLogicService.AddNodeDirect:output_type -> nitella.local.AddNodeDirectResponse
+	41,  // 295: nitella.local.MobileLogicService.TestDirectConnection:output_type -> nitella.local.TestDirectConnectionResponse
+	44,  // 296: nitella.local.MobileLogicService.ListProxies:output_type -> nitella.local.ListProxiesResponse
+	47,  // 297: nitella.local.MobileLogicService.GetProxiesSnapshot:output_type -> nitella.local.GetProxiesSnapshotResponse
+	42,  // 298: nitella.local.MobileLogicService.GetProxy:output_type -> nitella.local.ProxyInfo
+	42,  // 299: nitella.local.MobileLogicService.AddProxy:output_type -> nitella.local.ProxyInfo
+	42,  // 300: nitella.local.MobileLogicService.UpdateProxy:output_type -> nitella.local.ProxyInfo
+	53,  // 301: nitella.local.MobileLogicService.SetNodeProxiesRunning:output_type -> nitella.local.SetNodeProxiesRunningResponse
+	252, // 302: nitella.local.MobileLogicService.RemoveProxy:output_type -> google.protobuf.Empty
+	55,  // 303: nitella.local.MobileLogicService.ListRules:output_type -> nitella.local.ListRulesResponse
+	238, // 304: nitella.local.MobileLogicService.GetRule:output_type -> nitella.proxy.Rule
+	238, // 305: nitella.local.MobileLogicService.AddRule:output_type -> nitella.proxy.Rule
+	61,  // 306: nitella.local.MobileLogicService.AddQuickRule:output_type -> nitella.local.AddQuickRuleResponse
+	238, // 307: nitella.local.MobileLogicService.UpdateRule:output_type -> nitella.proxy.Rule
+	252, // 308: nitella.local.MobileLogicService.RemoveRule:output_type -> google.protobuf.Empty
+	65,  // 309: nitella.local.MobileLogicService.BlockIP:output_type -> nitella.local.BlockIPResponse
+	67,  // 310: nitella.local.MobileLogicService.BlockISP:output_type -> nitella.local.BlockISPResponse
+	69,  // 311: nitella.local.MobileLogicService.BlockCountry:output_type -> nitella.local.BlockCountryResponse
+	71,  // 312: nitella.local.MobileLogicService.AddGlobalRule:output_type -> nitella.local.AddGlobalRuleResponse
+	73,  // 313: nitella.local.MobileLogicService.ListGlobalRules:output_type -> nitella.local.ListGlobalRulesResponse
+	75,  // 314: nitella.local.MobileLogicService.RemoveGlobalRule:output_type -> nitella.local.RemoveGlobalRuleResponse
+	78,  // 315: nitella.local.MobileLogicService.ListPendingApprovals:output_type -> nitella.local.ListPendingApprovalsResponse
+	80,  // 316: nitella.local.MobileLogicService.GetApprovalsSnapshot:output_type -> nitella.local.GetApprovalsSnapshotResponse
+	82,  // 317: nitella.local.MobileLogicService.ApproveRequest:output_type -> nitella.local.ApproveRequestResponse
+	84,  // 318: nitella.local.MobileLogicService.DenyRequest:output_type -> nitella.local.DenyRequestResponse
+	86,  // 319: nitella.local.MobileLogicService.ResolveApprovalDecision:output_type -> nitella.local.ResolveApprovalDecisionResponse
+	76,  // 320: nitella.local.MobileLogicService.StreamApprovals:output_type -> nitella.local.ApprovalRequest
+	90,  // 321: nitella.local.MobileLogicService.ListApprovalHistory:output_type -> nitella.local.ListApprovalHistoryResponse
+	92,  // 322: nitella.local.MobileLogicService.ClearApprovalHistory:output_type -> nitella.local.ClearApprovalHistoryResponse
+	93,  // 323: nitella.local.MobileLogicService.GetConnectionStats:output_type -> nitella.local.ConnectionStats
+	97,  // 324: nitella.local.MobileLogicService.ListConnections:output_type -> nitella.local.ListConnectionsResponse
+	100, // 325: nitella.local.MobileLogicService.GetIPStats:output_type -> nitella.local.GetIPStatsResponse
+	103, // 326: nitella.local.MobileLogicService.GetGeoStats:output_type -> nitella.local.GetGeoStatsResponse
+	105, // 327: nitella.local.MobileLogicService.StreamConnections:output_type -> nitella.local.ConnectionEvent
+	107, // 328: nitella.local.MobileLogicService.CloseConnection:output_type -> nitella.local.CloseConnectionResponse
+	109, // 329: nitella.local.MobileLogicService.CloseAllConnections:output_type -> nitella.local.CloseAllConnectionsResponse
+	111, // 330: nitella.local.MobileLogicService.CloseAllNodeConnections:output_type -> nitella.local.CloseAllNodeConnectionsResponse
+	113, // 331: nitella.local.MobileLogicService.StartPairing:output_type -> nitella.local.StartPairingResponse
+	115, // 332: nitella.local.MobileLogicService.JoinPairing:output_type -> nitella.local.JoinPairingResponse
+	117, // 333: nitella.local.MobileLogicService.CompletePairing:output_type -> nitella.local.CompletePairingResponse
+	119, // 334: nitella.local.MobileLogicService.FinalizePairing:output_type -> nitella.local.FinalizePairingResponse
+	252, // 335: nitella.local.MobileLogicService.CancelPairing:output_type -> google.protobuf.Empty
+	122, // 336: nitella.local.MobileLogicService.GenerateQRCode:output_type -> nitella.local.GenerateQRCodeResponse
+	124, // 337: nitella.local.MobileLogicService.ScanQRCode:output_type -> nitella.local.ScanQRCodeResponse
+	126, // 338: nitella.local.MobileLogicService.GenerateQRResponse:output_type -> nitella.local.GenerateQRReplyResponse
+	130, // 339: nitella.local.MobileLogicService.ListTemplates:output_type -> nitella.local.ListTemplatesResponse
+	127, // 340: nitella.local.MobileLogicService.GetTemplate:output_type -> nitella.local.Template
+	127, // 341: nitella.local.MobileLogicService.CreateTemplate:output_type -> nitella.local.Template
+	134, // 342: nitella.local.MobileLogicService.ApplyTemplate:output_type -> nitella.local.ApplyTemplateResponse
+	252, // 343: nitella.local.MobileLogicService.DeleteTemplate:output_type -> google.protobuf.Empty
+	136, // 344: nitella.local.MobileLogicService.SyncTemplates:output_type -> nitella.local.SyncTemplatesResponse
+	138, // 345: nitella.local.MobileLogicService.ExportTemplateYaml:output_type -> nitella.local.ExportTemplateYamlResponse
+	140, // 346: nitella.local.MobileLogicService.ImportTemplateYaml:output_type -> nitella.local.ImportTemplateYamlResponse
+	141, // 347: nitella.local.MobileLogicService.GetSettings:output_type -> nitella.local.Settings
+	143, // 348: nitella.local.MobileLogicService.GetSettingsOverviewSnapshot:output_type -> nitella.local.SettingsOverviewSnapshot
+	141, // 349: nitella.local.MobileLogicService.UpdateSettings:output_type -> nitella.local.Settings
+	252, // 350: nitella.local.MobileLogicService.RegisterFCMToken:output_type -> google.protobuf.Empty
+	252, // 351: nitella.local.MobileLogicService.UnregisterFCMToken:output_type -> google.protobuf.Empty
+	148, // 352: nitella.local.MobileLogicService.ConnectToHub:output_type -> nitella.local.ConnectToHubResponse
+	252, // 353: nitella.local.MobileLogicService.DisconnectFromHub:output_type -> google.protobuf.Empty
+	149, // 354: nitella.local.MobileLogicService.GetHubStatus:output_type -> nitella.local.HubStatus
+	150, // 355: nitella.local.MobileLogicService.GetHubSettingsSnapshot:output_type -> nitella.local.HubSettingsSnapshot
+	151, // 356: nitella.local.MobileLogicService.GetHubOverview:output_type -> nitella.local.HubOverview
+	153, // 357: nitella.local.MobileLogicService.GetHubDashboardSnapshot:output_type -> nitella.local.HubDashboardSnapshot
+	155, // 358: nitella.local.MobileLogicService.RegisterUser:output_type -> nitella.local.RegisterUserResponse
+	147, // 359: nitella.local.MobileLogicService.FetchHubCA:output_type -> nitella.local.FetchHubCAResponse
+	161, // 360: nitella.local.MobileLogicService.OnboardHub:output_type -> nitella.local.OnboardHubResponse
+	161, // 361: nitella.local.MobileLogicService.EnsureHubConnected:output_type -> nitella.local.OnboardHubResponse
+	161, // 362: nitella.local.MobileLogicService.EnsureHubRegistered:output_type -> nitella.local.OnboardHubResponse
+	161, // 363: nitella.local.MobileLogicService.ResolveHubTrustChallenge:output_type -> nitella.local.OnboardHubResponse
+	170, // 364: nitella.local.MobileLogicService.GetP2PStatus:output_type -> nitella.local.P2PStatus
+	171, // 365: nitella.local.MobileLogicService.GetP2PSettingsSnapshot:output_type -> nitella.local.P2PSettingsSnapshot
+	170, // 366: nitella.local.MobileLogicService.StreamP2PStatus:output_type -> nitella.local.P2PStatus
+	252, // 367: nitella.local.MobileLogicService.SetP2PMode:output_type -> google.protobuf.Empty
+	163, // 368: nitella.local.MobileLogicService.LookupIP:output_type -> nitella.local.LookupIPResponse
+	253, // 369: nitella.local.MobileLogicService.ConfigureGeoIP:output_type -> nitella.proxy.ConfigureGeoIPResponse
+	254, // 370: nitella.local.MobileLogicService.GetGeoIPStatus:output_type -> nitella.proxy.GetGeoIPStatusResponse
+	255, // 371: nitella.local.MobileLogicService.RestartListeners:output_type -> nitella.proxy.RestartListenersResponse
+	175, // 372: nitella.local.MobileLogicService.ListLocalProxyConfigs:output_type -> nitella.local.ListLocalProxyConfigsResponse
+	177, // 373: nitella.local.MobileLogicService.GetLocalProxyConfig:output_type -> nitella.local.GetLocalProxyConfigResponse
+	179, // 374: nitella.local.MobileLogicService.ImportLocalProxyConfig:output_type -> nitella.local.ImportLocalProxyConfigResponse
+	181, // 375: nitella.local.MobileLogicService.SaveLocalProxyConfig:output_type -> nitella.local.SaveLocalProxyConfigResponse
+	183, // 376: nitella.local.MobileLogicService.DeleteLocalProxyConfig:output_type -> nitella.local.DeleteLocalProxyConfigResponse
+	185, // 377: nitella.local.MobileLogicService.ValidateLocalProxyConfig:output_type -> nitella.local.ValidateLocalProxyConfigResponse
+	187, // 378: nitella.local.MobileLogicService.PushProxyRevision:output_type -> nitella.local.PushProxyRevisionResponse
+	189, // 379: nitella.local.MobileLogicService.PushLocalProxyRevision:output_type -> nitella.local.PushLocalProxyRevisionResponse
+	191, // 380: nitella.local.MobileLogicService.PullProxyRevision:output_type -> nitella.local.PullProxyRevisionResponse
+	193, // 381: nitella.local.MobileLogicService.DiffProxyRevisions:output_type -> nitella.local.DiffProxyRevisionsResponse
+	195, // 382: nitella.local.MobileLogicService.ListProxyRevisions:output_type -> nitella.local.ListProxyRevisionsResponse
+	198, // 383: nitella.local.MobileLogicService.FlushProxyRevisions:output_type -> nitella.local.FlushProxyRevisionsResponse
+	200, // 384: nitella.local.MobileLogicService.ListProxyConfigs:output_type -> nitella.local.ListProxyConfigsResponse
+	203, // 385: nitella.local.MobileLogicService.CreateProxyConfig:output_type -> nitella.local.CreateProxyConfigResponse
+	205, // 386: nitella.local.MobileLogicService.DeleteProxyConfig:output_type -> nitella.local.DeleteProxyConfigResponse
+	207, // 387: nitella.local.MobileLogicService.ApplyProxyToNode:output_type -> nitella.local.ApplyProxyToNodeResponse
+	209, // 388: nitella.local.MobileLogicService.UnapplyProxyFromNode:output_type -> nitella.local.UnapplyProxyFromNodeResponse
+	211, // 389: nitella.local.MobileLogicService.GetAppliedProxies:output_type -> nitella.local.GetAppliedProxiesResponse
+	214, // 390: nitella.local.MobileLogicService.AllowIP:output_type -> nitella.local.AllowIPResponse
+	29,  // 391: nitella.local.MobileLogicService.StreamMetrics:output_type -> nitella.local.NodeMetrics
+	217, // 392: nitella.local.MobileLogicService.GetDebugRuntimeStats:output_type -> nitella.local.DebugRuntimeStats
+	221, // 393: nitella.local.MobileLogicService.GetLogsStats:output_type -> nitella.local.GetLogsStatsResponse
+	223, // 394: nitella.local.MobileLogicService.ListLogs:output_type -> nitella.local.ListLogsResponse
+	226, // 395: nitella.local.MobileLogicService.DeleteLogs:output_type -> nitella.local.DeleteLogsResponse
+	228, // 396: nitella.local.MobileLogicService.CleanupOldLogs:output_type -> nitella.local.CleanupOldLogsResponse
+	230, // 397: nitella.local.MobileLogicService.GetNodeFromHub:output_type -> nitella.local.GetNodeFromHubResponse
+	232, // 398: nitella.local.MobileLogicService.RegisterNodeWithHub:output_type -> nitella.local.RegisterNodeWithHubResponse
+	252, // 399: nitella.local.MobileUIService.OnApprovalRequest:output_type -> google.protobuf.Empty
+	252, // 400: nitella.local.MobileUIService.OnNodeStatusChange:output_type -> google.protobuf.Empty
+	252, // 401: nitella.local.MobileUIService.OnConnectionEvent:output_type -> google.protobuf.Empty
+	252, // 402: nitella.local.MobileUIService.OnAlert:output_type -> google.protobuf.Empty
+	252, // 403: nitella.local.MobileUIService.OnToast:output_type -> google.protobuf.Empty
+	277, // [277:404] is the sub-list for method output_type
+	150, // [150:277] is the sub-list for method input_type
+	150, // [150:150] is the sub-list for extension type_name
+	150, // [150:150] is the sub-list for extension extendee
+	0,   // [0:150] is the sub-list for field type_name
 }
 
 func init() { file_local_nitella_local_proto_init() }

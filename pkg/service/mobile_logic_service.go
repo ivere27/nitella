@@ -242,7 +242,7 @@ func isJWTExpired(token string, now time.Time) bool {
 	}
 
 	// Small skew to avoid reusing a token right at the edge.
-	return now.Add(30 * time.Second).Unix() >= claims.Exp
+	return now.Add(30*time.Second).Unix() >= claims.Exp
 }
 
 func sanitizeReusableHubToken(token string) string {
@@ -1695,12 +1695,15 @@ func (s *MobileLogicService) handleP2PApprovalRequest(nodeID string, req *p2p.Ap
 	compositeID := nodeID + ":" + req.RequestID
 
 	approvalReq := &pb.ApprovalRequest{
-		RequestId: compositeID,
-		NodeId:    nodeID,
-		SourceIp:  req.SourceIP,
-		DestAddr:  req.DestAddr,
-		ProxyId:   req.ProxyID,
-		Timestamp: timestamppb.Now(),
+		RequestId:             compositeID,
+		NodeId:                nodeID,
+		SourceIp:              req.SourceIP,
+		DestAddr:              req.DestAddr,
+		ProxyId:               req.ProxyID,
+		RuleId:                req.RuleID,
+		BackendChoices:        req.BackendChoices,
+		SelectedTargetBackend: req.SelectedTargetBackend,
+		Timestamp:             timestamppb.Now(),
 	}
 
 	// Add geo info if available

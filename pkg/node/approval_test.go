@@ -478,6 +478,7 @@ func TestApprovalManager_ResolveConnectionOnly(t *testing.T) {
 		60,
 		"",
 		common.ApprovalRetentionMode_APPROVAL_RETENTION_MODE_CONNECTION_ONLY,
+		"",
 	)
 
 	<-done
@@ -539,6 +540,24 @@ func TestApprovalManager_AddToCacheWithGeo(t *testing.T) {
 	}
 	if entry.GeoCity != "New York" {
 		t.Errorf("Expected GeoCity=New York, got %s", entry.GeoCity)
+	}
+}
+
+func TestApprovalManager_AddToCacheWithGeoAndBackend(t *testing.T) {
+	sender := &MockAlertSender{}
+	am := NewApprovalManager(sender)
+
+	am.AddToCacheWithGeoAndBackend("1.2.3.4", "rule-1", "proxy-1", "", true, 1*time.Hour, "US", "New York", "Comcast", "127.0.0.1:9002")
+
+	if got := am.GetCachedTargetBackend("1.2.3.4", "rule-1", ""); got != "127.0.0.1:9002" {
+		t.Fatalf("Expected cached target backend, got %q", got)
+	}
+	active := am.GetActiveApprovals()
+	if len(active) != 1 {
+		t.Fatalf("Expected 1 active approval, got %d", len(active))
+	}
+	if active[0].TargetBackend != "127.0.0.1:9002" {
+		t.Fatalf("Expected active approval target backend, got %q", active[0].TargetBackend)
 	}
 }
 

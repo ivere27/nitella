@@ -847,6 +847,7 @@ message AddProxyRequest {
   string cert_pem = 10;
   string key_pem = 11;
   string ca_pem = 12;
+  repeated nitella.BackendChoice approval_backends = 13;
 }
 
 message UpdateProxyRequest {
@@ -1049,6 +1050,8 @@ message ApprovalRequest {
   google.protobuf.Timestamp timestamp = 12;
   string tls_cn = 13;            // TLS Common Name (if present)
   string tls_fingerprint = 14;   // TLS fingerprint (if present)
+  repeated nitella.BackendChoice backend_choices = 15;
+  string selected_target_backend = 16; // Default for the dropdown (rule.target_backend or proxy default).
 }
 
 message ListPendingApprovalsRequest {
@@ -1083,6 +1086,7 @@ message ApproveRequestRequest {
   nitella.ApprovalRetentionMode retention_mode = 2;  // UNSPECIFIED -> CACHE
   int64 duration_seconds = 3;    // CACHE: cache TTL, CONNECTION_ONLY: max lifetime (0 = until close)
   bool create_rule = 4;          // Create permanent allow rule
+  string target_backend_override = 5;
 }
 
 message ApproveRequestResponse {
@@ -1128,6 +1132,7 @@ message ResolveApprovalDecisionRequest {
   nitella.ApprovalRetentionMode retention_mode = 3;  // UNSPECIFIED -> CACHE
   int64 duration_seconds = 4;    // CACHE: cache TTL, CONNECTION_ONLY: max lifetime
   DenyBlockType deny_block_type = 5;
+  string target_backend_override = 6;
 }
 
 message ResolveApprovalDecisionResponse {

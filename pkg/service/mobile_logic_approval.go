@@ -3,7 +3,6 @@ package service
 import (
 	"context"
 	"crypto/ed25519"
-	"encoding/json"
 	"fmt"
 	"log"
 	"strings"
@@ -135,14 +134,24 @@ func (s *MobileLogicService) ApproveRequest(ctx context.Context, req *pb.Approve
 	}
 
 	// Check if direct node
+	targetBackendOverride := strings.TrimSpace(req.GetTargetBackendOverride())
+
 	if s.isDirectNode(nodeID) {
-		resp, err := s.approveRequestDirect(ctx, nodeID, reqID, durationSeconds, retentionMode)
+		resp, resolvedTargetBackend, err := s.approveRequestDirect(ctx, nodeID, reqID, durationSeconds, retentionMode, targetBackendOverride)
 		if err != nil {
 			return resp, err
 		}
 		if resp != nil && resp.Success {
 			consumed = true
 			resp.DecisionApplied = true
+			if req.GetCreateRule() {
+				ruleID, ruleErr := s.createApprovalAllowRule(ctx, nodeID, pending, targetBackendOverride, resolvedTargetBackend)
+				if ruleErr != nil {
+					resp.Success = false
+					resp.Error = "decision applied but failed to create allow rule: " + ruleErr.Error()
+				}
+				resp.RuleId = ruleID
+			}
 			historyErr := s.appendApprovalHistory(s.buildApprovalHistoryEntry(
 				pending,
 				nodeID,
@@ -175,10 +184,11 @@ func (s *MobileLogicService) ApproveRequest(ctx context.Context, req *pb.Approve
 
 	// Send ResolveApproval command to node via Hub
 	resolveReq := &pbProxy.ResolveApprovalRequest{
-		ReqId:           reqID,
-		Action:          common.ApprovalActionType_APPROVAL_ACTION_TYPE_ALLOW,
-		RetentionMode:   retentionMode,
-		DurationSeconds: durationSeconds,
+		ReqId:                 reqID,
+		Action:                common.ApprovalActionType_APPROVAL_ACTION_TYPE_ALLOW,
+		RetentionMode:         retentionMode,
+		DurationSeconds:       durationSeconds,
+		TargetBackendOverride: targetBackendOverride,
 	}
 	payload, err := proto.Marshal(resolveReq)
 	if err != nil {
@@ -202,26 +212,54 @@ func (s *MobileLogicService) ApproveRequest(ctx context.Context, req *pb.Approve
 			Error:   result.ErrorMessage,
 		}, nil
 	}
+	resolvedTargetBackend := ""
+	var resolveResp pbProxy.ResolveApprovalResponse
+	if len(result.ResponsePayload) > 0 {
+		if err := proto.Unmarshal(result.ResponsePayload, &resolveResp); err != nil {
+			return &pb.ApproveRequestResponse{
+				Success: false,
+				Error:   fmt.Sprintf("failed to parse approval response: %v", err),
+			}, nil
+		}
+		if !resolveResp.GetSuccess() {
+			return &pb.ApproveRequestResponse{
+				Success: false,
+				Error:   resolveResp.GetErrorMessage(),
+			}, nil
+		}
+		resolvedTargetBackend = resolveResp.GetResolvedTargetBackend()
+	}
 
 	// Remove from pending approvals
 	consumed = true
+	ruleID := ""
+	var createRuleErr error
+	if req.GetCreateRule() {
+		ruleID, createRuleErr = s.createApprovalAllowRule(ctx, nodeID, pending, targetBackendOverride, resolvedTargetBackend)
+	}
 	historyErr := s.appendApprovalHistory(s.buildApprovalHistoryEntry(
 		pending,
 		nodeID,
 		pb.ApprovalHistoryAction_APPROVAL_HISTORY_ACTION_APPROVED,
 		durationSeconds,
 		pb.DenyBlockType_DENY_BLOCK_TYPE_NONE,
-		"",
+		ruleID,
 	))
 
 	resp := &pb.ApproveRequestResponse{
-		Success:          true,
+		Success:          createRuleErr == nil,
+		RuleId:           ruleID,
 		DecisionApplied:  true,
 		HistoryPersisted: historyErr == nil,
 	}
+	if createRuleErr != nil {
+		resp.Error = "decision applied but failed to create allow rule: " + createRuleErr.Error()
+	}
 	if historyErr != nil {
 		resp.HistoryError = historyErr.Error()
-		resp.Error = "decision applied but failed to persist approval history: " + historyErr.Error()
+		if resp.Error == "" {
+			resp.Error = "decision applied but failed to persist approval history: " + historyErr.Error()
+		}
 	}
 	return resp, nil
 }
@@ -416,9 +454,10 @@ func (s *MobileLogicService) ResolveApprovalDecision(ctx context.Context, req *p
 	switch req.GetDecision() {
 	case pb.ApprovalDecision_APPROVAL_DECISION_APPROVE:
 		approveResp, err := s.ApproveRequest(ctx, &pb.ApproveRequestRequest{
-			RequestId:       req.GetRequestId(),
-			RetentionMode:   req.GetRetentionMode(),
-			DurationSeconds: req.GetDurationSeconds(),
+			RequestId:             req.GetRequestId(),
+			RetentionMode:         req.GetRetentionMode(),
+			DurationSeconds:       req.GetDurationSeconds(),
+			TargetBackendOverride: req.GetTargetBackendOverride(),
 		})
 		if err != nil {
 			return nil, err
@@ -456,6 +495,67 @@ func (s *MobileLogicService) ResolveApprovalDecision(ctx context.Context, req *p
 			Error:   "decision is required",
 		}, nil
 	}
+}
+
+func (s *MobileLogicService) createApprovalAllowRule(ctx context.Context, nodeID string, pending *pb.ApprovalRequest, targetBackendOverride, resolvedTargetBackend string) (string, error) {
+	if pending == nil {
+		return "", fmt.Errorf("approval request context is missing")
+	}
+	sourceIP := strings.TrimSpace(pending.GetSourceIp())
+	if sourceIP == "" {
+		return "", fmt.Errorf("approval request source_ip is missing")
+	}
+	proxyID := strings.TrimSpace(pending.GetProxyId())
+	if proxyID == "" {
+		return "", fmt.Errorf("approval request proxy_id is missing")
+	}
+
+	targetBackend := approvalRuleTargetBackend(pending, targetBackendOverride, resolvedTargetBackend)
+	rule, err := s.AddRule(ctx, &pb.AddRuleRequest{
+		NodeId:  nodeID,
+		ProxyId: proxyID,
+		Rule: &pbProxy.Rule{
+			Name:          "Auto-approved " + sourceIP,
+			Enabled:       true,
+			Action:        common.ActionType_ACTION_TYPE_ALLOW,
+			TargetBackend: targetBackend,
+			Conditions: []*pbProxy.Condition{
+				{
+					Type:  common.ConditionType_CONDITION_TYPE_SOURCE_IP,
+					Op:    common.Operator_OPERATOR_EQ,
+					Value: sourceIP,
+				},
+			},
+		},
+	})
+	if err != nil {
+		return "", err
+	}
+	if rule == nil {
+		return "", nil
+	}
+	return rule.GetId(), nil
+}
+
+func approvalRuleTargetBackend(pending *pb.ApprovalRequest, targetBackendOverride, resolvedTargetBackend string) string {
+	if pending == nil {
+		return ""
+	}
+	if resolved := strings.TrimSpace(resolvedTargetBackend); resolved != "" {
+		return resolved
+	}
+	override := strings.TrimSpace(targetBackendOverride)
+	if override != "" {
+		for _, choice := range pending.GetBackendChoices() {
+			if choice != nil && choice.GetId() == override {
+				return choice.GetAddress()
+			}
+		}
+	}
+	if selected := strings.TrimSpace(pending.GetSelectedTargetBackend()); selected != "" {
+		return selected
+	}
+	return strings.TrimSpace(pending.GetDestAddr())
 }
 
 func normalizeApprovalRetentionMode(mode common.ApprovalRetentionMode) common.ApprovalRetentionMode {
@@ -586,16 +686,21 @@ func (s *MobileLogicService) processIncomingAlert(alert *common.Alert, privKey e
 		}
 
 		if plaintext, err := nitellacrypto.Decrypt(cryptoPayload, privKey); err == nil {
-			var info map[string]interface{}
-			if json.Unmarshal(plaintext, &info) == nil {
-				if v, ok := info["source_ip"].(string); ok {
-					approvalReq.SourceIp = v
-				}
-				if v, ok := info["destination"].(string); ok {
-					approvalReq.DestAddr = v
-				}
-				if v, ok := info["proxy_id"].(string); ok {
-					approvalReq.ProxyId = v
+			var details common.AlertDetails
+			if proto.Unmarshal(plaintext, &details) == nil {
+				approvalReq.SourceIp = details.GetSourceIp()
+				approvalReq.DestAddr = details.GetDestination()
+				approvalReq.ProxyId = details.GetProxyId()
+				approvalReq.ProxyName = details.GetProxyName()
+				approvalReq.RuleId = details.GetRuleId()
+				approvalReq.BackendChoices = details.GetBackendChoices()
+				approvalReq.SelectedTargetBackend = details.GetSelectedTargetBackend()
+				if details.GetGeoCountry() != "" || details.GetGeoCity() != "" || details.GetGeoIsp() != "" {
+					approvalReq.Geo = &common.GeoInfo{
+						Country: details.GetGeoCountry(),
+						City:    details.GetGeoCity(),
+						Isp:     details.GetGeoIsp(),
+					}
 				}
 			}
 		}
@@ -700,6 +805,16 @@ func cloneApprovalRequest(src *pb.ApprovalRequest) *pb.ApprovalRequest {
 	}
 	if src.Timestamp != nil {
 		dst.Timestamp = timestamppb.New(src.Timestamp.AsTime())
+	}
+	if len(src.BackendChoices) > 0 {
+		dst.BackendChoices = make([]*common.BackendChoice, 0, len(src.BackendChoices))
+		for _, choice := range src.BackendChoices {
+			if choice == nil {
+				continue
+			}
+			copied := *choice
+			dst.BackendChoices = append(dst.BackendChoices, &copied)
+		}
 	}
 	return &dst
 }

@@ -25,18 +25,19 @@ type FfiListener struct {
 	client pb.ProcessControlClient
 
 	// Configuration (cached for Listener interface methods)
-	ID             string
-	Name           string
-	ListenAddr     string
-	DefaultBackend string
-	DefaultAction  common.ActionType
-	DefaultMock    common.MockPreset
-	FallbackAction common.FallbackAction
-	FallbackMock   common.MockPreset
-	CertPEM        string
-	KeyPEM         string
-	CaPEM          string
-	ClientAuthType proxy_pb.ClientAuthType
+	ID               string
+	Name             string
+	ListenAddr       string
+	DefaultBackend   string
+	DefaultAction    common.ActionType
+	DefaultMock      common.MockPreset
+	FallbackAction   common.FallbackAction
+	FallbackMock     common.MockPreset
+	CertPEM          string
+	KeyPEM           string
+	CaPEM            string
+	ClientAuthType   proxy_pb.ClientAuthType
+	ApprovalBackends []*common.BackendChoice
 
 	// State
 	mu        sync.Mutex
@@ -99,6 +100,12 @@ func (f *FfiListener) SetGlobalRules(gr *GlobalRulesStore) {
 // SetNodeID sets the node ID for approval requests.
 func (f *FfiListener) SetNodeID(nodeID string) {
 	f.core.SetNodeID(nodeID)
+}
+
+// SetApprovalBackends sets the proxy-level backend choice pool for approvals.
+func (f *FfiListener) SetApprovalBackends(backends []*common.BackendChoice) {
+	f.ApprovalBackends = cloneBackendChoices(backends)
+	f.core.SetApprovalBackends(backends)
 }
 
 // SetFallback sets fallback action.
@@ -212,13 +219,14 @@ func (f *FfiListener) GetStatus() *proxy_pb.ProxyStatus {
 	resp, err := f.client.GetMetrics(context.Background(), &pb.GetMetricsRequest{})
 	if err != nil || resp.Status == nil {
 		return &proxy_pb.ProxyStatus{
-			ProxyId:        f.ID,
-			Running:        running,
-			ListenAddr:     f.ListenAddr,
-			DefaultBackend: f.DefaultBackend,
-			DefaultAction:  f.DefaultAction,
-			DefaultMock:    f.DefaultMock,
-			UptimeSeconds:  int64(time.Since(startTime).Seconds()),
+			ProxyId:          f.ID,
+			Running:          running,
+			ListenAddr:       f.ListenAddr,
+			DefaultBackend:   f.DefaultBackend,
+			DefaultAction:    f.DefaultAction,
+			DefaultMock:      f.DefaultMock,
+			UptimeSeconds:    int64(time.Since(startTime).Seconds()),
+			ApprovalBackends: cloneBackendChoices(f.ApprovalBackends),
 		}
 	}
 

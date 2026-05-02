@@ -13,6 +13,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .type_attribute("nitella.proxy.RateLimitConfig", serde_message_impl)
         .type_attribute("nitella.proxy.MockConfig", serde_message_impl)
         .type_attribute("nitella.proxy.HealthCheckConfig", serde_message_impl)
+        .type_attribute("nitella.BackendChoice", serde_message_impl)
+        .type_attribute("nitella.common.BackendChoice", serde_message_impl)
         .type_attribute("nitella.common.ActionType", serde_impl)
         .type_attribute("nitella.common.MockPreset", serde_impl)
         .type_attribute("nitella.common.FallbackAction", serde_impl)

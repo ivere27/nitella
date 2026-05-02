@@ -112,12 +112,14 @@ class RegisterNodeWithCertRequest extends $pb.GeneratedMessage {
     $core.String? certPem,
     $core.String? routingToken,
     $core.List<$core.int>? encryptedMetadata,
+    $core.String? caPem,
   }) {
     final result = create();
     if (nodeId != null) result.nodeId = nodeId;
     if (certPem != null) result.certPem = certPem;
     if (routingToken != null) result.routingToken = routingToken;
     if (encryptedMetadata != null) result.encryptedMetadata = encryptedMetadata;
+    if (caPem != null) result.caPem = caPem;
     return result;
   }
 
@@ -139,6 +141,7 @@ class RegisterNodeWithCertRequest extends $pb.GeneratedMessage {
     ..aOS(3, _omitFieldNames ? '' : 'routingToken')
     ..a<$core.List<$core.int>>(
         4, _omitFieldNames ? '' : 'encryptedMetadata', $pb.PbFieldType.OY)
+    ..aOS(5, _omitFieldNames ? '' : 'caPem')
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
@@ -198,6 +201,15 @@ class RegisterNodeWithCertRequest extends $pb.GeneratedMessage {
   $core.bool hasEncryptedMetadata() => $_has(3);
   @$pb.TagNumber(4)
   void clearEncryptedMetadata() => $_clearField(4);
+
+  @$pb.TagNumber(5)
+  $core.String get caPem => $_getSZ(4);
+  @$pb.TagNumber(5)
+  set caPem($core.String value) => $_setString(4, value);
+  @$pb.TagNumber(5)
+  $core.bool hasCaPem() => $_has(4);
+  @$pb.TagNumber(5)
+  void clearCaPem() => $_clearField(5);
 }
 
 class ListNodesRequest extends $pb.GeneratedMessage {

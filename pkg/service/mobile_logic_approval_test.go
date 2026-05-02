@@ -7,7 +7,10 @@ import (
 	"time"
 
 	"github.com/ivere27/nitella/pkg/api/common"
+	hubpb "github.com/ivere27/nitella/pkg/api/hub"
 	pb "github.com/ivere27/nitella/pkg/api/local"
+	pbProxy "github.com/ivere27/nitella/pkg/api/proxy"
+	"google.golang.org/protobuf/proto"
 )
 
 func TestResolveApprovalDecisionRequiresDecision(t *testing.T) {
@@ -58,6 +61,66 @@ func TestResolveApprovalDecisionDenyPropagatesValidation(t *testing.T) {
 	}
 	if !strings.Contains(resp.GetError(), "approval request not found") {
 		t.Fatalf("unexpected error: %q", resp.GetError())
+	}
+}
+
+func TestApproveResponseFromResolveCommandResultSurfacesNodeFailure(t *testing.T) {
+	payload, err := proto.Marshal(&pbProxy.ResolveApprovalResponse{
+		Success:      false,
+		ErrorMessage: "invalid target_backend_override",
+	})
+	if err != nil {
+		t.Fatalf("marshal response: %v", err)
+	}
+
+	resp, resolved := approveResponseFromResolveCommandResult(&hubpb.CommandResult{
+		Status:          "OK",
+		ResponsePayload: payload,
+	})
+	if resp.GetSuccess() {
+		t.Fatalf("expected node-side failure to propagate")
+	}
+	if resolved != "" {
+		t.Fatalf("expected no resolved backend on failure, got %q", resolved)
+	}
+	if !strings.Contains(resp.GetError(), "invalid target_backend_override") {
+		t.Fatalf("unexpected error: %q", resp.GetError())
+	}
+}
+
+func TestApproveResponseFromResolveCommandResultReturnsResolvedBackend(t *testing.T) {
+	payload, err := proto.Marshal(&pbProxy.ResolveApprovalResponse{
+		Success:               true,
+		ResolvedTargetBackend: "127.0.0.1:9002",
+	})
+	if err != nil {
+		t.Fatalf("marshal response: %v", err)
+	}
+
+	resp, resolved := approveResponseFromResolveCommandResult(&hubpb.CommandResult{
+		Status:          "OK",
+		ResponsePayload: payload,
+	})
+	if !resp.GetSuccess() {
+		t.Fatalf("expected success, got %q", resp.GetError())
+	}
+	if resolved != "127.0.0.1:9002" {
+		t.Fatalf("resolved backend = %q, want 127.0.0.1:9002", resolved)
+	}
+}
+
+func TestApprovalRuleTargetBackendPrefersNodeResolvedBackend(t *testing.T) {
+	pending := &pb.ApprovalRequest{
+		DestAddr:              "127.0.0.1:9000",
+		SelectedTargetBackend: "127.0.0.1:9001",
+		BackendChoices: []*common.BackendChoice{
+			{Id: "b", Address: "127.0.0.1:stale", Label: "B"},
+		},
+	}
+
+	got := approvalRuleTargetBackend(pending, "b", "127.0.0.1:9002")
+	if got != "127.0.0.1:9002" {
+		t.Fatalf("target backend = %q, want node-resolved address", got)
 	}
 }
 

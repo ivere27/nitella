@@ -88,6 +88,7 @@ message CreateProxyRequest {
   ClientAuthType client_auth_type = 11;
   repeated string tags = 12;    // Tags (e.g. "production", "aws")
   HealthCheckConfig health_check = 13;
+  repeated nitella.BackendChoice approval_backends = 14;
 }
 
 enum HealthCheckType {
@@ -160,6 +161,7 @@ message UpdateProxyRequest {
   ClientAuthType client_auth_type = 12;
   repeated string tags = 13;
   HealthCheckConfig health_check = 14;
+  repeated nitella.BackendChoice approval_backends = 15;
 }
 
 message UpdateProxyResponse {
@@ -196,6 +198,7 @@ message ProxyStatus {
   repeated string tags = 16;
   HealthCheckConfig health_check = 17;
   HealthStatus health_status = 18;
+  repeated nitella.BackendChoice approval_backends = 19;
 }
 
 enum HealthStatus {
@@ -266,6 +269,8 @@ message Rule {
   MockConfig mock_response = 9;
 
   string expression = 10; // Traefik-style rule expression
+  repeated string approval_backend_choice_ids = 11; // Subset of proxy.approval_backends offered for this rule.
+                                                    // Empty => no choices; override forbidden.
 }
 
 message Condition {
@@ -552,11 +557,13 @@ message ResolveApprovalRequest {
   nitella.ApprovalRetentionMode retention_mode = 3;
   int64 duration_seconds = 4;
   string reason = 5;
+  string target_backend_override = 6; // Choice id; empty => no override.
 }
 
 message ResolveApprovalResponse {
   bool success = 1;
   string error_message = 2;
+  string resolved_target_backend = 3; // Resolved backend address used for an override, if any.
 }
 
 // ---------------------------------------------------------------------------
@@ -579,6 +586,8 @@ message ActiveApproval {
   string geo_country = 13;
   string geo_city = 14;
   string geo_isp = 15;
+  repeated nitella.BackendChoice backend_choices = 16;
+  string selected_target_backend = 17;
 }
 
 message ListActiveApprovalsRequest {

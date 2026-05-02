@@ -1124,6 +1124,14 @@ const AddProxyRequest$json = {
     {'1': 'cert_pem', '3': 10, '4': 1, '5': 9, '10': 'certPem'},
     {'1': 'key_pem', '3': 11, '4': 1, '5': 9, '10': 'keyPem'},
     {'1': 'ca_pem', '3': 12, '4': 1, '5': 9, '10': 'caPem'},
+    {
+      '1': 'approval_backends',
+      '3': 13,
+      '4': 3,
+      '5': 11,
+      '6': '.nitella.BackendChoice',
+      '10': 'approvalBackends'
+    },
   ],
 };
 
@@ -1137,7 +1145,8 @@ final $typed_data.Uint8List addProxyRequestDescriptor = $convert.base64Decode(
     'sYByABKA4yEy5uaXRlbGxhLk1vY2tQcmVzZXRSC2RlZmF1bHRNb2NrEjgKDWZhbGxiYWNrX21v'
     'Y2sYCCABKA4yEy5uaXRlbGxhLk1vY2tQcmVzZXRSDGZhbGxiYWNrTW9jaxISCgR0YWdzGAkgAy'
     'gJUgR0YWdzEhkKCGNlcnRfcGVtGAogASgJUgdjZXJ0UGVtEhcKB2tleV9wZW0YCyABKAlSBmtl'
-    'eVBlbRIVCgZjYV9wZW0YDCABKAlSBWNhUGVt');
+    'eVBlbRIVCgZjYV9wZW0YDCABKAlSBWNhUGVtEkMKEWFwcHJvdmFsX2JhY2tlbmRzGA0gAygLMh'
+    'Yubml0ZWxsYS5CYWNrZW5kQ2hvaWNlUhBhcHByb3ZhbEJhY2tlbmRz');
 
 @$core.Deprecated('Use updateProxyRequestDescriptor instead')
 const UpdateProxyRequest$json = {
@@ -1756,6 +1765,21 @@ const ApprovalRequest$json = {
     },
     {'1': 'tls_cn', '3': 13, '4': 1, '5': 9, '10': 'tlsCn'},
     {'1': 'tls_fingerprint', '3': 14, '4': 1, '5': 9, '10': 'tlsFingerprint'},
+    {
+      '1': 'backend_choices',
+      '3': 15,
+      '4': 3,
+      '5': 11,
+      '6': '.nitella.BackendChoice',
+      '10': 'backendChoices'
+    },
+    {
+      '1': 'selected_target_backend',
+      '3': 16,
+      '4': 1,
+      '5': 9,
+      '10': 'selectedTargetBackend'
+    },
   ],
 };
 
@@ -1769,7 +1793,9 @@ final $typed_data.Uint8List approvalRequestDescriptor = $convert.base64Decode(
     'sKCXJ1bGVfbmFtZRgKIAEoCVIIcnVsZU5hbWUSIgoDZ2VvGAsgASgLMhAubml0ZWxsYS5HZW9J'
     'bmZvUgNnZW8SOAoJdGltZXN0YW1wGAwgASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcF'
     'IJdGltZXN0YW1wEhUKBnRsc19jbhgNIAEoCVIFdGxzQ24SJwoPdGxzX2ZpbmdlcnByaW50GA4g'
-    'ASgJUg50bHNGaW5nZXJwcmludA==');
+    'ASgJUg50bHNGaW5nZXJwcmludBI/Cg9iYWNrZW5kX2Nob2ljZXMYDyADKAsyFi5uaXRlbGxhLk'
+    'JhY2tlbmRDaG9pY2VSDmJhY2tlbmRDaG9pY2VzEjYKF3NlbGVjdGVkX3RhcmdldF9iYWNrZW5k'
+    'GBAgASgJUhVzZWxlY3RlZFRhcmdldEJhY2tlbmQ=');
 
 @$core.Deprecated('Use listPendingApprovalsRequestDescriptor instead')
 const ListPendingApprovalsRequest$json = {
@@ -1920,6 +1946,13 @@ const ApproveRequestRequest$json = {
     },
     {'1': 'duration_seconds', '3': 3, '4': 1, '5': 3, '10': 'durationSeconds'},
     {'1': 'create_rule', '3': 4, '4': 1, '5': 8, '10': 'createRule'},
+    {
+      '1': 'target_backend_override',
+      '3': 5,
+      '4': 1,
+      '5': 9,
+      '10': 'targetBackendOverride'
+    },
   ],
 };
 
@@ -1928,7 +1961,8 @@ final $typed_data.Uint8List approveRequestRequestDescriptor = $convert.base64Dec
     'ChVBcHByb3ZlUmVxdWVzdFJlcXVlc3QSHQoKcmVxdWVzdF9pZBgBIAEoCVIJcmVxdWVzdElkEk'
     'UKDnJldGVudGlvbl9tb2RlGAIgASgOMh4ubml0ZWxsYS5BcHByb3ZhbFJldGVudGlvbk1vZGVS'
     'DXJldGVudGlvbk1vZGUSKQoQZHVyYXRpb25fc2Vjb25kcxgDIAEoA1IPZHVyYXRpb25TZWNvbm'
-    'RzEh8KC2NyZWF0ZV9ydWxlGAQgASgIUgpjcmVhdGVSdWxl');
+    'RzEh8KC2NyZWF0ZV9ydWxlGAQgASgIUgpjcmVhdGVSdWxlEjYKF3RhcmdldF9iYWNrZW5kX292'
+    'ZXJyaWRlGAUgASgJUhV0YXJnZXRCYWNrZW5kT3ZlcnJpZGU=');
 
 @$core.Deprecated('Use approveRequestResponseDescriptor instead')
 const ApproveRequestResponse$json = {
@@ -2045,6 +2079,13 @@ const ResolveApprovalDecisionRequest$json = {
       '6': '.nitella.local.DenyBlockType',
       '10': 'denyBlockType'
     },
+    {
+      '1': 'target_backend_override',
+      '3': 6,
+      '4': 1,
+      '5': 9,
+      '10': 'targetBackendOverride'
+    },
   ],
 };
 
@@ -2055,7 +2096,8 @@ final $typed_data.Uint8List resolveApprovalDecisionRequestDescriptor = $convert.
     'aW9uUghkZWNpc2lvbhJFCg5yZXRlbnRpb25fbW9kZRgDIAEoDjIeLm5pdGVsbGEuQXBwcm92YW'
     'xSZXRlbnRpb25Nb2RlUg1yZXRlbnRpb25Nb2RlEikKEGR1cmF0aW9uX3NlY29uZHMYBCABKANS'
     'D2R1cmF0aW9uU2Vjb25kcxJECg9kZW55X2Jsb2NrX3R5cGUYBSABKA4yHC5uaXRlbGxhLmxvY2'
-    'FsLkRlbnlCbG9ja1R5cGVSDWRlbnlCbG9ja1R5cGU=');
+    'FsLkRlbnlCbG9ja1R5cGVSDWRlbnlCbG9ja1R5cGUSNgoXdGFyZ2V0X2JhY2tlbmRfb3ZlcnJp'
+    'ZGUYBiABKAlSFXRhcmdldEJhY2tlbmRPdmVycmlkZQ==');
 
 @$core.Deprecated('Use resolveApprovalDecisionResponseDescriptor instead')
 const ResolveApprovalDecisionResponse$json = {

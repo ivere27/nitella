@@ -74,6 +74,8 @@ type ApprovalEntry struct {
 	GeoCountry string
 	GeoCity    string
 	GeoISP     string
+	// TargetBackend is the resolved backend address chosen at approval time.
+	TargetBackend string
 
 	// Accumulated stats from closed connections
 	BytesIn      int64
@@ -177,38 +179,33 @@ func (c *ApprovalCache) Check(sourceIP, ruleID, tlsSessionID string) (bool, bool
 
 // Add adds an approval decision to the cache
 func (c *ApprovalCache) Add(sourceIP, ruleID, proxyID, tlsSessionID string, decision bool, duration time.Duration) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	key := buildKey(sourceIP, ruleID, tlsSessionID)
-	c.entries[key] = &ApprovalEntry{
-		SourceIP:     sourceIP,
-		RuleID:       ruleID,
-		ProxyID:      proxyID,
-		TLSSessionID: tlsSessionID,
-		Decision:     decision,
-		ExpiresAt:    time.Now().Add(duration),
-		CreatedAt:    time.Now(),
-	}
+	c.AddWithGeoAndBackend(sourceIP, ruleID, proxyID, tlsSessionID, decision, duration, "", "", "", "")
 }
 
 // AddWithGeo adds an entry with GeoIP information
 func (c *ApprovalCache) AddWithGeo(sourceIP, ruleID, proxyID, tlsSessionID string, decision bool, duration time.Duration, geoCountry, geoCity, geoISP string) {
+	c.AddWithGeoAndBackend(sourceIP, ruleID, proxyID, tlsSessionID, decision, duration, geoCountry, geoCity, geoISP, "")
+}
+
+// AddWithGeoAndBackend adds an entry with GeoIP information and a resolved target backend.
+func (c *ApprovalCache) AddWithGeoAndBackend(sourceIP, ruleID, proxyID, tlsSessionID string, decision bool, duration time.Duration, geoCountry, geoCity, geoISP, targetBackend string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
+	now := time.Now()
 	key := buildKey(sourceIP, ruleID, tlsSessionID)
 	c.entries[key] = &ApprovalEntry{
-		SourceIP:     sourceIP,
-		RuleID:       ruleID,
-		ProxyID:      proxyID,
-		TLSSessionID: tlsSessionID,
-		Decision:     decision,
-		ExpiresAt:    time.Now().Add(duration),
-		CreatedAt:    time.Now(),
-		GeoCountry:   geoCountry,
-		GeoCity:      geoCity,
-		GeoISP:       geoISP,
+		SourceIP:      sourceIP,
+		RuleID:        ruleID,
+		ProxyID:       proxyID,
+		TLSSessionID:  tlsSessionID,
+		Decision:      decision,
+		ExpiresAt:     now.Add(duration),
+		CreatedAt:     now,
+		GeoCountry:    geoCountry,
+		GeoCity:       geoCity,
+		GeoISP:        geoISP,
+		TargetBackend: targetBackend,
 	}
 }
 
@@ -270,17 +267,18 @@ func (c *ApprovalCache) GetActiveApprovals() []*ApprovalEntry {
 		if now.Before(entry.ExpiresAt) {
 			// Create a copy with computed live stats
 			copy := &ApprovalEntry{
-				SourceIP:     entry.SourceIP,
-				RuleID:       entry.RuleID,
-				ProxyID:      entry.ProxyID,
-				TLSSessionID: entry.TLSSessionID,
-				Decision:     entry.Decision,
-				ExpiresAt:    entry.ExpiresAt,
-				CreatedAt:    entry.CreatedAt,
-				GeoCountry:   entry.GeoCountry,
-				GeoCity:      entry.GeoCity,
-				GeoISP:       entry.GeoISP,
-				BlockedCount: entry.BlockedCount,
+				SourceIP:      entry.SourceIP,
+				RuleID:        entry.RuleID,
+				ProxyID:       entry.ProxyID,
+				TLSSessionID:  entry.TLSSessionID,
+				Decision:      entry.Decision,
+				ExpiresAt:     entry.ExpiresAt,
+				CreatedAt:     entry.CreatedAt,
+				GeoCountry:    entry.GeoCountry,
+				GeoCity:       entry.GeoCity,
+				GeoISP:        entry.GeoISP,
+				TargetBackend: entry.TargetBackend,
+				BlockedCount:  entry.BlockedCount,
 				// Start with accumulated bytes from closed connections
 				BytesIn:  entry.BytesIn,
 				BytesOut: entry.BytesOut,
@@ -341,13 +339,27 @@ func (c *ApprovalCache) GetEntry(sourceIP, ruleID, tlsSessionID string) *Approva
 	return nil
 }
 
+// GetTargetBackend returns the cached target backend for an active approval.
+func (c *ApprovalCache) GetTargetBackend(sourceIP, ruleID, tlsSessionID string) string {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	key := buildKey(sourceIP, ruleID, tlsSessionID)
+	if entry, ok := c.entries[key]; ok && time.Now().Before(entry.ExpiresAt) {
+		return entry.TargetBackend
+	}
+
+	return ""
+}
+
 // ApprovalResult contains the result of an approval request
 type ApprovalResult struct {
-	Allowed       bool
-	RetentionMode common.ApprovalRetentionMode
-	Duration      time.Duration
-	RuleID        string // Rule that triggered the approval request
-	Reason        string // Optional reason for the decision
+	Allowed               bool
+	RetentionMode         common.ApprovalRetentionMode
+	Duration              time.Duration
+	RuleID                string // Rule that triggered the approval request
+	Reason                string // Optional reason for the decision
+	TargetBackendOverride string // Resolved backend address chosen at approval time.
 }
 
 // ApprovalRequestMeta holds metadata for logging
@@ -363,10 +375,12 @@ type ApprovalRequestMeta struct {
 
 // PendingRequest represents a pending approval request
 type PendingRequest struct {
-	ResultCh chan ApprovalResult
-	Meta     ApprovalRequestMeta
-	SourceIP string        // For per-IP tracking
-	CancelCh chan struct{} // For async cancellation
+	ResultCh  chan ApprovalResult
+	Meta      ApprovalRequestMeta
+	Info      string
+	SourceIP  string        // For per-IP tracking
+	CancelCh  chan struct{} // For async cancellation
+	CreatedAt time.Time
 }
 
 // NewApprovalManager creates a new approval manager
@@ -422,10 +436,12 @@ func (am *ApprovalManager) BeginApprovalRequest(reqID string, nodeID string, inf
 		return nil, fmt.Errorf("too many pending approval requests for proxy %s (max: %d)", proxyID, am.maxPendingProxy)
 	}
 	am.requests[reqID] = &PendingRequest{
-		ResultCh: resultCh,
-		Meta:     meta,
-		SourceIP: sourceIP,
-		CancelCh: cancelCh,
+		ResultCh:  resultCh,
+		Meta:      meta,
+		Info:      info,
+		SourceIP:  sourceIP,
+		CancelCh:  cancelCh,
+		CreatedAt: time.Now(),
 	}
 	am.pendingByIP[sourceIP]++
 	if proxyID != "" {
@@ -512,11 +528,11 @@ func (am *ApprovalManager) CancelApprovalRequest(reqID string) {
 
 // Resolve is called when a decision is received from Hub
 func (am *ApprovalManager) Resolve(reqID string, allowed bool, durationSeconds int64, reason string) *ApprovalRequestMeta {
-	return am.ResolveWithRetention(reqID, allowed, durationSeconds, reason, common.ApprovalRetentionMode_APPROVAL_RETENTION_MODE_CACHE)
+	return am.ResolveWithRetention(reqID, allowed, durationSeconds, reason, common.ApprovalRetentionMode_APPROVAL_RETENTION_MODE_CACHE, "")
 }
 
 // ResolveWithRetention is called when a decision is received from Hub/Admin.
-func (am *ApprovalManager) ResolveWithRetention(reqID string, allowed bool, durationSeconds int64, reason string, retentionMode common.ApprovalRetentionMode) *ApprovalRequestMeta {
+func (am *ApprovalManager) ResolveWithRetention(reqID string, allowed bool, durationSeconds int64, reason string, retentionMode common.ApprovalRetentionMode, targetBackendOverride string) *ApprovalRequestMeta {
 	am.mu.Lock()
 	req, ok := am.requests[reqID]
 	am.mu.Unlock()
@@ -532,11 +548,12 @@ func (am *ApprovalManager) ResolveWithRetention(reqID string, allowed bool, dura
 
 	select {
 	case req.ResultCh <- ApprovalResult{
-		Allowed:       allowed,
-		RetentionMode: mode,
-		Duration:      time.Duration(durationSeconds) * time.Second,
-		RuleID:        req.Meta.RuleID,
-		Reason:        reason,
+		Allowed:               allowed,
+		RetentionMode:         mode,
+		Duration:              time.Duration(durationSeconds) * time.Second,
+		RuleID:                req.Meta.RuleID,
+		Reason:                reason,
+		TargetBackendOverride: targetBackendOverride,
 	}:
 	default:
 	}
@@ -557,6 +574,43 @@ func (am *ApprovalManager) AddToCache(sourceIP, ruleID, proxyID, tlsSessionID st
 // AddToCacheWithGeo adds a decision with GeoIP info
 func (am *ApprovalManager) AddToCacheWithGeo(sourceIP, ruleID, proxyID, tlsSessionID string, allowed bool, duration time.Duration, geoCountry, geoCity, geoISP string) {
 	am.cache.AddWithGeo(sourceIP, ruleID, proxyID, tlsSessionID, allowed, duration, geoCountry, geoCity, geoISP)
+}
+
+// AddToCacheWithGeoAndBackend adds a decision with GeoIP info and target backend.
+func (am *ApprovalManager) AddToCacheWithGeoAndBackend(sourceIP, ruleID, proxyID, tlsSessionID string, allowed bool, duration time.Duration, geoCountry, geoCity, geoISP, targetBackend string) {
+	am.cache.AddWithGeoAndBackend(sourceIP, ruleID, proxyID, tlsSessionID, allowed, duration, geoCountry, geoCity, geoISP, targetBackend)
+}
+
+// GetCachedTargetBackend returns the cached backend address for a retained approval.
+func (am *ApprovalManager) GetCachedTargetBackend(sourceIP, ruleID, tlsSessionID string) string {
+	return am.cache.GetTargetBackend(sourceIP, ruleID, tlsSessionID)
+}
+
+// GetPendingApprovalMeta returns metadata for a pending approval request.
+func (am *ApprovalManager) GetPendingApprovalMeta(reqID string) (ApprovalRequestMeta, bool) {
+	am.mu.Lock()
+	defer am.mu.Unlock()
+	req, ok := am.requests[reqID]
+	if !ok {
+		return ApprovalRequestMeta{}, false
+	}
+	return req.Meta, true
+}
+
+// GetPendingApprovals returns a snapshot of unresolved approval requests.
+func (am *ApprovalManager) GetPendingApprovals() map[string]PendingRequest {
+	am.mu.Lock()
+	defer am.mu.Unlock()
+	result := make(map[string]PendingRequest, len(am.requests))
+	for id, req := range am.requests {
+		result[id] = PendingRequest{
+			Meta:      req.Meta,
+			Info:      req.Info,
+			SourceIP:  req.SourceIP,
+			CreatedAt: req.CreatedAt,
+		}
+	}
+	return result
 }
 
 // GetActiveApprovals returns all active approvals

@@ -228,6 +228,7 @@ impl ProxyManager {
                 req.default_mock,
                 req.fallback_action,
                 req.fallback_mock,
+                req.approval_backends.clone(),
             );
 
             if !req.cert_pem.is_empty() {
@@ -383,6 +384,64 @@ impl ProxyManager {
         }
     }
 
+    pub async fn validate_approval_backend_override(
+        &self,
+        req_id: &str,
+        choice_id: &str,
+    ) -> Result<Option<String>, String> {
+        if choice_id.is_empty() {
+            return Ok(None);
+        }
+        let pending = self
+            .approval_manager
+            .pending_request(req_id)
+            .await
+            .ok_or_else(|| "not_found".to_string())?;
+        self.resolve_backend_choice(&pending.proxy_id, &pending.rule_id, choice_id)
+            .await
+            .map(Some)
+    }
+
+    pub async fn resolve_backend_choice(
+        &self,
+        proxy_id: &str,
+        rule_id: &str,
+        choice_id: &str,
+    ) -> Result<String, String> {
+        if choice_id.is_empty() {
+            return Ok(String::new());
+        }
+
+        let (rules, backends) = {
+            let lock = self.proxies.read().await;
+            let managed = lock
+                .get(proxy_id)
+                .ok_or_else(|| "invalid target_backend_override".to_string())?;
+            let rules = managed.rule_engine.read().await.get_rules();
+            let backends = managed.config.approval_backends.clone();
+            (rules, backends)
+        };
+
+        let rule = rules
+            .iter()
+            .find(|rule| rule.id == rule_id)
+            .ok_or_else(|| "invalid target_backend_override".to_string())?;
+        if rule.approval_backend_choice_ids.is_empty()
+            || !rule
+                .approval_backend_choice_ids
+                .iter()
+                .any(|id| id == choice_id)
+        {
+            return Err("invalid target_backend_override".to_string());
+        }
+
+        backends
+            .iter()
+            .find(|choice| choice.id == choice_id && !choice.address.is_empty())
+            .map(|choice| choice.address.clone())
+            .ok_or_else(|| "invalid target_backend_override".to_string())
+    }
+
     async fn get_proxy_status_internal(&self, id: &str, p: &ManagedProxy) -> ProxyStatus {
         match &*p.listener {
             ProxyListener::Process(pl) => {
@@ -397,6 +456,7 @@ impl ProxyManager {
                 status.uptime_seconds = p.start_time.elapsed().as_secs() as i64;
                 status.health_status = p.health_status.load(Ordering::Relaxed);
                 status.health_check = p.config.health_check.clone();
+                status.approval_backends = p.config.approval_backends.clone();
                 status
             }
             ProxyListener::Embedded(listener) => {
@@ -417,6 +477,7 @@ impl ProxyManager {
                     default_mock: p.config.default_mock,
                     fallback_action: p.config.fallback_action,
                     fallback_mock: p.config.fallback_mock,
+                    approval_backends: p.config.approval_backends.clone(),
                     health_status: health,
                     health_check: p.config.health_check.clone(),
                     ..Default::default()
@@ -505,6 +566,9 @@ impl ProxyManager {
         }
         if req.client_auth_type != ClientAuthType::ClientAuthAuto as i32 {
             new_config.client_auth_type = req.client_auth_type;
+        }
+        if !req.approval_backends.is_empty() {
+            new_config.approval_backends = req.approval_backends;
         }
 
         // Auto-set DefaultAction to MOCK if we have a preset but action is unspecified/allow
@@ -629,6 +693,7 @@ impl ProxyManager {
             rate_limit: None,
             mock_response: None,
             expression: "".to_string(),
+            approval_backend_choice_ids: vec![],
         };
 
         {

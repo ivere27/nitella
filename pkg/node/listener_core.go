@@ -40,11 +40,12 @@ type ListenerCore struct {
 	running  bool
 
 	// Services
-	geoIP       *GeoIPService
-	stats       *stats.StatsService
-	approval    *ApprovalManager
-	globalRules *GlobalRulesStore
-	nodeID      string
+	geoIP            *GeoIPService
+	stats            *stats.StatsService
+	approval         *ApprovalManager
+	approvalBackends []*common.BackendChoice
+	globalRules      *GlobalRulesStore
+	nodeID           string
 }
 
 // NewListenerCore creates a new ListenerCore.
@@ -91,6 +92,16 @@ func (c *ListenerCore) SetNodeID(nodeID string) {
 	c.nodeID = nodeID
 	if c.listener != nil {
 		c.listener.SetNodeID(nodeID)
+	}
+}
+
+// SetApprovalBackends sets the proxy-level backend choice pool for approvals.
+func (c *ListenerCore) SetApprovalBackends(backends []*common.BackendChoice) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.approvalBackends = cloneBackendChoices(backends)
+	if c.listener != nil {
+		c.listener.SetApprovalBackends(backends)
 	}
 }
 
@@ -153,6 +164,7 @@ func (c *ListenerCore) StartListener(ctx context.Context, req *pb.StartListenerR
 	if c.nodeID != "" {
 		c.listener.SetNodeID(c.nodeID)
 	}
+	c.listener.SetApprovalBackends(c.approvalBackends)
 	c.listener.SetFallback(c.FallbackAction, c.FallbackMock)
 
 	// Start

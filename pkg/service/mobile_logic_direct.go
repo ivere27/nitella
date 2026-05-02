@@ -666,13 +666,15 @@ func (s *MobileLogicService) listPendingApprovalsDirect(ctx context.Context, nod
 		// Only include approvals that are NOT yet allowed (pending)
 		if !a.Allowed {
 			results = append(results, &pb.ApprovalRequest{
-				RequestId: a.Key,
-				NodeId:    nodeID,
-				ProxyId:   a.ProxyId,
-				SourceIp:  a.SourceIp,
-				DestAddr:  "",
-				RuleId:    a.RuleId,
-				Timestamp: a.CreatedAt,
+				RequestId:             a.Key,
+				NodeId:                nodeID,
+				ProxyId:               a.ProxyId,
+				SourceIp:              a.SourceIp,
+				DestAddr:              "",
+				RuleId:                a.RuleId,
+				BackendChoices:        a.BackendChoices,
+				SelectedTargetBackend: a.SelectedTargetBackend,
+				Timestamp:             a.CreatedAt,
 				Geo: &common.GeoInfo{
 					Country: a.GeoCountry,
 					City:    a.GeoCity,
@@ -684,29 +686,49 @@ func (s *MobileLogicService) listPendingApprovalsDirect(ctx context.Context, nod
 	return results, nil
 }
 
-// approveRequestDirect approves a request on a direct node.
-func (s *MobileLogicService) approveRequestDirect(ctx context.Context, nodeID, reqID string, duration int64, retentionMode common.ApprovalRetentionMode) (*pb.ApproveRequestResponse, error) {
+// approveRequestDirect approves a request on a direct node and returns the node-resolved backend address.
+func (s *MobileLogicService) approveRequestDirect(ctx context.Context, nodeID, reqID string, duration int64, retentionMode common.ApprovalRetentionMode, targetBackendOverride string) (*pb.ApproveRequestResponse, string, error) {
 	result, err := s.secureDirectCommand(ctx, nodeID, hubpb.CommandType_COMMAND_TYPE_RESOLVE_APPROVAL, &pbProxy.ResolveApprovalRequest{
-		ReqId:           reqID,
-		Action:          common.ApprovalActionType_APPROVAL_ACTION_TYPE_ALLOW,
-		RetentionMode:   retentionMode,
-		DurationSeconds: duration,
+		ReqId:                 reqID,
+		Action:                common.ApprovalActionType_APPROVAL_ACTION_TYPE_ALLOW,
+		RetentionMode:         retentionMode,
+		DurationSeconds:       duration,
+		TargetBackendOverride: targetBackendOverride,
 	})
 	if err != nil {
-		return &pb.ApproveRequestResponse{Success: false, Error: err.Error()}, nil
+		return &pb.ApproveRequestResponse{Success: false, Error: err.Error()}, "", nil
 	}
 	if result.Status != "OK" {
-		return &pb.ApproveRequestResponse{Success: false, Error: result.ErrorMessage}, nil
+		return &pb.ApproveRequestResponse{Success: false, Error: result.ErrorMessage}, "", nil
+	}
+	resp, resolvedTargetBackend := approveResponseFromResolveCommandResult(result)
+	if !resp.GetSuccess() {
+		return resp, "", nil
+	}
+
+	return resp, resolvedTargetBackend, nil
+}
+
+func approveResponseFromResolveCommandResult(result *hubpb.CommandResult) (*pb.ApproveRequestResponse, string) {
+	if result == nil {
+		return &pb.ApproveRequestResponse{Success: false, Error: "missing approval response"}, ""
+	}
+	if result.Status != "OK" {
+		return &pb.ApproveRequestResponse{Success: false, Error: result.ErrorMessage}, ""
 	}
 	var resp pbProxy.ResolveApprovalResponse
 	if len(result.ResponsePayload) > 0 {
-		proto.Unmarshal(result.ResponsePayload, &resp)
+		if err := proto.Unmarshal(result.ResponsePayload, &resp); err != nil {
+			return &pb.ApproveRequestResponse{Success: false, Error: fmt.Sprintf("failed to parse approval response: %v", err)}, ""
+		}
+	} else {
+		return &pb.ApproveRequestResponse{Success: false, Error: "missing approval response"}, ""
 	}
 	if !resp.Success {
-		return &pb.ApproveRequestResponse{Success: false, Error: resp.ErrorMessage}, nil
+		return &pb.ApproveRequestResponse{Success: false, Error: resp.ErrorMessage}, ""
 	}
 
-	return &pb.ApproveRequestResponse{Success: true}, nil
+	return &pb.ApproveRequestResponse{Success: true}, resp.GetResolvedTargetBackend()
 }
 
 // denyRequestDirect denies a request on a direct node.

@@ -654,22 +654,23 @@ func (x *GetGeoIPStatusResponse) GetCacheMisses() int64 {
 }
 
 type CreateProxyRequest struct {
-	state          protoimpl.MessageState `protogen:"open.v1"`
-	ListenAddr     string                 `protobuf:"bytes,1,opt,name=listen_addr,json=listenAddr,proto3" json:"listen_addr,omitempty"`             // e.g., "0.0.0.0:8080"
-	DefaultBackend string                 `protobuf:"bytes,2,opt,name=default_backend,json=defaultBackend,proto3" json:"default_backend,omitempty"` // e.g., "127.0.0.1:80" (optional, if no rules match)
-	Name           string                 `protobuf:"bytes,3,opt,name=name,proto3" json:"name,omitempty"`                                           // Display name for this listener
-	CertPem        string                 `protobuf:"bytes,4,opt,name=cert_pem,json=certPem,proto3" json:"cert_pem,omitempty"`                      // Optional: Server Cert for mTLS
-	KeyPem         string                 `protobuf:"bytes,5,opt,name=key_pem,json=keyPem,proto3" json:"key_pem,omitempty"`                         // Optional: Server Key for mTLS
-	CaPem          string                 `protobuf:"bytes,6,opt,name=ca_pem,json=caPem,proto3" json:"ca_pem,omitempty"`                            // Optional: Client CA for mTLS validation
-	DefaultAction  common.ActionType      `protobuf:"varint,7,opt,name=default_action,json=defaultAction,proto3,enum=nitella.ActionType" json:"default_action,omitempty"`
-	DefaultMock    common.MockPreset      `protobuf:"varint,8,opt,name=default_mock,json=defaultMock,proto3,enum=nitella.MockPreset" json:"default_mock,omitempty"`
-	FallbackAction common.FallbackAction  `protobuf:"varint,9,opt,name=fallback_action,json=fallbackAction,proto3,enum=nitella.FallbackAction" json:"fallback_action,omitempty"`
-	FallbackMock   common.MockPreset      `protobuf:"varint,10,opt,name=fallback_mock,json=fallbackMock,proto3,enum=nitella.MockPreset" json:"fallback_mock,omitempty"`
-	ClientAuthType ClientAuthType         `protobuf:"varint,11,opt,name=client_auth_type,json=clientAuthType,proto3,enum=nitella.proxy.ClientAuthType" json:"client_auth_type,omitempty"`
-	Tags           []string               `protobuf:"bytes,12,rep,name=tags,proto3" json:"tags,omitempty"` // Tags (e.g. "production", "aws")
-	HealthCheck    *HealthCheckConfig     `protobuf:"bytes,13,opt,name=health_check,json=healthCheck,proto3" json:"health_check,omitempty"`
-	unknownFields  protoimpl.UnknownFields
-	sizeCache      protoimpl.SizeCache
+	state            protoimpl.MessageState  `protogen:"open.v1"`
+	ListenAddr       string                  `protobuf:"bytes,1,opt,name=listen_addr,json=listenAddr,proto3" json:"listen_addr,omitempty"`             // e.g., "0.0.0.0:8080"
+	DefaultBackend   string                  `protobuf:"bytes,2,opt,name=default_backend,json=defaultBackend,proto3" json:"default_backend,omitempty"` // e.g., "127.0.0.1:80" (optional, if no rules match)
+	Name             string                  `protobuf:"bytes,3,opt,name=name,proto3" json:"name,omitempty"`                                           // Display name for this listener
+	CertPem          string                  `protobuf:"bytes,4,opt,name=cert_pem,json=certPem,proto3" json:"cert_pem,omitempty"`                      // Optional: Server Cert for mTLS
+	KeyPem           string                  `protobuf:"bytes,5,opt,name=key_pem,json=keyPem,proto3" json:"key_pem,omitempty"`                         // Optional: Server Key for mTLS
+	CaPem            string                  `protobuf:"bytes,6,opt,name=ca_pem,json=caPem,proto3" json:"ca_pem,omitempty"`                            // Optional: Client CA for mTLS validation
+	DefaultAction    common.ActionType       `protobuf:"varint,7,opt,name=default_action,json=defaultAction,proto3,enum=nitella.ActionType" json:"default_action,omitempty"`
+	DefaultMock      common.MockPreset       `protobuf:"varint,8,opt,name=default_mock,json=defaultMock,proto3,enum=nitella.MockPreset" json:"default_mock,omitempty"`
+	FallbackAction   common.FallbackAction   `protobuf:"varint,9,opt,name=fallback_action,json=fallbackAction,proto3,enum=nitella.FallbackAction" json:"fallback_action,omitempty"`
+	FallbackMock     common.MockPreset       `protobuf:"varint,10,opt,name=fallback_mock,json=fallbackMock,proto3,enum=nitella.MockPreset" json:"fallback_mock,omitempty"`
+	ClientAuthType   ClientAuthType          `protobuf:"varint,11,opt,name=client_auth_type,json=clientAuthType,proto3,enum=nitella.proxy.ClientAuthType" json:"client_auth_type,omitempty"`
+	Tags             []string                `protobuf:"bytes,12,rep,name=tags,proto3" json:"tags,omitempty"` // Tags (e.g. "production", "aws")
+	HealthCheck      *HealthCheckConfig      `protobuf:"bytes,13,opt,name=health_check,json=healthCheck,proto3" json:"health_check,omitempty"`
+	ApprovalBackends []*common.BackendChoice `protobuf:"bytes,14,rep,name=approval_backends,json=approvalBackends,proto3" json:"approval_backends,omitempty"`
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
 }
 
 func (x *CreateProxyRequest) Reset() {
@@ -789,6 +790,13 @@ func (x *CreateProxyRequest) GetTags() []string {
 func (x *CreateProxyRequest) GetHealthCheck() *HealthCheckConfig {
 	if x != nil {
 		return x.HealthCheck
+	}
+	return nil
+}
+
+func (x *CreateProxyRequest) GetApprovalBackends() []*common.BackendChoice {
+	if x != nil {
+		return x.ApprovalBackends
 	}
 	return nil
 }
@@ -1218,23 +1226,24 @@ func (x *DeleteProxyResponse) GetErrorMessage() string {
 }
 
 type UpdateProxyRequest struct {
-	state          protoimpl.MessageState `protogen:"open.v1"`
-	ProxyId        string                 `protobuf:"bytes,1,opt,name=proxy_id,json=proxyId,proto3" json:"proxy_id,omitempty"`
-	ListenAddr     string                 `protobuf:"bytes,2,opt,name=listen_addr,json=listenAddr,proto3" json:"listen_addr,omitempty"`
-	DefaultBackend string                 `protobuf:"bytes,3,opt,name=default_backend,json=defaultBackend,proto3" json:"default_backend,omitempty"`
-	Name           string                 `protobuf:"bytes,4,opt,name=name,proto3" json:"name,omitempty"`
-	CertPem        string                 `protobuf:"bytes,5,opt,name=cert_pem,json=certPem,proto3" json:"cert_pem,omitempty"`
-	KeyPem         string                 `protobuf:"bytes,6,opt,name=key_pem,json=keyPem,proto3" json:"key_pem,omitempty"`
-	CaPem          string                 `protobuf:"bytes,7,opt,name=ca_pem,json=caPem,proto3" json:"ca_pem,omitempty"`
-	DefaultAction  common.ActionType      `protobuf:"varint,8,opt,name=default_action,json=defaultAction,proto3,enum=nitella.ActionType" json:"default_action,omitempty"`
-	DefaultMock    common.MockPreset      `protobuf:"varint,9,opt,name=default_mock,json=defaultMock,proto3,enum=nitella.MockPreset" json:"default_mock,omitempty"`
-	FallbackAction common.FallbackAction  `protobuf:"varint,10,opt,name=fallback_action,json=fallbackAction,proto3,enum=nitella.FallbackAction" json:"fallback_action,omitempty"`
-	FallbackMock   common.MockPreset      `protobuf:"varint,11,opt,name=fallback_mock,json=fallbackMock,proto3,enum=nitella.MockPreset" json:"fallback_mock,omitempty"`
-	ClientAuthType ClientAuthType         `protobuf:"varint,12,opt,name=client_auth_type,json=clientAuthType,proto3,enum=nitella.proxy.ClientAuthType" json:"client_auth_type,omitempty"`
-	Tags           []string               `protobuf:"bytes,13,rep,name=tags,proto3" json:"tags,omitempty"`
-	HealthCheck    *HealthCheckConfig     `protobuf:"bytes,14,opt,name=health_check,json=healthCheck,proto3" json:"health_check,omitempty"`
-	unknownFields  protoimpl.UnknownFields
-	sizeCache      protoimpl.SizeCache
+	state            protoimpl.MessageState  `protogen:"open.v1"`
+	ProxyId          string                  `protobuf:"bytes,1,opt,name=proxy_id,json=proxyId,proto3" json:"proxy_id,omitempty"`
+	ListenAddr       string                  `protobuf:"bytes,2,opt,name=listen_addr,json=listenAddr,proto3" json:"listen_addr,omitempty"`
+	DefaultBackend   string                  `protobuf:"bytes,3,opt,name=default_backend,json=defaultBackend,proto3" json:"default_backend,omitempty"`
+	Name             string                  `protobuf:"bytes,4,opt,name=name,proto3" json:"name,omitempty"`
+	CertPem          string                  `protobuf:"bytes,5,opt,name=cert_pem,json=certPem,proto3" json:"cert_pem,omitempty"`
+	KeyPem           string                  `protobuf:"bytes,6,opt,name=key_pem,json=keyPem,proto3" json:"key_pem,omitempty"`
+	CaPem            string                  `protobuf:"bytes,7,opt,name=ca_pem,json=caPem,proto3" json:"ca_pem,omitempty"`
+	DefaultAction    common.ActionType       `protobuf:"varint,8,opt,name=default_action,json=defaultAction,proto3,enum=nitella.ActionType" json:"default_action,omitempty"`
+	DefaultMock      common.MockPreset       `protobuf:"varint,9,opt,name=default_mock,json=defaultMock,proto3,enum=nitella.MockPreset" json:"default_mock,omitempty"`
+	FallbackAction   common.FallbackAction   `protobuf:"varint,10,opt,name=fallback_action,json=fallbackAction,proto3,enum=nitella.FallbackAction" json:"fallback_action,omitempty"`
+	FallbackMock     common.MockPreset       `protobuf:"varint,11,opt,name=fallback_mock,json=fallbackMock,proto3,enum=nitella.MockPreset" json:"fallback_mock,omitempty"`
+	ClientAuthType   ClientAuthType          `protobuf:"varint,12,opt,name=client_auth_type,json=clientAuthType,proto3,enum=nitella.proxy.ClientAuthType" json:"client_auth_type,omitempty"`
+	Tags             []string                `protobuf:"bytes,13,rep,name=tags,proto3" json:"tags,omitempty"`
+	HealthCheck      *HealthCheckConfig      `protobuf:"bytes,14,opt,name=health_check,json=healthCheck,proto3" json:"health_check,omitempty"`
+	ApprovalBackends []*common.BackendChoice `protobuf:"bytes,15,rep,name=approval_backends,json=approvalBackends,proto3" json:"approval_backends,omitempty"`
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
 }
 
 func (x *UpdateProxyRequest) Reset() {
@@ -1361,6 +1370,13 @@ func (x *UpdateProxyRequest) GetTags() []string {
 func (x *UpdateProxyRequest) GetHealthCheck() *HealthCheckConfig {
 	if x != nil {
 		return x.HealthCheck
+	}
+	return nil
+}
+
+func (x *UpdateProxyRequest) GetApprovalBackends() []*common.BackendChoice {
+	if x != nil {
+		return x.ApprovalBackends
 	}
 	return nil
 }
@@ -1522,25 +1538,26 @@ func (x *GetStatusRequest) GetProxyId() string {
 }
 
 type ProxyStatus struct {
-	state             protoimpl.MessageState `protogen:"open.v1"`
-	ProxyId           string                 `protobuf:"bytes,1,opt,name=proxy_id,json=proxyId,proto3" json:"proxy_id,omitempty"`
-	Running           bool                   `protobuf:"varint,2,opt,name=running,proto3" json:"running,omitempty"`
-	ListenAddr        string                 `protobuf:"bytes,3,opt,name=listen_addr,json=listenAddr,proto3" json:"listen_addr,omitempty"`
-	ActiveConnections int64                  `protobuf:"varint,4,opt,name=active_connections,json=activeConnections,proto3" json:"active_connections,omitempty"`
-	TotalConnections  int64                  `protobuf:"varint,5,opt,name=total_connections,json=totalConnections,proto3" json:"total_connections,omitempty"`
-	BytesIn           int64                  `protobuf:"varint,6,opt,name=bytes_in,json=bytesIn,proto3" json:"bytes_in,omitempty"`
-	BytesOut          int64                  `protobuf:"varint,7,opt,name=bytes_out,json=bytesOut,proto3" json:"bytes_out,omitempty"`
-	UptimeSeconds     int64                  `protobuf:"varint,8,opt,name=uptime_seconds,json=uptimeSeconds,proto3" json:"uptime_seconds,omitempty"`
-	MemoryRss         int64                  `protobuf:"varint,9,opt,name=memory_rss,json=memoryRss,proto3" json:"memory_rss,omitempty"` // Resident Set Size in bytes
-	DefaultAction     common.ActionType      `protobuf:"varint,10,opt,name=default_action,json=defaultAction,proto3,enum=nitella.ActionType" json:"default_action,omitempty"`
-	DefaultMock       common.MockPreset      `protobuf:"varint,11,opt,name=default_mock,json=defaultMock,proto3,enum=nitella.MockPreset" json:"default_mock,omitempty"`
-	FallbackAction    common.FallbackAction  `protobuf:"varint,12,opt,name=fallback_action,json=fallbackAction,proto3,enum=nitella.FallbackAction" json:"fallback_action,omitempty"`
-	FallbackMock      common.MockPreset      `protobuf:"varint,13,opt,name=fallback_mock,json=fallbackMock,proto3,enum=nitella.MockPreset" json:"fallback_mock,omitempty"`
-	DefaultBackend    string                 `protobuf:"bytes,14,opt,name=default_backend,json=defaultBackend,proto3" json:"default_backend,omitempty"`
-	ClientAuthType    ClientAuthType         `protobuf:"varint,15,opt,name=client_auth_type,json=clientAuthType,proto3,enum=nitella.proxy.ClientAuthType" json:"client_auth_type,omitempty"`
-	Tags              []string               `protobuf:"bytes,16,rep,name=tags,proto3" json:"tags,omitempty"`
-	HealthCheck       *HealthCheckConfig     `protobuf:"bytes,17,opt,name=health_check,json=healthCheck,proto3" json:"health_check,omitempty"`
-	HealthStatus      HealthStatus           `protobuf:"varint,18,opt,name=health_status,json=healthStatus,proto3,enum=nitella.proxy.HealthStatus" json:"health_status,omitempty"`
+	state             protoimpl.MessageState  `protogen:"open.v1"`
+	ProxyId           string                  `protobuf:"bytes,1,opt,name=proxy_id,json=proxyId,proto3" json:"proxy_id,omitempty"`
+	Running           bool                    `protobuf:"varint,2,opt,name=running,proto3" json:"running,omitempty"`
+	ListenAddr        string                  `protobuf:"bytes,3,opt,name=listen_addr,json=listenAddr,proto3" json:"listen_addr,omitempty"`
+	ActiveConnections int64                   `protobuf:"varint,4,opt,name=active_connections,json=activeConnections,proto3" json:"active_connections,omitempty"`
+	TotalConnections  int64                   `protobuf:"varint,5,opt,name=total_connections,json=totalConnections,proto3" json:"total_connections,omitempty"`
+	BytesIn           int64                   `protobuf:"varint,6,opt,name=bytes_in,json=bytesIn,proto3" json:"bytes_in,omitempty"`
+	BytesOut          int64                   `protobuf:"varint,7,opt,name=bytes_out,json=bytesOut,proto3" json:"bytes_out,omitempty"`
+	UptimeSeconds     int64                   `protobuf:"varint,8,opt,name=uptime_seconds,json=uptimeSeconds,proto3" json:"uptime_seconds,omitempty"`
+	MemoryRss         int64                   `protobuf:"varint,9,opt,name=memory_rss,json=memoryRss,proto3" json:"memory_rss,omitempty"` // Resident Set Size in bytes
+	DefaultAction     common.ActionType       `protobuf:"varint,10,opt,name=default_action,json=defaultAction,proto3,enum=nitella.ActionType" json:"default_action,omitempty"`
+	DefaultMock       common.MockPreset       `protobuf:"varint,11,opt,name=default_mock,json=defaultMock,proto3,enum=nitella.MockPreset" json:"default_mock,omitempty"`
+	FallbackAction    common.FallbackAction   `protobuf:"varint,12,opt,name=fallback_action,json=fallbackAction,proto3,enum=nitella.FallbackAction" json:"fallback_action,omitempty"`
+	FallbackMock      common.MockPreset       `protobuf:"varint,13,opt,name=fallback_mock,json=fallbackMock,proto3,enum=nitella.MockPreset" json:"fallback_mock,omitempty"`
+	DefaultBackend    string                  `protobuf:"bytes,14,opt,name=default_backend,json=defaultBackend,proto3" json:"default_backend,omitempty"`
+	ClientAuthType    ClientAuthType          `protobuf:"varint,15,opt,name=client_auth_type,json=clientAuthType,proto3,enum=nitella.proxy.ClientAuthType" json:"client_auth_type,omitempty"`
+	Tags              []string                `protobuf:"bytes,16,rep,name=tags,proto3" json:"tags,omitempty"`
+	HealthCheck       *HealthCheckConfig      `protobuf:"bytes,17,opt,name=health_check,json=healthCheck,proto3" json:"health_check,omitempty"`
+	HealthStatus      HealthStatus            `protobuf:"varint,18,opt,name=health_status,json=healthStatus,proto3,enum=nitella.proxy.HealthStatus" json:"health_status,omitempty"`
+	ApprovalBackends  []*common.BackendChoice `protobuf:"bytes,19,rep,name=approval_backends,json=approvalBackends,proto3" json:"approval_backends,omitempty"`
 	unknownFields     protoimpl.UnknownFields
 	sizeCache         protoimpl.SizeCache
 }
@@ -1699,6 +1716,13 @@ func (x *ProxyStatus) GetHealthStatus() HealthStatus {
 		return x.HealthStatus
 	}
 	return HealthStatus_HEALTH_STATUS_UNKNOWN
+}
+
+func (x *ProxyStatus) GetApprovalBackends() []*common.BackendChoice {
+	if x != nil {
+		return x.ApprovalBackends
+	}
+	return nil
 }
 
 type ReloadRulesRequest struct {
@@ -2057,11 +2081,12 @@ type Rule struct {
 	// Can be a specific "IP:Port" or a named group.
 	TargetBackend string `protobuf:"bytes,7,opt,name=target_backend,json=targetBackend,proto3" json:"target_backend,omitempty"`
 	// Additional configuration for specific actions
-	RateLimit     *RateLimitConfig `protobuf:"bytes,8,opt,name=rate_limit,json=rateLimit,proto3" json:"rate_limit,omitempty"`
-	MockResponse  *MockConfig      `protobuf:"bytes,9,opt,name=mock_response,json=mockResponse,proto3" json:"mock_response,omitempty"`
-	Expression    string           `protobuf:"bytes,10,opt,name=expression,proto3" json:"expression,omitempty"` // Traefik-style rule expression
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	RateLimit                *RateLimitConfig `protobuf:"bytes,8,opt,name=rate_limit,json=rateLimit,proto3" json:"rate_limit,omitempty"`
+	MockResponse             *MockConfig      `protobuf:"bytes,9,opt,name=mock_response,json=mockResponse,proto3" json:"mock_response,omitempty"`
+	Expression               string           `protobuf:"bytes,10,opt,name=expression,proto3" json:"expression,omitempty"`                                                                 // Traefik-style rule expression
+	ApprovalBackendChoiceIds []string         `protobuf:"bytes,11,rep,name=approval_backend_choice_ids,json=approvalBackendChoiceIds,proto3" json:"approval_backend_choice_ids,omitempty"` // Subset of proxy.approval_backends offered for this rule.
+	unknownFields            protoimpl.UnknownFields
+	sizeCache                protoimpl.SizeCache
 }
 
 func (x *Rule) Reset() {
@@ -2162,6 +2187,13 @@ func (x *Rule) GetExpression() string {
 		return x.Expression
 	}
 	return ""
+}
+
+func (x *Rule) GetApprovalBackendChoiceIds() []string {
+	if x != nil {
+		return x.ApprovalBackendChoiceIds
+	}
+	return nil
 }
 
 type Condition struct {
@@ -4424,14 +4456,15 @@ func (x *StatsSummaryResponse) GetTimestamp() *timestamp.Timestamp {
 }
 
 type ResolveApprovalRequest struct {
-	state           protoimpl.MessageState       `protogen:"open.v1"`
-	ReqId           string                       `protobuf:"bytes,1,opt,name=req_id,json=reqId,proto3" json:"req_id,omitempty"`
-	Action          common.ApprovalActionType    `protobuf:"varint,2,opt,name=action,proto3,enum=nitella.ApprovalActionType" json:"action,omitempty"`
-	RetentionMode   common.ApprovalRetentionMode `protobuf:"varint,3,opt,name=retention_mode,json=retentionMode,proto3,enum=nitella.ApprovalRetentionMode" json:"retention_mode,omitempty"`
-	DurationSeconds int64                        `protobuf:"varint,4,opt,name=duration_seconds,json=durationSeconds,proto3" json:"duration_seconds,omitempty"`
-	Reason          string                       `protobuf:"bytes,5,opt,name=reason,proto3" json:"reason,omitempty"`
-	unknownFields   protoimpl.UnknownFields
-	sizeCache       protoimpl.SizeCache
+	state                 protoimpl.MessageState       `protogen:"open.v1"`
+	ReqId                 string                       `protobuf:"bytes,1,opt,name=req_id,json=reqId,proto3" json:"req_id,omitempty"`
+	Action                common.ApprovalActionType    `protobuf:"varint,2,opt,name=action,proto3,enum=nitella.ApprovalActionType" json:"action,omitempty"`
+	RetentionMode         common.ApprovalRetentionMode `protobuf:"varint,3,opt,name=retention_mode,json=retentionMode,proto3,enum=nitella.ApprovalRetentionMode" json:"retention_mode,omitempty"`
+	DurationSeconds       int64                        `protobuf:"varint,4,opt,name=duration_seconds,json=durationSeconds,proto3" json:"duration_seconds,omitempty"`
+	Reason                string                       `protobuf:"bytes,5,opt,name=reason,proto3" json:"reason,omitempty"`
+	TargetBackendOverride string                       `protobuf:"bytes,6,opt,name=target_backend_override,json=targetBackendOverride,proto3" json:"target_backend_override,omitempty"` // Choice id; empty => no override.
+	unknownFields         protoimpl.UnknownFields
+	sizeCache             protoimpl.SizeCache
 }
 
 func (x *ResolveApprovalRequest) Reset() {
@@ -4499,12 +4532,20 @@ func (x *ResolveApprovalRequest) GetReason() string {
 	return ""
 }
 
+func (x *ResolveApprovalRequest) GetTargetBackendOverride() string {
+	if x != nil {
+		return x.TargetBackendOverride
+	}
+	return ""
+}
+
 type ResolveApprovalResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Success       bool                   `protobuf:"varint,1,opt,name=success,proto3" json:"success,omitempty"`
-	ErrorMessage  string                 `protobuf:"bytes,2,opt,name=error_message,json=errorMessage,proto3" json:"error_message,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state                 protoimpl.MessageState `protogen:"open.v1"`
+	Success               bool                   `protobuf:"varint,1,opt,name=success,proto3" json:"success,omitempty"`
+	ErrorMessage          string                 `protobuf:"bytes,2,opt,name=error_message,json=errorMessage,proto3" json:"error_message,omitempty"`
+	ResolvedTargetBackend string                 `protobuf:"bytes,3,opt,name=resolved_target_backend,json=resolvedTargetBackend,proto3" json:"resolved_target_backend,omitempty"` // Resolved backend address used for an override, if any.
+	unknownFields         protoimpl.UnknownFields
+	sizeCache             protoimpl.SizeCache
 }
 
 func (x *ResolveApprovalResponse) Reset() {
@@ -4551,25 +4592,34 @@ func (x *ResolveApprovalResponse) GetErrorMessage() string {
 	return ""
 }
 
+func (x *ResolveApprovalResponse) GetResolvedTargetBackend() string {
+	if x != nil {
+		return x.ResolvedTargetBackend
+	}
+	return ""
+}
+
 type ActiveApproval struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Key           string                 `protobuf:"bytes,1,opt,name=key,proto3" json:"key,omitempty"` // Unique key (ip:rule_id:tls_session)
-	SourceIp      string                 `protobuf:"bytes,2,opt,name=source_ip,json=sourceIp,proto3" json:"source_ip,omitempty"`
-	RuleId        string                 `protobuf:"bytes,3,opt,name=rule_id,json=ruleId,proto3" json:"rule_id,omitempty"`
-	ProxyId       string                 `protobuf:"bytes,4,opt,name=proxy_id,json=proxyId,proto3" json:"proxy_id,omitempty"`
-	TlsSessionId  string                 `protobuf:"bytes,5,opt,name=tls_session_id,json=tlsSessionId,proto3" json:"tls_session_id,omitempty"` // Empty if non-TLS
-	Allowed       bool                   `protobuf:"varint,6,opt,name=allowed,proto3" json:"allowed,omitempty"`                                // true=allow, false=block
-	CreatedAt     *timestamp.Timestamp   `protobuf:"bytes,7,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
-	ExpiresAt     *timestamp.Timestamp   `protobuf:"bytes,8,opt,name=expires_at,json=expiresAt,proto3" json:"expires_at,omitempty"`
-	BytesIn       int64                  `protobuf:"varint,9,opt,name=bytes_in,json=bytesIn,proto3" json:"bytes_in,omitempty"`
-	BytesOut      int64                  `protobuf:"varint,10,opt,name=bytes_out,json=bytesOut,proto3" json:"bytes_out,omitempty"`
-	BlockedCount  int64                  `protobuf:"varint,11,opt,name=blocked_count,json=blockedCount,proto3" json:"blocked_count,omitempty"` // For block decisions
-	ConnIds       []string               `protobuf:"bytes,12,rep,name=conn_ids,json=connIds,proto3" json:"conn_ids,omitempty"`                 // Active connection IDs
-	GeoCountry    string                 `protobuf:"bytes,13,opt,name=geo_country,json=geoCountry,proto3" json:"geo_country,omitempty"`
-	GeoCity       string                 `protobuf:"bytes,14,opt,name=geo_city,json=geoCity,proto3" json:"geo_city,omitempty"`
-	GeoIsp        string                 `protobuf:"bytes,15,opt,name=geo_isp,json=geoIsp,proto3" json:"geo_isp,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state                 protoimpl.MessageState  `protogen:"open.v1"`
+	Key                   string                  `protobuf:"bytes,1,opt,name=key,proto3" json:"key,omitempty"` // Unique key (ip:rule_id:tls_session)
+	SourceIp              string                  `protobuf:"bytes,2,opt,name=source_ip,json=sourceIp,proto3" json:"source_ip,omitempty"`
+	RuleId                string                  `protobuf:"bytes,3,opt,name=rule_id,json=ruleId,proto3" json:"rule_id,omitempty"`
+	ProxyId               string                  `protobuf:"bytes,4,opt,name=proxy_id,json=proxyId,proto3" json:"proxy_id,omitempty"`
+	TlsSessionId          string                  `protobuf:"bytes,5,opt,name=tls_session_id,json=tlsSessionId,proto3" json:"tls_session_id,omitempty"` // Empty if non-TLS
+	Allowed               bool                    `protobuf:"varint,6,opt,name=allowed,proto3" json:"allowed,omitempty"`                                // true=allow, false=block
+	CreatedAt             *timestamp.Timestamp    `protobuf:"bytes,7,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
+	ExpiresAt             *timestamp.Timestamp    `protobuf:"bytes,8,opt,name=expires_at,json=expiresAt,proto3" json:"expires_at,omitempty"`
+	BytesIn               int64                   `protobuf:"varint,9,opt,name=bytes_in,json=bytesIn,proto3" json:"bytes_in,omitempty"`
+	BytesOut              int64                   `protobuf:"varint,10,opt,name=bytes_out,json=bytesOut,proto3" json:"bytes_out,omitempty"`
+	BlockedCount          int64                   `protobuf:"varint,11,opt,name=blocked_count,json=blockedCount,proto3" json:"blocked_count,omitempty"` // For block decisions
+	ConnIds               []string                `protobuf:"bytes,12,rep,name=conn_ids,json=connIds,proto3" json:"conn_ids,omitempty"`                 // Active connection IDs
+	GeoCountry            string                  `protobuf:"bytes,13,opt,name=geo_country,json=geoCountry,proto3" json:"geo_country,omitempty"`
+	GeoCity               string                  `protobuf:"bytes,14,opt,name=geo_city,json=geoCity,proto3" json:"geo_city,omitempty"`
+	GeoIsp                string                  `protobuf:"bytes,15,opt,name=geo_isp,json=geoIsp,proto3" json:"geo_isp,omitempty"`
+	BackendChoices        []*common.BackendChoice `protobuf:"bytes,16,rep,name=backend_choices,json=backendChoices,proto3" json:"backend_choices,omitempty"`
+	SelectedTargetBackend string                  `protobuf:"bytes,17,opt,name=selected_target_backend,json=selectedTargetBackend,proto3" json:"selected_target_backend,omitempty"`
+	unknownFields         protoimpl.UnknownFields
+	sizeCache             protoimpl.SizeCache
 }
 
 func (x *ActiveApproval) Reset() {
@@ -4703,6 +4753,20 @@ func (x *ActiveApproval) GetGeoCity() string {
 func (x *ActiveApproval) GetGeoIsp() string {
 	if x != nil {
 		return x.GeoIsp
+	}
+	return ""
+}
+
+func (x *ActiveApproval) GetBackendChoices() []*common.BackendChoice {
+	if x != nil {
+		return x.BackendChoices
+	}
+	return nil
+}
+
+func (x *ActiveApproval) GetSelectedTargetBackend() string {
+	if x != nil {
+		return x.SelectedTargetBackend
 	}
 	return ""
 }
@@ -5062,7 +5126,7 @@ const file_proxy_proxy_proto_rawDesc = "" +
 	"\bstrategy\x18\x06 \x03(\tR\bstrategy\x12\x1d\n" +
 	"\n" +
 	"cache_hits\x18\a \x01(\x03R\tcacheHits\x12!\n" +
-	"\fcache_misses\x18\b \x01(\x03R\vcacheMisses\"\xcf\x04\n" +
+	"\fcache_misses\x18\b \x01(\x03R\vcacheMisses\"\x94\x05\n" +
 	"\x12CreateProxyRequest\x12\x1f\n" +
 	"\vlisten_addr\x18\x01 \x01(\tR\n" +
 	"listenAddr\x12'\n" +
@@ -5078,7 +5142,8 @@ const file_proxy_proxy_proto_rawDesc = "" +
 	" \x01(\x0e2\x13.nitella.MockPresetR\ffallbackMock\x12G\n" +
 	"\x10client_auth_type\x18\v \x01(\x0e2\x1d.nitella.proxy.ClientAuthTypeR\x0eclientAuthType\x12\x12\n" +
 	"\x04tags\x18\f \x03(\tR\x04tags\x12C\n" +
-	"\fhealth_check\x18\r \x01(\v2 .nitella.proxy.HealthCheckConfigR\vhealthCheck\"\xba\x01\n" +
+	"\fhealth_check\x18\r \x01(\v2 .nitella.proxy.HealthCheckConfigR\vhealthCheck\x12C\n" +
+	"\x11approval_backends\x18\x0e \x03(\v2\x16.nitella.BackendChoiceR\x10approvalBackends\"\xba\x01\n" +
 	"\x11HealthCheckConfig\x12\x1a\n" +
 	"\binterval\x18\x01 \x01(\tR\binterval\x12\x18\n" +
 	"\atimeout\x18\x02 \x01(\tR\atimeout\x122\n" +
@@ -5103,7 +5168,7 @@ const file_proxy_proxy_proto_rawDesc = "" +
 	"\bproxy_id\x18\x01 \x01(\tR\aproxyId\"T\n" +
 	"\x13DeleteProxyResponse\x12\x18\n" +
 	"\asuccess\x18\x01 \x01(\bR\asuccess\x12#\n" +
-	"\rerror_message\x18\x02 \x01(\tR\ferrorMessage\"\xea\x04\n" +
+	"\rerror_message\x18\x02 \x01(\tR\ferrorMessage\"\xaf\x05\n" +
 	"\x12UpdateProxyRequest\x12\x19\n" +
 	"\bproxy_id\x18\x01 \x01(\tR\aproxyId\x12\x1f\n" +
 	"\vlisten_addr\x18\x02 \x01(\tR\n" +
@@ -5120,7 +5185,8 @@ const file_proxy_proxy_proto_rawDesc = "" +
 	"\rfallback_mock\x18\v \x01(\x0e2\x13.nitella.MockPresetR\ffallbackMock\x12G\n" +
 	"\x10client_auth_type\x18\f \x01(\x0e2\x1d.nitella.proxy.ClientAuthTypeR\x0eclientAuthType\x12\x12\n" +
 	"\x04tags\x18\r \x03(\tR\x04tags\x12C\n" +
-	"\fhealth_check\x18\x0e \x01(\v2 .nitella.proxy.HealthCheckConfigR\vhealthCheck\"T\n" +
+	"\fhealth_check\x18\x0e \x01(\v2 .nitella.proxy.HealthCheckConfigR\vhealthCheck\x12C\n" +
+	"\x11approval_backends\x18\x0f \x03(\v2\x16.nitella.BackendChoiceR\x10approvalBackends\"T\n" +
 	"\x13UpdateProxyResponse\x12\x18\n" +
 	"\asuccess\x18\x01 \x01(\bR\asuccess\x12#\n" +
 	"\rerror_message\x18\x02 \x01(\tR\ferrorMessage\"\x82\x01\n" +
@@ -5129,7 +5195,7 @@ const file_proxy_proxy_proto_rawDesc = "" +
 	"\x0frestarted_count\x18\x02 \x01(\x05R\x0erestartedCount\x12#\n" +
 	"\rerror_message\x18\x03 \x01(\tR\ferrorMessage\"-\n" +
 	"\x10GetStatusRequest\x12\x19\n" +
-	"\bproxy_id\x18\x01 \x01(\tR\aproxyId\"\xba\x06\n" +
+	"\bproxy_id\x18\x01 \x01(\tR\aproxyId\"\xff\x06\n" +
 	"\vProxyStatus\x12\x19\n" +
 	"\bproxy_id\x18\x01 \x01(\tR\aproxyId\x12\x18\n" +
 	"\arunning\x18\x02 \x01(\bR\arunning\x12\x1f\n" +
@@ -5151,7 +5217,8 @@ const file_proxy_proxy_proto_rawDesc = "" +
 	"\x10client_auth_type\x18\x0f \x01(\x0e2\x1d.nitella.proxy.ClientAuthTypeR\x0eclientAuthType\x12\x12\n" +
 	"\x04tags\x18\x10 \x03(\tR\x04tags\x12C\n" +
 	"\fhealth_check\x18\x11 \x01(\v2 .nitella.proxy.HealthCheckConfigR\vhealthCheck\x12@\n" +
-	"\rhealth_status\x18\x12 \x01(\x0e2\x1b.nitella.proxy.HealthStatusR\fhealthStatus\"?\n" +
+	"\rhealth_status\x18\x12 \x01(\x0e2\x1b.nitella.proxy.HealthStatusR\fhealthStatus\x12C\n" +
+	"\x11approval_backends\x18\x13 \x03(\v2\x16.nitella.BackendChoiceR\x10approvalBackends\"?\n" +
 	"\x12ReloadRulesRequest\x12)\n" +
 	"\x05rules\x18\x01 \x03(\v2\x13.nitella.proxy.RuleR\x05rules\"w\n" +
 	"\x13ReloadRulesResponse\x12\x18\n" +
@@ -5176,7 +5243,7 @@ const file_proxy_proxy_proto_rawDesc = "" +
 	"\x06status\x18\x04 \x01(\tR\x06status\x12#\n" +
 	"\rerror_message\x18\x05 \x01(\tR\ferrorMessage\"X\n" +
 	"\x19GetAppliedProxiesResponse\x12;\n" +
-	"\aproxies\x18\x01 \x03(\v2!.nitella.proxy.AppliedProxyStatusR\aproxies\"\x8d\x03\n" +
+	"\aproxies\x18\x01 \x03(\v2!.nitella.proxy.AppliedProxyStatusR\aproxies\"\xcc\x03\n" +
 	"\x04Rule\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\x12\x1a\n" +
@@ -5193,7 +5260,8 @@ const file_proxy_proxy_proto_rawDesc = "" +
 	"\n" +
 	"expression\x18\n" +
 	" \x01(\tR\n" +
-	"expression\"\x88\x01\n" +
+	"expression\x12=\n" +
+	"\x1bapproval_backend_choice_ids\x18\v \x03(\tR\x18approvalBackendChoiceIds\"\x88\x01\n" +
 	"\tCondition\x12*\n" +
 	"\x04type\x18\x01 \x01(\x0e2\x16.nitella.ConditionTypeR\x04type\x12!\n" +
 	"\x02op\x18\x02 \x01(\x0e2\x11.nitella.OperatorR\x02op\x12\x14\n" +
@@ -5369,16 +5437,18 @@ const file_proxy_proxy_proto_rawDesc = "" +
 	"\vproxy_count\x18\t \x01(\x05R\n" +
 	"proxyCount\x128\n" +
 	"\ttimestamp\x18\n" +
-	" \x01(\v2\x1a.google.protobuf.TimestampR\ttimestamp\"\xee\x01\n" +
+	" \x01(\v2\x1a.google.protobuf.TimestampR\ttimestamp\"\xa6\x02\n" +
 	"\x16ResolveApprovalRequest\x12\x15\n" +
 	"\x06req_id\x18\x01 \x01(\tR\x05reqId\x123\n" +
 	"\x06action\x18\x02 \x01(\x0e2\x1b.nitella.ApprovalActionTypeR\x06action\x12E\n" +
 	"\x0eretention_mode\x18\x03 \x01(\x0e2\x1e.nitella.ApprovalRetentionModeR\rretentionMode\x12)\n" +
 	"\x10duration_seconds\x18\x04 \x01(\x03R\x0fdurationSeconds\x12\x16\n" +
-	"\x06reason\x18\x05 \x01(\tR\x06reason\"X\n" +
+	"\x06reason\x18\x05 \x01(\tR\x06reason\x126\n" +
+	"\x17target_backend_override\x18\x06 \x01(\tR\x15targetBackendOverride\"\x90\x01\n" +
 	"\x17ResolveApprovalResponse\x12\x18\n" +
 	"\asuccess\x18\x01 \x01(\bR\asuccess\x12#\n" +
-	"\rerror_message\x18\x02 \x01(\tR\ferrorMessage\"\xf6\x03\n" +
+	"\rerror_message\x18\x02 \x01(\tR\ferrorMessage\x126\n" +
+	"\x17resolved_target_backend\x18\x03 \x01(\tR\x15resolvedTargetBackend\"\xef\x04\n" +
 	"\x0eActiveApproval\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x1b\n" +
 	"\tsource_ip\x18\x02 \x01(\tR\bsourceIp\x12\x17\n" +
@@ -5398,7 +5468,9 @@ const file_proxy_proxy_proto_rawDesc = "" +
 	"\vgeo_country\x18\r \x01(\tR\n" +
 	"geoCountry\x12\x19\n" +
 	"\bgeo_city\x18\x0e \x01(\tR\ageoCity\x12\x17\n" +
-	"\ageo_isp\x18\x0f \x01(\tR\x06geoIsp\"T\n" +
+	"\ageo_isp\x18\x0f \x01(\tR\x06geoIsp\x12?\n" +
+	"\x0fbackend_choices\x18\x10 \x03(\v2\x16.nitella.BackendChoiceR\x0ebackendChoices\x126\n" +
+	"\x17selected_target_backend\x18\x11 \x01(\tR\x15selectedTargetBackend\"T\n" +
 	"\x1aListActiveApprovalsRequest\x12\x19\n" +
 	"\bproxy_id\x18\x01 \x01(\tR\aproxyId\x12\x1b\n" +
 	"\tsource_ip\x18\x02 \x01(\tR\bsourceIp\"Z\n" +
@@ -5541,12 +5613,13 @@ var file_proxy_proxy_proto_goTypes = []any{
 	(common.ActionType)(0),               // 78: nitella.ActionType
 	(common.MockPreset)(0),               // 79: nitella.MockPreset
 	(common.FallbackAction)(0),           // 80: nitella.FallbackAction
-	(common.ConditionType)(0),            // 81: nitella.ConditionType
-	(common.Operator)(0),                 // 82: nitella.Operator
-	(*timestamp.Timestamp)(nil),          // 83: google.protobuf.Timestamp
-	(*common.EncryptedPayload)(nil),      // 84: nitella.EncryptedPayload
-	(common.ApprovalActionType)(0),       // 85: nitella.ApprovalActionType
-	(common.ApprovalRetentionMode)(0),    // 86: nitella.ApprovalRetentionMode
+	(*common.BackendChoice)(nil),         // 81: nitella.BackendChoice
+	(common.ConditionType)(0),            // 82: nitella.ConditionType
+	(common.Operator)(0),                 // 83: nitella.Operator
+	(*timestamp.Timestamp)(nil),          // 84: google.protobuf.Timestamp
+	(*common.EncryptedPayload)(nil),      // 85: nitella.EncryptedPayload
+	(common.ApprovalActionType)(0),       // 86: nitella.ApprovalActionType
+	(common.ApprovalRetentionMode)(0),    // 87: nitella.ApprovalRetentionMode
 }
 var file_proxy_proxy_proto_depIdxs = []int32{
 	4,  // 0: nitella.proxy.ConfigureGeoIPRequest.mode:type_name -> nitella.proxy.ConfigureGeoIPRequest.Mode
@@ -5557,66 +5630,70 @@ var file_proxy_proxy_proto_depIdxs = []int32{
 	79, // 5: nitella.proxy.CreateProxyRequest.fallback_mock:type_name -> nitella.MockPreset
 	1,  // 6: nitella.proxy.CreateProxyRequest.client_auth_type:type_name -> nitella.proxy.ClientAuthType
 	12, // 7: nitella.proxy.CreateProxyRequest.health_check:type_name -> nitella.proxy.HealthCheckConfig
-	0,  // 8: nitella.proxy.HealthCheckConfig.type:type_name -> nitella.proxy.HealthCheckType
-	78, // 9: nitella.proxy.UpdateProxyRequest.default_action:type_name -> nitella.ActionType
-	79, // 10: nitella.proxy.UpdateProxyRequest.default_mock:type_name -> nitella.MockPreset
-	80, // 11: nitella.proxy.UpdateProxyRequest.fallback_action:type_name -> nitella.FallbackAction
-	79, // 12: nitella.proxy.UpdateProxyRequest.fallback_mock:type_name -> nitella.MockPreset
-	1,  // 13: nitella.proxy.UpdateProxyRequest.client_auth_type:type_name -> nitella.proxy.ClientAuthType
-	12, // 14: nitella.proxy.UpdateProxyRequest.health_check:type_name -> nitella.proxy.HealthCheckConfig
-	78, // 15: nitella.proxy.ProxyStatus.default_action:type_name -> nitella.ActionType
-	79, // 16: nitella.proxy.ProxyStatus.default_mock:type_name -> nitella.MockPreset
-	80, // 17: nitella.proxy.ProxyStatus.fallback_action:type_name -> nitella.FallbackAction
-	79, // 18: nitella.proxy.ProxyStatus.fallback_mock:type_name -> nitella.MockPreset
-	1,  // 19: nitella.proxy.ProxyStatus.client_auth_type:type_name -> nitella.proxy.ClientAuthType
-	12, // 20: nitella.proxy.ProxyStatus.health_check:type_name -> nitella.proxy.HealthCheckConfig
-	2,  // 21: nitella.proxy.ProxyStatus.health_status:type_name -> nitella.proxy.HealthStatus
-	31, // 22: nitella.proxy.ReloadRulesRequest.rules:type_name -> nitella.proxy.Rule
-	29, // 23: nitella.proxy.GetAppliedProxiesResponse.proxies:type_name -> nitella.proxy.AppliedProxyStatus
-	32, // 24: nitella.proxy.Rule.conditions:type_name -> nitella.proxy.Condition
-	78, // 25: nitella.proxy.Rule.action:type_name -> nitella.ActionType
-	33, // 26: nitella.proxy.Rule.rate_limit:type_name -> nitella.proxy.RateLimitConfig
-	34, // 27: nitella.proxy.Rule.mock_response:type_name -> nitella.proxy.MockConfig
-	81, // 28: nitella.proxy.Condition.type:type_name -> nitella.ConditionType
-	82, // 29: nitella.proxy.Condition.op:type_name -> nitella.Operator
-	79, // 30: nitella.proxy.MockConfig.preset:type_name -> nitella.MockPreset
-	31, // 31: nitella.proxy.AddRuleRequest.rule:type_name -> nitella.proxy.Rule
-	31, // 32: nitella.proxy.ListRulesResponse.rules:type_name -> nitella.proxy.Rule
-	24, // 33: nitella.proxy.ListProxiesResponse.proxies:type_name -> nitella.proxy.ProxyStatus
-	78, // 34: nitella.proxy.GlobalRule.action:type_name -> nitella.ActionType
-	83, // 35: nitella.proxy.GlobalRule.expires_at:type_name -> google.protobuf.Timestamp
-	83, // 36: nitella.proxy.GlobalRule.created_at:type_name -> google.protobuf.Timestamp
-	43, // 37: nitella.proxy.ListGlobalRulesResponse.rules:type_name -> nitella.proxy.GlobalRule
-	3,  // 38: nitella.proxy.ConnectionEvent.event_type:type_name -> nitella.proxy.EventType
-	78, // 39: nitella.proxy.ConnectionEvent.action_taken:type_name -> nitella.ActionType
-	77, // 40: nitella.proxy.ConnectionEvent.geo:type_name -> nitella.GeoInfo
-	84, // 41: nitella.proxy.EncryptedStreamPayload.encrypted:type_name -> nitella.EncryptedPayload
-	83, // 42: nitella.proxy.ActiveConnection.start_time:type_name -> google.protobuf.Timestamp
-	77, // 43: nitella.proxy.ActiveConnection.geo:type_name -> nitella.GeoInfo
-	53, // 44: nitella.proxy.GetActiveConnectionsResponse.connections:type_name -> nitella.proxy.ActiveConnection
-	83, // 45: nitella.proxy.IPStatsResult.first_seen:type_name -> google.protobuf.Timestamp
-	83, // 46: nitella.proxy.IPStatsResult.last_seen:type_name -> google.protobuf.Timestamp
-	61, // 47: nitella.proxy.GetIPStatsResponse.stats:type_name -> nitella.proxy.IPStatsResult
-	64, // 48: nitella.proxy.GetGeoStatsResponse.stats:type_name -> nitella.proxy.GeoStatsResult
-	83, // 49: nitella.proxy.StatsSummaryResponse.timestamp:type_name -> google.protobuf.Timestamp
-	85, // 50: nitella.proxy.ResolveApprovalRequest.action:type_name -> nitella.ApprovalActionType
-	86, // 51: nitella.proxy.ResolveApprovalRequest.retention_mode:type_name -> nitella.ApprovalRetentionMode
-	83, // 52: nitella.proxy.ActiveApproval.created_at:type_name -> google.protobuf.Timestamp
-	83, // 53: nitella.proxy.ActiveApproval.expires_at:type_name -> google.protobuf.Timestamp
-	70, // 54: nitella.proxy.ListActiveApprovalsResponse.approvals:type_name -> nitella.proxy.ActiveApproval
-	84, // 55: nitella.proxy.SendCommandRequest.encrypted:type_name -> nitella.EncryptedPayload
-	84, // 56: nitella.proxy.SendCommandResponse.encrypted:type_name -> nitella.EncryptedPayload
-	75, // 57: nitella.proxy.ProxyControlService.SendCommand:input_type -> nitella.proxy.SendCommandRequest
-	48, // 58: nitella.proxy.ProxyControlService.StreamConnections:input_type -> nitella.proxy.StreamConnectionsRequest
-	50, // 59: nitella.proxy.ProxyControlService.StreamMetrics:input_type -> nitella.proxy.StreamMetricsRequest
-	76, // 60: nitella.proxy.ProxyControlService.SendCommand:output_type -> nitella.proxy.SendCommandResponse
-	52, // 61: nitella.proxy.ProxyControlService.StreamConnections:output_type -> nitella.proxy.EncryptedStreamPayload
-	52, // 62: nitella.proxy.ProxyControlService.StreamMetrics:output_type -> nitella.proxy.EncryptedStreamPayload
-	60, // [60:63] is the sub-list for method output_type
-	57, // [57:60] is the sub-list for method input_type
-	57, // [57:57] is the sub-list for extension type_name
-	57, // [57:57] is the sub-list for extension extendee
-	0,  // [0:57] is the sub-list for field type_name
+	81, // 8: nitella.proxy.CreateProxyRequest.approval_backends:type_name -> nitella.BackendChoice
+	0,  // 9: nitella.proxy.HealthCheckConfig.type:type_name -> nitella.proxy.HealthCheckType
+	78, // 10: nitella.proxy.UpdateProxyRequest.default_action:type_name -> nitella.ActionType
+	79, // 11: nitella.proxy.UpdateProxyRequest.default_mock:type_name -> nitella.MockPreset
+	80, // 12: nitella.proxy.UpdateProxyRequest.fallback_action:type_name -> nitella.FallbackAction
+	79, // 13: nitella.proxy.UpdateProxyRequest.fallback_mock:type_name -> nitella.MockPreset
+	1,  // 14: nitella.proxy.UpdateProxyRequest.client_auth_type:type_name -> nitella.proxy.ClientAuthType
+	12, // 15: nitella.proxy.UpdateProxyRequest.health_check:type_name -> nitella.proxy.HealthCheckConfig
+	81, // 16: nitella.proxy.UpdateProxyRequest.approval_backends:type_name -> nitella.BackendChoice
+	78, // 17: nitella.proxy.ProxyStatus.default_action:type_name -> nitella.ActionType
+	79, // 18: nitella.proxy.ProxyStatus.default_mock:type_name -> nitella.MockPreset
+	80, // 19: nitella.proxy.ProxyStatus.fallback_action:type_name -> nitella.FallbackAction
+	79, // 20: nitella.proxy.ProxyStatus.fallback_mock:type_name -> nitella.MockPreset
+	1,  // 21: nitella.proxy.ProxyStatus.client_auth_type:type_name -> nitella.proxy.ClientAuthType
+	12, // 22: nitella.proxy.ProxyStatus.health_check:type_name -> nitella.proxy.HealthCheckConfig
+	2,  // 23: nitella.proxy.ProxyStatus.health_status:type_name -> nitella.proxy.HealthStatus
+	81, // 24: nitella.proxy.ProxyStatus.approval_backends:type_name -> nitella.BackendChoice
+	31, // 25: nitella.proxy.ReloadRulesRequest.rules:type_name -> nitella.proxy.Rule
+	29, // 26: nitella.proxy.GetAppliedProxiesResponse.proxies:type_name -> nitella.proxy.AppliedProxyStatus
+	32, // 27: nitella.proxy.Rule.conditions:type_name -> nitella.proxy.Condition
+	78, // 28: nitella.proxy.Rule.action:type_name -> nitella.ActionType
+	33, // 29: nitella.proxy.Rule.rate_limit:type_name -> nitella.proxy.RateLimitConfig
+	34, // 30: nitella.proxy.Rule.mock_response:type_name -> nitella.proxy.MockConfig
+	82, // 31: nitella.proxy.Condition.type:type_name -> nitella.ConditionType
+	83, // 32: nitella.proxy.Condition.op:type_name -> nitella.Operator
+	79, // 33: nitella.proxy.MockConfig.preset:type_name -> nitella.MockPreset
+	31, // 34: nitella.proxy.AddRuleRequest.rule:type_name -> nitella.proxy.Rule
+	31, // 35: nitella.proxy.ListRulesResponse.rules:type_name -> nitella.proxy.Rule
+	24, // 36: nitella.proxy.ListProxiesResponse.proxies:type_name -> nitella.proxy.ProxyStatus
+	78, // 37: nitella.proxy.GlobalRule.action:type_name -> nitella.ActionType
+	84, // 38: nitella.proxy.GlobalRule.expires_at:type_name -> google.protobuf.Timestamp
+	84, // 39: nitella.proxy.GlobalRule.created_at:type_name -> google.protobuf.Timestamp
+	43, // 40: nitella.proxy.ListGlobalRulesResponse.rules:type_name -> nitella.proxy.GlobalRule
+	3,  // 41: nitella.proxy.ConnectionEvent.event_type:type_name -> nitella.proxy.EventType
+	78, // 42: nitella.proxy.ConnectionEvent.action_taken:type_name -> nitella.ActionType
+	77, // 43: nitella.proxy.ConnectionEvent.geo:type_name -> nitella.GeoInfo
+	85, // 44: nitella.proxy.EncryptedStreamPayload.encrypted:type_name -> nitella.EncryptedPayload
+	84, // 45: nitella.proxy.ActiveConnection.start_time:type_name -> google.protobuf.Timestamp
+	77, // 46: nitella.proxy.ActiveConnection.geo:type_name -> nitella.GeoInfo
+	53, // 47: nitella.proxy.GetActiveConnectionsResponse.connections:type_name -> nitella.proxy.ActiveConnection
+	84, // 48: nitella.proxy.IPStatsResult.first_seen:type_name -> google.protobuf.Timestamp
+	84, // 49: nitella.proxy.IPStatsResult.last_seen:type_name -> google.protobuf.Timestamp
+	61, // 50: nitella.proxy.GetIPStatsResponse.stats:type_name -> nitella.proxy.IPStatsResult
+	64, // 51: nitella.proxy.GetGeoStatsResponse.stats:type_name -> nitella.proxy.GeoStatsResult
+	84, // 52: nitella.proxy.StatsSummaryResponse.timestamp:type_name -> google.protobuf.Timestamp
+	86, // 53: nitella.proxy.ResolveApprovalRequest.action:type_name -> nitella.ApprovalActionType
+	87, // 54: nitella.proxy.ResolveApprovalRequest.retention_mode:type_name -> nitella.ApprovalRetentionMode
+	84, // 55: nitella.proxy.ActiveApproval.created_at:type_name -> google.protobuf.Timestamp
+	84, // 56: nitella.proxy.ActiveApproval.expires_at:type_name -> google.protobuf.Timestamp
+	81, // 57: nitella.proxy.ActiveApproval.backend_choices:type_name -> nitella.BackendChoice
+	70, // 58: nitella.proxy.ListActiveApprovalsResponse.approvals:type_name -> nitella.proxy.ActiveApproval
+	85, // 59: nitella.proxy.SendCommandRequest.encrypted:type_name -> nitella.EncryptedPayload
+	85, // 60: nitella.proxy.SendCommandResponse.encrypted:type_name -> nitella.EncryptedPayload
+	75, // 61: nitella.proxy.ProxyControlService.SendCommand:input_type -> nitella.proxy.SendCommandRequest
+	48, // 62: nitella.proxy.ProxyControlService.StreamConnections:input_type -> nitella.proxy.StreamConnectionsRequest
+	50, // 63: nitella.proxy.ProxyControlService.StreamMetrics:input_type -> nitella.proxy.StreamMetricsRequest
+	76, // 64: nitella.proxy.ProxyControlService.SendCommand:output_type -> nitella.proxy.SendCommandResponse
+	52, // 65: nitella.proxy.ProxyControlService.StreamConnections:output_type -> nitella.proxy.EncryptedStreamPayload
+	52, // 66: nitella.proxy.ProxyControlService.StreamMetrics:output_type -> nitella.proxy.EncryptedStreamPayload
+	64, // [64:67] is the sub-list for method output_type
+	61, // [61:64] is the sub-list for method input_type
+	61, // [61:61] is the sub-list for extension type_name
+	61, // [61:61] is the sub-list for extension extendee
+	0,  // [0:61] is the sub-list for field type_name
 }
 
 func init() { file_proxy_proxy_proto_init() }

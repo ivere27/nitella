@@ -17,7 +17,9 @@ use uuid::Uuid;
 use crate::approval::{ApprovalManager, ApprovalReqData};
 use crate::geoip::GeoIPService;
 use crate::process_proxy::ProcessProxyListener;
-use crate::proto::common::{ActionType, ApprovalRetentionMode, FallbackAction, MockPreset};
+use crate::proto::common::{
+    ActionType, ApprovalRetentionMode, BackendChoice, FallbackAction, MockPreset,
+};
 use crate::proto::proxy::{ActiveConnection, ClientAuthType, MockConfig};
 use crate::ratelimit::RateLimiter;
 use crate::rules::{RuleEngine, TlsPeerInfo};
@@ -119,6 +121,7 @@ impl EmbeddedListener {
         default_mock: i32,
         fallback_action: i32,
         fallback_mock: i32,
+        _approval_backends: Vec<BackendChoice>,
     ) -> Self {
         let listen_addr = if listen_addr.starts_with(':') {
             format!("0.0.0.0{}", listen_addr)
@@ -412,6 +415,9 @@ impl EmbeddedListener {
                         "Approval CACHED for {} (remaining={}s)",
                         addr, cached.duration_seconds
                     );
+                    if !cached.target_backend_override.is_empty() {
+                        target = cached.target_backend_override.clone();
+                    }
                     track_cached_approval = true;
                     // Proceed as ALLOW
                 } else {
@@ -456,6 +462,9 @@ impl EmbeddedListener {
                             "Approval GRANTED for {} (mode={:?}, duration={}s)",
                             addr, retention_mode, result.duration_seconds
                         );
+                        if !result.target_backend_override.is_empty() {
+                            target = result.target_backend_override.clone();
+                        }
                         if retention_mode == ApprovalRetentionMode::ConnectionOnly
                             && result.duration_seconds > 0
                         {

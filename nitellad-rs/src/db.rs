@@ -88,6 +88,7 @@ impl Database {
                 ca_pem TEXT,
                 client_auth_type INTEGER DEFAULT 0,
                 health_check_json TEXT,
+                approval_backends_json TEXT,
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                 updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
             );",
@@ -109,12 +110,23 @@ impl Database {
                 mock_config_json TEXT,
                 rate_limit_json TEXT,
                 expression TEXT,
+                approval_backend_choice_ids_json TEXT,
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                 updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
             );",
         )
         .execute(&self.pool)
         .await?;
+        let _ = sqlx::query(
+            "ALTER TABLE proxy_model ADD COLUMN approval_backends_json TEXT DEFAULT ''",
+        )
+        .execute(&self.pool)
+        .await;
+        let _ = sqlx::query(
+            "ALTER TABLE rule_model ADD COLUMN approval_backend_choice_ids_json TEXT DEFAULT ''",
+        )
+        .execute(&self.pool)
+        .await;
 
         // Create index for rule_model.proxy_id if not exists
         sqlx::query("CREATE INDEX IF NOT EXISTS idx_rule_model_proxy_id ON rule_model (proxy_id)")
@@ -134,13 +146,15 @@ impl Database {
         } else {
             String::new()
         };
+        let approval_backends_json =
+            serde_json::to_string(&req.approval_backends).unwrap_or_default();
 
         sqlx::query(
             "INSERT OR REPLACE INTO proxy_model (
                 id, name, listen_addr, default_backend, default_action, default_mock, 
                 fallback_action, fallback_mock, enabled, cert_pem, key_pem, ca_pem, 
-                client_auth_type, health_check_json, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)",
+                client_auth_type, health_check_json, approval_backends_json, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)",
         )
         .bind(id)
         .bind(&req.name)
@@ -155,6 +169,7 @@ impl Database {
         .bind(&req.ca_pem)
         .bind(req.client_auth_type)
         .bind(hc_json)
+        .bind(approval_backends_json)
         .execute(&self.pool)
         .await?;
         Ok(())
@@ -212,6 +227,9 @@ impl Database {
             let ca_pem: String = row.get("ca_pem");
             let client_auth_type: i32 = row.get("client_auth_type");
             let hc_json: String = row.get("health_check_json");
+            let approval_backends_json: String = row
+                .try_get::<Option<String>, _>("approval_backends_json")?
+                .unwrap_or_default();
 
             // Deserialize HealthCheck
             let health_check: Option<HealthCheckConfig> = if !hc_json.is_empty() {
@@ -233,6 +251,8 @@ impl Database {
                 ca_pem,
                 client_auth_type,
                 health_check,
+                approval_backends: serde_json::from_str(&approval_backends_json)
+                    .unwrap_or_default(),
                 ..Default::default()
             };
             result.push((id, req));
@@ -252,12 +272,15 @@ impl Database {
         } else {
             String::new()
         };
+        let approval_backend_choice_ids_json =
+            serde_json::to_string(&rule.approval_backend_choice_ids).unwrap_or_default();
 
         sqlx::query(
             "INSERT OR REPLACE INTO rule_model (
                 id, proxy_id, name, priority, enabled, action, target_backend, 
-                conditions_json, mock_config_json, rate_limit_json, expression, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)",
+                conditions_json, mock_config_json, rate_limit_json, expression, 
+                approval_backend_choice_ids_json, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)",
         )
         .bind(&rule.id)
         .bind(proxy_id)
@@ -270,6 +293,7 @@ impl Database {
         .bind(mock_json)
         .bind(rate_limit_json)
         .bind(&rule.expression)
+        .bind(approval_backend_choice_ids_json)
         .execute(&self.pool)
         .await?;
         Ok(())
@@ -304,6 +328,9 @@ impl Database {
                 .try_get::<Option<String>, _>("rate_limit_json")?
                 .unwrap_or_default();
             let expression: String = row.get("expression");
+            let approval_backend_choice_ids_json: String = row
+                .try_get::<Option<String>, _>("approval_backend_choice_ids_json")?
+                .unwrap_or_default();
 
             let conditions: Vec<Condition> = if !conds_json.is_empty() {
                 serde_json::from_str(&conds_json).unwrap_or_default()
@@ -333,6 +360,10 @@ impl Database {
                 mock_response,
                 rate_limit,
                 expression,
+                approval_backend_choice_ids: serde_json::from_str(
+                    &approval_backend_choice_ids_json,
+                )
+                .unwrap_or_default(),
                 ..Default::default()
             };
             result.push(rule);

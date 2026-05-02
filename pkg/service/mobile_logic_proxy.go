@@ -191,11 +191,12 @@ func (s *MobileLogicService) AddProxy(ctx context.Context, req *pb.AddProxyReque
 	}
 
 	addReq := &pbProxy.CreateProxyRequest{
-		Name:           req.Name,
-		ListenAddr:     req.ListenAddr,
-		DefaultBackend: req.DefaultBackend,
-		DefaultAction:  req.DefaultAction,
-		FallbackAction: req.FallbackAction,
+		Name:             req.Name,
+		ListenAddr:       req.ListenAddr,
+		DefaultBackend:   req.DefaultBackend,
+		DefaultAction:    req.DefaultAction,
+		FallbackAction:   req.FallbackAction,
+		ApprovalBackends: req.ApprovalBackends,
 	}
 
 	cmdType := pbHub.CommandType_COMMAND_TYPE_APPLY_PROXY

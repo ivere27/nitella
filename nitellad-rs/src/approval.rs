@@ -35,6 +35,7 @@ pub struct ApprovalResult {
     pub retention_mode: i32,
     pub duration_seconds: i64,
     pub reason: String,
+    pub target_backend_override: String,
 }
 
 struct PendingEntry {
@@ -64,6 +65,7 @@ pub struct ApprovalCacheEntry {
     pub geo_country: String,
     pub geo_city: String,
     pub geo_isp: String,
+    pub target_backend: String,
 
     // Accumulated bytes from closed connections
     pub bytes_in: i64,
@@ -144,6 +146,7 @@ impl ApprovalManager {
                     retention_mode: ApprovalRetentionMode::Cache as i32,
                     duration_seconds: entry.data.expires_at - now,
                     reason: String::new(),
+                    target_backend_override: entry.data.target_backend.clone(),
                 });
             }
         }
@@ -203,6 +206,7 @@ impl ApprovalManager {
                 retention_mode: ApprovalRetentionMode::Unspecified as i32,
                 duration_seconds: 0,
                 reason: String::new(),
+                target_backend_override: String::new(),
             }),
             _ = timeout => {
                 ApprovalResult {
@@ -210,6 +214,7 @@ impl ApprovalManager {
                     retention_mode: ApprovalRetentionMode::Unspecified as i32,
                     duration_seconds: 0,
                     reason: String::new(),
+                    target_backend_override: String::new(),
                 }
             }
         };
@@ -250,6 +255,7 @@ impl ApprovalManager {
             duration_seconds,
             "",
             ApprovalRetentionMode::Cache as i32,
+            "",
         )
         .await
     }
@@ -261,6 +267,7 @@ impl ApprovalManager {
         duration_seconds: i64,
         reason: &str,
         retention_mode: i32,
+        target_backend_override: &str,
     ) -> bool {
         // Resolve pending
         let mut state = self.pending.lock().await;
@@ -295,46 +302,24 @@ impl ApprovalManager {
                 retention_mode: mode as i32,
                 duration_seconds,
                 reason: reason.to_string(),
+                target_backend_override: target_backend_override.to_string(),
             });
 
             // CACHE mode stores follow-up decisions in cache.
             if mode == ApprovalRetentionMode::Cache {
-                let key = Self::build_key(
+                self.add_to_cache_with_geo_and_backend(
                     &entry.data.source_ip,
                     &entry.data.rule_id,
+                    &entry.data.proxy_id,
                     &entry.data.tls_session_id,
-                );
-                let duration = if duration_seconds > 0 {
-                    duration_seconds
-                } else {
-                    300
-                }; // Default 5m
-
-                let cache_entry = ApprovalCacheEntry {
-                    key: key.clone(),
-                    source_ip: entry.data.source_ip,
-                    rule_id: entry.data.rule_id,
-                    proxy_id: entry.data.proxy_id,
-                    tls_session_id: entry.data.tls_session_id,
                     allowed,
-                    created_at: Utc::now().timestamp(),
-                    expires_at: Utc::now().timestamp() + duration,
-                    geo_country: entry.data.geo_country,
-                    geo_city: entry.data.geo_city,
-                    geo_isp: entry.data.geo_isp,
-                    bytes_in: 0,
-                    bytes_out: 0,
-                    blocked_count: 0,
-                    conn_ids: vec![],
-                };
-                let mut cache_lock = self.cache.write().await;
-                cache_lock.insert(
-                    key,
-                    CacheEntryInternal {
-                        data: cache_entry,
-                        live_conns: HashMap::new(),
-                    },
-                );
+                    duration_seconds,
+                    &entry.data.geo_country,
+                    &entry.data.geo_city,
+                    &entry.data.geo_isp,
+                    target_backend_override,
+                )
+                .await;
             }
 
             true
@@ -356,6 +341,35 @@ impl ApprovalManager {
         geo_city: &str,
         geo_isp: &str,
     ) {
+        self.add_to_cache_with_geo_and_backend(
+            source_ip,
+            rule_id,
+            proxy_id,
+            tls_session_id,
+            allowed,
+            duration_seconds,
+            geo_country,
+            geo_city,
+            geo_isp,
+            "",
+        )
+        .await;
+    }
+
+    /// Add a decision to the cache with GeoIP info and a resolved target backend.
+    pub async fn add_to_cache_with_geo_and_backend(
+        &self,
+        source_ip: &str,
+        rule_id: &str,
+        proxy_id: &str,
+        tls_session_id: &str,
+        allowed: bool,
+        duration_seconds: i64,
+        geo_country: &str,
+        geo_city: &str,
+        geo_isp: &str,
+        target_backend: &str,
+    ) {
         let key = Self::build_key(source_ip, rule_id, tls_session_id);
         let duration = if duration_seconds > 0 {
             duration_seconds
@@ -374,6 +388,7 @@ impl ApprovalManager {
             geo_country: geo_country.to_string(),
             geo_city: geo_city.to_string(),
             geo_isp: geo_isp.to_string(),
+            target_backend: target_backend.to_string(),
             bytes_in: 0,
             bytes_out: 0,
             blocked_count: 0,
@@ -488,6 +503,11 @@ impl ApprovalManager {
                 entry.live_conns.keys().cloned().collect::<Vec<_>>(),
             )
         })
+    }
+
+    pub async fn pending_request(&self, id: &str) -> Option<ApprovalReqData> {
+        let state = self.pending.lock().await;
+        state.requests.get(id).map(|entry| entry.data.clone())
     }
 }
 

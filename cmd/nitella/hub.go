@@ -393,7 +393,7 @@ Hub Mode Commands:
   Alerts & Approvals:
   alerts                         - Stream real-time alerts (approval requests)
   pending                        - List pending approval requests
-  approve [once|cache] <id> [duration] - Approve a connection (cache default: 300s)
+  approve [once|cache] <id> [duration] [--backend choice_id] - Approve a connection
   deny [once|cache] <id> [duration] [reason] - Deny a connection (default: once)
 
   Proxy Management (E2E encrypted):

@@ -662,6 +662,33 @@ func (s *ProxyAdminServer) cmdListActiveApprovals(payload []byte) ([]byte, error
 	}
 	entries := s.pm.Approval.GetActiveApprovals()
 	approvals := make([]*pb.ActiveApproval, 0, len(entries))
+	for reqID, pending := range s.pm.Approval.GetPendingApprovals() {
+		var details common.AlertDetails
+		if pending.Info != "" {
+			if err := proto.Unmarshal([]byte(pending.Info), &details); err != nil {
+				log.Warnf("[Admin] Failed to parse pending approval details for %s: %v", reqID, err)
+			}
+		}
+		if req.ProxyId != "" && pending.Meta.ProxyID != req.ProxyId {
+			continue
+		}
+		if req.SourceIp != "" && pending.Meta.SourceIP != req.SourceIp {
+			continue
+		}
+		approvals = append(approvals, &pb.ActiveApproval{
+			Key:                   reqID,
+			SourceIp:              pending.Meta.SourceIP,
+			RuleId:                pending.Meta.RuleID,
+			ProxyId:               pending.Meta.ProxyID,
+			Allowed:               false,
+			CreatedAt:             timestamppb.New(pending.CreatedAt),
+			GeoCountry:            pending.Meta.GeoCountry,
+			GeoCity:               pending.Meta.GeoCity,
+			GeoIsp:                pending.Meta.GeoISP,
+			BackendChoices:        details.GetBackendChoices(),
+			SelectedTargetBackend: details.GetSelectedTargetBackend(),
+		})
+	}
 	for _, e := range entries {
 		if req.ProxyId != "" && e.ProxyID != req.ProxyId {
 			continue
@@ -679,6 +706,7 @@ func (s *ProxyAdminServer) cmdListActiveApprovals(payload []byte) ([]byte, error
 			CreatedAt: timestamppb.New(e.CreatedAt), ExpiresAt: timestamppb.New(e.ExpiresAt),
 			BytesIn: e.BytesIn, BytesOut: e.BytesOut, BlockedCount: int64(e.BlockedCount),
 			ConnIds: connIDs, GeoCountry: e.GeoCountry, GeoCity: e.GeoCity, GeoIsp: e.GeoISP,
+			SelectedTargetBackend: e.TargetBackend,
 		})
 	}
 	return proto.Marshal(&pb.ListActiveApprovalsResponse{Approvals: approvals})
@@ -738,12 +766,23 @@ func (s *ProxyAdminServer) cmdResolveApproval(payload []byte) ([]byte, error) {
 		durationSeconds = 0
 	}
 	allowed := req.Action == common.ApprovalActionType_APPROVAL_ACTION_TYPE_ALLOW
-	meta := s.pm.Approval.ResolveWithRetention(req.ReqId, allowed, durationSeconds, req.Reason, retentionMode)
+	targetBackendOverride := ""
+	if allowed && req.GetTargetBackendOverride() != "" {
+		address, ok, found := s.pm.ResolveApprovalBackendOverride(req.ReqId, req.GetTargetBackendOverride())
+		if !found {
+			return proto.Marshal(&pb.ResolveApprovalResponse{Success: false, ErrorMessage: "Approval request not found or already resolved"})
+		}
+		if !ok {
+			return proto.Marshal(&pb.ResolveApprovalResponse{Success: false, ErrorMessage: "invalid target_backend_override"})
+		}
+		targetBackendOverride = address
+	}
+	meta := s.pm.Approval.ResolveWithRetention(req.ReqId, allowed, durationSeconds, req.Reason, retentionMode, targetBackendOverride)
 	if meta == nil {
 		return proto.Marshal(&pb.ResolveApprovalResponse{Success: false, ErrorMessage: "Approval request not found or already resolved"})
 	}
 	log.Printf("[Admin] Approval resolved: %s -> %v (mode=%v, duration: %ds)", req.ReqId, allowed, retentionMode, durationSeconds)
-	return proto.Marshal(&pb.ResolveApprovalResponse{Success: true})
+	return proto.Marshal(&pb.ResolveApprovalResponse{Success: true, ResolvedTargetBackend: targetBackendOverride})
 }
 
 // ============================================================================

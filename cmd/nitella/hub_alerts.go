@@ -78,6 +78,8 @@ func (h *HubCLI) handleApprovalCallback(req *pb.ApprovalRequest) {
 		info.GeoCity = req.Geo.City
 		info.GeoISP = req.Geo.Isp
 	}
+	info.Backends = req.GetBackendChoices()
+	info.Default = req.GetSelectedTargetBackend()
 
 	displayAlert(info)
 }
@@ -102,6 +104,8 @@ type AlertInfo struct {
 	GeoCountry string
 	GeoCity    string
 	GeoISP     string
+	Backends   []*commonpb.BackendChoice
+	Default    string
 }
 
 // displayAlert shows an alert notification with unified formatting.
@@ -138,8 +142,24 @@ func displayAlert(info AlertInfo) {
 	if info.GeoISP != "" {
 		sb.WriteString(fmt.Sprintf("  ISP:    %s\n", sanitizeForTerminal(info.GeoISP)))
 	}
+	if len(info.Backends) > 0 {
+		if info.Default != "" {
+			sb.WriteString(fmt.Sprintf("  Default backend: %s\n", sanitizeForTerminal(info.Default)))
+		}
+		sb.WriteString("  Backend choices:\n")
+		for _, backend := range info.Backends {
+			if backend == nil {
+				continue
+			}
+			label := backend.GetLabel()
+			if label == "" {
+				label = backend.GetId()
+			}
+			sb.WriteString(fmt.Sprintf("    %s: %s (%s)\n", sanitizeForTerminal(backend.GetId()), sanitizeForTerminal(backend.GetAddress()), sanitizeForTerminal(label)))
+		}
+	}
 
-	sb.WriteString(fmt.Sprintf("  \033[1;32m→ approve [once|cache] %s [duration]\033[0m  or  \033[1;31m→ deny [once|cache] %s [duration]\033[0m", shortID, shortID))
+	sb.WriteString(fmt.Sprintf("  \033[1;32m→ approve [once|cache] %s [duration] [--backend id]\033[0m  or  \033[1;31m→ deny [once|cache] %s [duration]\033[0m", shortID, shortID))
 
 	shell.NotifyActive(sb.String())
 }
@@ -184,9 +204,25 @@ func (h *HubCLI) cmdHubPending(args []string) {
 		if req.Geo != nil && req.Geo.Country != "" {
 			fmt.Printf("  Geo:    %s\n", req.Geo.Country)
 		}
+		if len(req.BackendChoices) > 0 {
+			if req.SelectedTargetBackend != "" {
+				fmt.Printf("  Default backend: %s\n", req.SelectedTargetBackend)
+			}
+			fmt.Println("  Backend choices:")
+			for _, backend := range req.BackendChoices {
+				if backend == nil {
+					continue
+				}
+				label := backend.GetLabel()
+				if label == "" {
+					label = backend.GetId()
+				}
+				fmt.Printf("    %s: %s (%s)\n", backend.GetId(), backend.GetAddress(), label)
+			}
+		}
 		fmt.Println()
 	}
-	fmt.Println("Use 'approve [once|cache] <id> [duration]' or 'deny [once|cache] <id> [duration]' to respond.")
+	fmt.Println("Use 'approve [once|cache] <id> [duration] [--backend choice_id]' or 'deny [once|cache] <id> [duration]' to respond.")
 }
 
 func (h *HubCLI) cmdHubAlerts(args []string) {
@@ -195,7 +231,7 @@ func (h *HubCLI) cmdHubAlerts(args []string) {
 	}
 
 	fmt.Println("Streaming alerts from Hub (Ctrl+C to stop)...")
-	fmt.Println("When an approval request appears, use 'approve [once|cache] <id> [duration]' or 'deny [once|cache] <id> [duration]'.")
+	fmt.Println("When an approval request appears, use 'approve [once|cache] <id> [duration] [--backend choice_id]' or 'deny [once|cache] <id> [duration]'.")
 	fmt.Println()
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -256,7 +292,7 @@ func parseRetentionKeyword(arg string) (commonpb.ApprovalRetentionMode, bool) {
 }
 
 // executeApprovalDecision handles both approve and deny actions via the backend.
-func (h *HubCLI) executeApprovalDecision(requestID string, decision pb.ApprovalDecision, retentionMode commonpb.ApprovalRetentionMode, duration int64, reason string) {
+func (h *HubCLI) executeApprovalDecision(requestID string, decision pb.ApprovalDecision, retentionMode commonpb.ApprovalRetentionMode, duration int64, reason, targetBackendOverride string) {
 	if h.ensureHubConnected() == nil {
 		return
 	}
@@ -272,10 +308,11 @@ func (h *HubCLI) executeApprovalDecision(requestID string, decision pb.ApprovalD
 
 	if decision == pb.ApprovalDecision_APPROVAL_DECISION_APPROVE {
 		resp, err := client.ResolveApprovalDecision(ctx, &pb.ResolveApprovalDecisionRequest{
-			RequestId:       resolvedID,
-			Decision:        pb.ApprovalDecision_APPROVAL_DECISION_APPROVE,
-			RetentionMode:   retentionMode,
-			DurationSeconds: duration,
+			RequestId:             resolvedID,
+			Decision:              pb.ApprovalDecision_APPROVAL_DECISION_APPROVE,
+			RetentionMode:         retentionMode,
+			DurationSeconds:       duration,
+			TargetBackendOverride: targetBackendOverride,
 		})
 		if err != nil {
 			fmt.Printf("Error: %v\n", err)
@@ -285,7 +322,11 @@ func (h *HubCLI) executeApprovalDecision(requestID string, decision pb.ApprovalD
 			fmt.Printf("Error: %s\n", resp.Error)
 			return
 		}
-		fmt.Printf("Approved request: %s (%s) [E2E encrypted]\n", shortApprovalRequestID(resolvedID), formatRetentionChoice(retentionMode, duration))
+		if targetBackendOverride != "" {
+			fmt.Printf("Approved request: %s (%s, backend: %s) [E2E encrypted]\n", shortApprovalRequestID(resolvedID), formatRetentionChoice(retentionMode, duration), targetBackendOverride)
+		} else {
+			fmt.Printf("Approved request: %s (%s) [E2E encrypted]\n", shortApprovalRequestID(resolvedID), formatRetentionChoice(retentionMode, duration))
+		}
 	} else {
 		resp, err := client.ResolveApprovalDecision(ctx, &pb.ResolveApprovalDecisionRequest{
 			RequestId:       resolvedID,
@@ -359,7 +400,7 @@ func (h *HubCLI) resolveApprovalRequestID(input string) (string, error) {
 }
 
 func (h *HubCLI) cmdHubApprove(args []string) {
-	if !cli.RequireArgs(args, 1, "Usage: approve [once|cache] <request_id|id> [duration]  (e.g. 10s, 1m, 10m, 1h, 1d, 1w, 1y)") {
+	if !cli.RequireArgs(args, 1, "Usage: approve [once|cache] <request_id|id> [duration] [--backend choice_id]  (e.g. 10s, 1m, 10m, 1h, 1d, 1w, 1y)") {
 		return
 	}
 
@@ -370,7 +411,7 @@ func (h *HubCLI) cmdHubApprove(args []string) {
 		requestArgIdx = 1
 	}
 	if len(args) <= requestArgIdx {
-		fmt.Println("Usage: approve [once|cache] <request_id|id> [duration]")
+		fmt.Println("Usage: approve [once|cache] <request_id|id> [duration] [--backend choice_id]")
 		return
 	}
 
@@ -379,15 +420,26 @@ func (h *HubCLI) cmdHubApprove(args []string) {
 		duration = h.defaultApproveDurationSeconds()
 	}
 
-	if len(args) > requestArgIdx+1 {
-		d, err := cli.ParseDuration(args[requestArgIdx+1], duration)
-		if err != nil {
-			fmt.Printf("Error: %v\n", err)
-			return
+	targetBackendOverride := ""
+	for i := requestArgIdx + 1; i < len(args); i++ {
+		switch args[i] {
+		case "--backend":
+			if i+1 >= len(args) {
+				fmt.Println("Error: --backend requires a choice id")
+				return
+			}
+			targetBackendOverride = args[i+1]
+			i++
+		default:
+			d, err := cli.ParseDuration(args[i], duration)
+			if err != nil {
+				fmt.Printf("Error: %v\n", err)
+				return
+			}
+			duration = d
 		}
-		duration = d
 	}
-	h.executeApprovalDecision(args[requestArgIdx], pb.ApprovalDecision_APPROVAL_DECISION_APPROVE, mode, duration, "")
+	h.executeApprovalDecision(args[requestArgIdx], pb.ApprovalDecision_APPROVAL_DECISION_APPROVE, mode, duration, "", targetBackendOverride)
 }
 
 func (h *HubCLI) defaultApproveDurationSeconds() int64 {
@@ -440,5 +492,5 @@ func (h *HubCLI) cmdHubDeny(args []string) {
 	if len(args) > reasonStartIdx {
 		reason = strings.Join(args[reasonStartIdx:], " ")
 	}
-	h.executeApprovalDecision(args[requestArgIdx], pb.ApprovalDecision_APPROVAL_DECISION_DENY, mode, duration, reason)
+	h.executeApprovalDecision(args[requestArgIdx], pb.ApprovalDecision_APPROVAL_DECISION_DENY, mode, duration, reason, "")
 }

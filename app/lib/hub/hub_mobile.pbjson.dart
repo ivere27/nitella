@@ -51,6 +51,7 @@ const RegisterNodeWithCertRequest$json = {
       '5': 12,
       '10': 'encryptedMetadata'
     },
+    {'1': 'ca_pem', '3': 5, '4': 1, '5': 9, '10': 'caPem'},
   ],
 };
 
@@ -58,7 +59,8 @@ const RegisterNodeWithCertRequest$json = {
 final $typed_data.Uint8List registerNodeWithCertRequestDescriptor = $convert.base64Decode(
     'ChtSZWdpc3Rlck5vZGVXaXRoQ2VydFJlcXVlc3QSFwoHbm9kZV9pZBgBIAEoCVIGbm9kZUlkEh'
     'kKCGNlcnRfcGVtGAIgASgJUgdjZXJ0UGVtEiMKDXJvdXRpbmdfdG9rZW4YAyABKAlSDHJvdXRp'
-    'bmdUb2tlbhItChJlbmNyeXB0ZWRfbWV0YWRhdGEYBCABKAxSEWVuY3J5cHRlZE1ldGFkYXRh');
+    'bmdUb2tlbhItChJlbmNyeXB0ZWRfbWV0YWRhdGEYBCABKAxSEWVuY3J5cHRlZE1ldGFkYXRhEh'
+    'UKBmNhX3BlbRgFIAEoCVIFY2FQZW0=');
 
 @$core.Deprecated('Use listNodesRequestDescriptor instead')
 const ListNodesRequest$json = {

@@ -11,16 +11,22 @@ import (
 
 // ResolveApproval sends an approval decision to a node.
 func (c *Controller) ResolveApproval(ctx context.Context, nodeID, reqID string, allow bool, durationSeconds int64, reason string) error {
+	return c.ResolveApprovalWithBackendOverride(ctx, nodeID, reqID, allow, durationSeconds, reason, "")
+}
+
+// ResolveApprovalWithBackendOverride sends an approval decision with an optional backend choice id.
+func (c *Controller) ResolveApprovalWithBackendOverride(ctx context.Context, nodeID, reqID string, allow bool, durationSeconds int64, reason, targetBackendOverride string) error {
 	action := common.ApprovalActionType_APPROVAL_ACTION_TYPE_BLOCK
 	if allow {
 		action = common.ApprovalActionType_APPROVAL_ACTION_TYPE_ALLOW
 	}
 
 	req := &pbProxy.ResolveApprovalRequest{
-		ReqId:           reqID,
-		Action:          action,
-		DurationSeconds: durationSeconds,
-		Reason:          reason,
+		ReqId:                 reqID,
+		Action:                action,
+		DurationSeconds:       durationSeconds,
+		Reason:                reason,
+		TargetBackendOverride: targetBackendOverride,
 	}
 	payload, err := proto.Marshal(req)
 	if err != nil {

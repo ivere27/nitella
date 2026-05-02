@@ -303,16 +303,18 @@ func (c *Client) trySendAlertViaP2P(alert *common.Alert, infoBytes string) bool 
 
 	// Build P2P ApprovalRequest
 	req := &p2p.ApprovalRequest{
-		RequestID:  alert.Id,
-		NodeID:     alert.NodeId,
-		Severity:   alert.Severity,
-		SourceIP:   details.SourceIp,
-		DestAddr:   details.Destination,
-		ProxyID:    details.ProxyId,
-		RuleID:     details.RuleId,
-		GeoCountry: details.GeoCountry,
-		GeoCity:    details.GeoCity,
-		GeoISP:     details.GeoIsp,
+		RequestID:             alert.Id,
+		NodeID:                alert.NodeId,
+		Severity:              alert.Severity,
+		SourceIP:              details.SourceIp,
+		DestAddr:              details.Destination,
+		ProxyID:               details.ProxyId,
+		RuleID:                details.RuleId,
+		GeoCountry:            details.GeoCountry,
+		GeoCity:               details.GeoCity,
+		GeoISP:                details.GeoIsp,
+		BackendChoices:        details.BackendChoices,
+		SelectedTargetBackend: details.SelectedTargetBackend,
 	}
 
 	// Send to all connected P2P sessions

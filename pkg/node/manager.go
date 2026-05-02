@@ -306,6 +306,64 @@ func sanitizeAddress(addr string) string {
 	return strings.TrimSpace(addr)
 }
 
+type approvalBackendSetter interface {
+	SetApprovalBackends([]*common.BackendChoice)
+}
+
+func setListenerApprovalBackends(listener Listener, backends []*common.BackendChoice) {
+	if setter, ok := listener.(approvalBackendSetter); ok {
+		setter.SetApprovalBackends(backends)
+	}
+}
+
+func marshalApprovalBackendsJSON(backends []*common.BackendChoice) string {
+	if len(backends) == 0 {
+		return ""
+	}
+	b, err := json.Marshal(backends)
+	if err != nil {
+		log.Printf("Failed to marshal approval backends: %v", err)
+		return ""
+	}
+	return string(b)
+}
+
+func unmarshalApprovalBackendsJSON(raw string) []*common.BackendChoice {
+	if strings.TrimSpace(raw) == "" {
+		return nil
+	}
+	var backends []*common.BackendChoice
+	if err := json.Unmarshal([]byte(raw), &backends); err != nil {
+		log.Printf("Failed to parse approval backends: %v", err)
+		return nil
+	}
+	return backends
+}
+
+func marshalStringSliceJSON(values []string) string {
+	if len(values) == 0 {
+		return ""
+	}
+	b, err := json.Marshal(values)
+	if err != nil {
+		log.Printf("Failed to marshal string slice: %v", err)
+		return ""
+	}
+	return string(b)
+}
+
+func unmarshalStringSliceJSON(raw string) []string {
+	if strings.TrimSpace(raw) == "" {
+		return nil
+	}
+	var values []string
+	if err := json.Unmarshal([]byte(raw), &values); err != nil {
+		log.Printf("Failed to parse string slice: %v", err)
+		return nil
+	}
+	return values
+}
+
 func (m *ProxyManager) CreateProxyWithID(id string, req *pb.CreateProxyRequest) (*pb.CreateProxyResponse, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -368,6 +426,7 @@ func (m *ProxyManager) CreateProxyWithID(id string, req *pb.CreateProxyRequest) 
 		pl.SetFallback(req.FallbackAction, req.FallbackMock)
 		proxy = pl
 	}
+	setListenerApprovalBackends(proxy, req.ApprovalBackends)
 
 	if err := proxy.Start(); err != nil {
 		return &pb.CreateProxyResponse{
@@ -383,22 +442,23 @@ func (m *ProxyManager) CreateProxyWithID(id string, req *pb.CreateProxyRequest) 
 	}
 
 	proxyModel := &ProxyModel{
-		ID:              id,
-		Name:            req.Name,
-		ListenAddr:      req.ListenAddr,
-		DefaultBackend:  req.DefaultBackend,
-		DefaultAction:   int(action),
-		DefaultMock:     MockPresetToString(req.DefaultMock),
-		FallbackAction:  int(req.FallbackAction),
-		FallbackMock:    MockPresetToString(req.FallbackMock),
-		ClientAuthType:  int(req.ClientAuthType),
-		Enabled:         true,
-		CertPEM:         req.CertPem,
-		KeyPEM:          req.KeyPem,
-		CaPEM:           req.CaPem,
-		HealthCheckJSON: hcJSON,
-		CreatedAt:       time.Now(),
-		UpdatedAt:       time.Now(),
+		ID:                   id,
+		Name:                 req.Name,
+		ListenAddr:           req.ListenAddr,
+		DefaultBackend:       req.DefaultBackend,
+		DefaultAction:        int(action),
+		DefaultMock:          MockPresetToString(req.DefaultMock),
+		FallbackAction:       int(req.FallbackAction),
+		FallbackMock:         MockPresetToString(req.FallbackMock),
+		ClientAuthType:       int(req.ClientAuthType),
+		Enabled:              true,
+		CertPEM:              req.CertPem,
+		KeyPEM:               req.KeyPem,
+		CaPEM:                req.CaPem,
+		HealthCheckJSON:      hcJSON,
+		ApprovalBackendsJSON: marshalApprovalBackendsJSON(req.ApprovalBackends),
+		CreatedAt:            time.Now(),
+		UpdatedAt:            time.Now(),
 	}
 
 	// Store in map
@@ -573,6 +633,7 @@ func (m *ProxyManager) EnableProxy(id string) (*pb.EnableProxyResponse, error) {
 	model := mp.Model
 	action := common.ActionType(model.DefaultAction)
 	mockPreset := StringToMockPreset(model.DefaultMock)
+	approvalBackends := unmarshalApprovalBackendsJSON(model.ApprovalBackendsJSON)
 
 	var proxy Listener
 	switch m.mode {
@@ -598,6 +659,7 @@ func (m *ProxyManager) EnableProxy(id string) (*pb.EnableProxyResponse, error) {
 		pl.SetFallback(common.FallbackAction(model.FallbackAction), StringToMockPreset(model.FallbackMock))
 		proxy = pl
 	}
+	setListenerApprovalBackends(proxy, approvalBackends)
 
 	if err := proxy.Start(); err != nil {
 		return &pb.EnableProxyResponse{
@@ -648,6 +710,12 @@ func (m *ProxyManager) UpdateProxy(req *pb.UpdateProxyRequest) (*pb.UpdateProxyR
 	if req.DefaultMock != common.MockPreset_MOCK_PRESET_UNSPECIFIED {
 		mp.Model.DefaultMock = MockPresetToString(req.DefaultMock)
 	}
+	if len(req.ApprovalBackends) > 0 {
+		mp.Model.ApprovalBackendsJSON = marshalApprovalBackendsJSON(req.ApprovalBackends)
+		if mp.Listener != nil {
+			setListenerApprovalBackends(mp.Listener, req.ApprovalBackends)
+		}
+	}
 
 	// Note: To apply listen address change, proxy needs to be restarted
 	needsRestart := req.ListenAddr != "" && mp.Listener != nil
@@ -693,6 +761,7 @@ func (m *ProxyManager) RestartListeners() (*pb.RestartListenersResponse, error) 
 		model := mp.Model
 		action := common.ActionType(model.DefaultAction)
 		mockPreset := StringToMockPreset(model.DefaultMock)
+		approvalBackends := unmarshalApprovalBackendsJSON(model.ApprovalBackendsJSON)
 
 		var proxy Listener
 		switch m.mode {
@@ -718,6 +787,7 @@ func (m *ProxyManager) RestartListeners() (*pb.RestartListenersResponse, error) 
 			pl.SetFallback(common.FallbackAction(model.FallbackAction), StringToMockPreset(model.FallbackMock))
 			proxy = pl
 		}
+		setListenerApprovalBackends(proxy, approvalBackends)
 
 		if err := proxy.Start(); err != nil {
 			log.Printf("Failed to restart listener %s: %v", pid, err)
@@ -783,17 +853,18 @@ func (m *ProxyManager) ReloadRules(proxyID string, rules []*pb.Rule) (*pb.Reload
 			rateLimitJSON := marshalRateLimitJSON(rule.RateLimit)
 
 			ruleModel := &RuleModel{
-				ID:             rule.Id,
-				ProxyID:        proxyID,
-				Name:           rule.Name,
-				Priority:       int(rule.Priority),
-				Enabled:        rule.Enabled,
-				Action:         int(rule.Action),
-				TargetBackend:  rule.TargetBackend,
-				ConditionsJSON: string(condBytes),
-				MockConfigJSON: string(mockBytes),
-				RateLimitJSON:  rateLimitJSON,
-				Expression:     rule.Expression,
+				ID:                           rule.Id,
+				ProxyID:                      proxyID,
+				Name:                         rule.Name,
+				Priority:                     int(rule.Priority),
+				Enabled:                      rule.Enabled,
+				Action:                       int(rule.Action),
+				TargetBackend:                rule.TargetBackend,
+				ConditionsJSON:               string(condBytes),
+				MockConfigJSON:               string(mockBytes),
+				RateLimitJSON:                rateLimitJSON,
+				Expression:                   rule.Expression,
+				ApprovalBackendChoiceIDsJSON: marshalStringSliceJSON(rule.ApprovalBackendChoiceIds),
 			}
 			if _, err := m.db.Insert(ruleModel); err != nil {
 				log.Printf("Failed to save rule to DB: %v", err)
@@ -865,15 +936,19 @@ func (m *ProxyManager) GetStatus(id string) (*pb.ProxyStatus, error) {
 		status = mp.Listener.GetStatus()
 	} else {
 		status = &pb.ProxyStatus{
-			ProxyId:        mp.Model.ID,
-			Running:        false,
-			ListenAddr:     mp.Model.ListenAddr,
-			DefaultBackend: mp.Model.DefaultBackend,
-			DefaultAction:  common.ActionType(mp.Model.DefaultAction),
-			DefaultMock:    StringToMockPreset(mp.Model.DefaultMock),
-			FallbackAction: common.FallbackAction(mp.Model.FallbackAction),
-			FallbackMock:   StringToMockPreset(mp.Model.FallbackMock),
+			ProxyId:          mp.Model.ID,
+			Running:          false,
+			ListenAddr:       mp.Model.ListenAddr,
+			DefaultBackend:   mp.Model.DefaultBackend,
+			DefaultAction:    common.ActionType(mp.Model.DefaultAction),
+			DefaultMock:      StringToMockPreset(mp.Model.DefaultMock),
+			FallbackAction:   common.FallbackAction(mp.Model.FallbackAction),
+			FallbackMock:     StringToMockPreset(mp.Model.FallbackMock),
+			ApprovalBackends: unmarshalApprovalBackendsJSON(mp.Model.ApprovalBackendsJSON),
 		}
+	}
+	if len(status.ApprovalBackends) == 0 {
+		status.ApprovalBackends = unmarshalApprovalBackendsJSON(mp.Model.ApprovalBackendsJSON)
 	}
 
 	// Add HealthCheck info
@@ -913,15 +988,19 @@ func (m *ProxyManager) GetAllStatuses() []*pb.ProxyStatus {
 			st = mp.Listener.GetStatus()
 		} else {
 			st = &pb.ProxyStatus{
-				ProxyId:        mp.Model.ID,
-				Running:        false,
-				ListenAddr:     mp.Model.ListenAddr,
-				DefaultBackend: mp.Model.DefaultBackend,
-				DefaultAction:  common.ActionType(mp.Model.DefaultAction),
-				DefaultMock:    StringToMockPreset(mp.Model.DefaultMock),
-				FallbackAction: common.FallbackAction(mp.Model.FallbackAction),
-				FallbackMock:   StringToMockPreset(mp.Model.FallbackMock),
+				ProxyId:          mp.Model.ID,
+				Running:          false,
+				ListenAddr:       mp.Model.ListenAddr,
+				DefaultBackend:   mp.Model.DefaultBackend,
+				DefaultAction:    common.ActionType(mp.Model.DefaultAction),
+				DefaultMock:      StringToMockPreset(mp.Model.DefaultMock),
+				FallbackAction:   common.FallbackAction(mp.Model.FallbackAction),
+				FallbackMock:     StringToMockPreset(mp.Model.FallbackMock),
+				ApprovalBackends: unmarshalApprovalBackendsJSON(mp.Model.ApprovalBackendsJSON),
 			}
+		}
+		if len(st.ApprovalBackends) == 0 {
+			st.ApprovalBackends = unmarshalApprovalBackendsJSON(mp.Model.ApprovalBackendsJSON)
 		}
 
 		if mp.Model.HealthCheckJSON != "" {
@@ -973,19 +1052,20 @@ func (m *ProxyManager) AddRule(req *pb.AddRuleRequest) (*pb.Rule, error) {
 		rateLimitJSON := marshalRateLimitJSON(req.Rule.RateLimit)
 
 		ruleModel := &RuleModel{
-			ID:             req.Rule.Id,
-			ProxyID:        req.ProxyId,
-			Name:           req.Rule.Name,
-			Priority:       int(req.Rule.Priority),
-			Enabled:        req.Rule.Enabled,
-			Action:         int(req.Rule.Action),
-			TargetBackend:  req.Rule.TargetBackend,
-			ConditionsJSON: string(condBytes),
-			MockConfigJSON: string(mockBytes),
-			RateLimitJSON:  rateLimitJSON,
-			Expression:     req.Rule.Expression,
-			CreatedAt:      time.Now(),
-			UpdatedAt:      time.Now(),
+			ID:                           req.Rule.Id,
+			ProxyID:                      req.ProxyId,
+			Name:                         req.Rule.Name,
+			Priority:                     int(req.Rule.Priority),
+			Enabled:                      req.Rule.Enabled,
+			Action:                       int(req.Rule.Action),
+			TargetBackend:                req.Rule.TargetBackend,
+			ConditionsJSON:               string(condBytes),
+			MockConfigJSON:               string(mockBytes),
+			RateLimitJSON:                rateLimitJSON,
+			Expression:                   req.Rule.Expression,
+			ApprovalBackendChoiceIDsJSON: marshalStringSliceJSON(req.Rule.ApprovalBackendChoiceIds),
+			CreatedAt:                    time.Now(),
+			UpdatedAt:                    time.Now(),
 		}
 
 		if _, err := m.db.Insert(ruleModel); err != nil {
@@ -1042,18 +1122,112 @@ func (m *ProxyManager) GetRules(proxyID string) ([]*pb.Rule, error) {
 		var pbRules []*pb.Rule
 		for _, r := range rules {
 			pbRules = append(pbRules, &pb.Rule{
-				Id:            r.ID,
-				Name:          r.Name,
-				Priority:      int32(r.Priority),
-				Enabled:       r.Enabled,
-				Action:        common.ActionType(r.Action),
-				TargetBackend: r.TargetBackend,
-				Expression:    r.Expression,
+				Id:                       r.ID,
+				Name:                     r.Name,
+				Priority:                 int32(r.Priority),
+				Enabled:                  r.Enabled,
+				Action:                   common.ActionType(r.Action),
+				TargetBackend:            r.TargetBackend,
+				Expression:               r.Expression,
+				ApprovalBackendChoiceIds: unmarshalStringSliceJSON(r.ApprovalBackendChoiceIDsJSON),
 			})
 		}
 		return pbRules, nil
 	}
 	return nil, nil
+}
+
+// ResolveApprovalBackendOverride validates an approval backend choice id for a
+// pending request and returns the resolved backend address.
+func (m *ProxyManager) ResolveApprovalBackendOverride(reqID, choiceID string) (string, bool, bool) {
+	if choiceID == "" {
+		return "", true, true
+	}
+	if m.Approval == nil {
+		return "", false, false
+	}
+	meta, found := m.Approval.GetPendingApprovalMeta(reqID)
+	if !found {
+		return "", false, false
+	}
+	address, ok := m.ResolveBackendChoice(meta.ProxyID, meta.RuleID, choiceID)
+	return address, ok, true
+}
+
+// ResolveBackendChoice validates a backend choice against the rule allowlist
+// and proxy-level choice pool, returning the resolved backend address.
+func (m *ProxyManager) ResolveBackendChoice(proxyID, ruleID, choiceID string) (string, bool) {
+	if choiceID == "" {
+		return "", true
+	}
+
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	mp, ok := m.proxies[proxyID]
+	if !ok {
+		return "", false
+	}
+
+	var rules []*pb.Rule
+	var backends []*common.BackendChoice
+	if mp.Listener != nil {
+		rules = mp.Listener.GetRules()
+		if resolver, ok := mp.Listener.(interface {
+			ResolveBackendOverride(string, string) (string, bool)
+		}); ok {
+			if address, ok := resolver.ResolveBackendOverride(ruleID, choiceID); ok {
+				return address, true
+			}
+		}
+		status := mp.Listener.GetStatus()
+		if status != nil {
+			backends = status.ApprovalBackends
+		}
+	}
+	if len(backends) == 0 {
+		backends = unmarshalApprovalBackendsJSON(mp.Model.ApprovalBackendsJSON)
+	}
+	if len(rules) == 0 && m.db != nil {
+		var models []RuleModel
+		if err := m.db.Where("proxy_id = ?", proxyID).Find(&models); err == nil {
+			for _, r := range models {
+				rules = append(rules, &pb.Rule{
+					Id:                       r.ID,
+					ApprovalBackendChoiceIds: unmarshalStringSliceJSON(r.ApprovalBackendChoiceIDsJSON),
+				})
+			}
+		}
+	}
+
+	var rule *pb.Rule
+	for _, candidate := range rules {
+		if candidate != nil && candidate.Id == ruleID {
+			rule = candidate
+			break
+		}
+	}
+	if rule == nil || len(rule.ApprovalBackendChoiceIds) == 0 {
+		return "", false
+	}
+
+	allowed := false
+	for _, id := range rule.ApprovalBackendChoiceIds {
+		if id == choiceID {
+			allowed = true
+			break
+		}
+	}
+	if !allowed {
+		return "", false
+	}
+
+	for _, choice := range backends {
+		if choice != nil && choice.Id == choiceID && choice.Address != "" {
+			return choice.Address, true
+		}
+	}
+	return "", false
 }
 
 // Connection Management
@@ -1315,6 +1489,7 @@ func (m *ProxyManager) LoadState() error {
 
 		action := common.ActionType(p.DefaultAction)
 		mockPreset := StringToMockPreset(p.DefaultMock)
+		approvalBackends := unmarshalApprovalBackendsJSON(p.ApprovalBackendsJSON)
 
 		proxy := NewEmbeddedListener(p.ID, p.Name, p.ListenAddr, p.DefaultBackend, action, mockPreset, p.CertPEM, p.KeyPEM, p.CaPEM, pb.ClientAuthType(p.ClientAuthType), m.GeoIP)
 
@@ -1332,6 +1507,7 @@ func (m *ProxyManager) LoadState() error {
 		if m.NodeID != "" {
 			proxy.SetNodeID(m.NodeID)
 		}
+		proxy.SetApprovalBackends(approvalBackends)
 
 		if err := proxy.Start(); err != nil {
 			log.Printf("Failed to restore proxy %s: %v\n", p.Name, err)
@@ -1360,16 +1536,17 @@ func (m *ProxyManager) LoadState() error {
 				rateLimit := unmarshalRateLimitJSON(r.ID, r.RateLimitJSON)
 
 				rule := &pb.Rule{
-					Id:            r.ID,
-					Name:          r.Name,
-					Priority:      int32(r.Priority),
-					Enabled:       r.Enabled,
-					Action:        common.ActionType(r.Action),
-					TargetBackend: r.TargetBackend,
-					Conditions:    conds,
-					MockResponse:  &mockCfg,
-					RateLimit:     rateLimit,
-					Expression:    r.Expression,
+					Id:                       r.ID,
+					Name:                     r.Name,
+					Priority:                 int32(r.Priority),
+					Enabled:                  r.Enabled,
+					Action:                   common.ActionType(r.Action),
+					TargetBackend:            r.TargetBackend,
+					Conditions:               conds,
+					MockResponse:             &mockCfg,
+					RateLimit:                rateLimit,
+					Expression:               r.Expression,
+					ApprovalBackendChoiceIds: unmarshalStringSliceJSON(r.ApprovalBackendChoiceIDsJSON),
 				}
 				proxy.AddRule(rule)
 			}

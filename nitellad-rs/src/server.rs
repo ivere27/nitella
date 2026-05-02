@@ -79,6 +79,7 @@ impl ProcessControl for NitellaProcessServer {
             req.default_mock.map(|m| m.preset).unwrap_or(0),
             req.fallback_action,
             req.fallback_mock,
+            vec![],
         );
         if !req.cert_pem.is_empty() {
             let auth_type = ClientAuthType::try_from(req.client_auth_type)

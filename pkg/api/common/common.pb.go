@@ -903,17 +903,19 @@ func (x *Alert) GetMetadata() map[string]string {
 // AlertDetails contains encrypted alert information for approval requests.
 // This replaces JSON-encoded alert info for type safety.
 type AlertDetails struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	SourceIp      string                 `protobuf:"bytes,1,opt,name=source_ip,json=sourceIp,proto3" json:"source_ip,omitempty"`
-	Destination   string                 `protobuf:"bytes,2,opt,name=destination,proto3" json:"destination,omitempty"`
-	ProxyId       string                 `protobuf:"bytes,3,opt,name=proxy_id,json=proxyId,proto3" json:"proxy_id,omitempty"`
-	ProxyName     string                 `protobuf:"bytes,4,opt,name=proxy_name,json=proxyName,proto3" json:"proxy_name,omitempty"`
-	RuleId        string                 `protobuf:"bytes,5,opt,name=rule_id,json=ruleId,proto3" json:"rule_id,omitempty"`
-	GeoCountry    string                 `protobuf:"bytes,6,opt,name=geo_country,json=geoCountry,proto3" json:"geo_country,omitempty"`
-	GeoCity       string                 `protobuf:"bytes,7,opt,name=geo_city,json=geoCity,proto3" json:"geo_city,omitempty"`
-	GeoIsp        string                 `protobuf:"bytes,8,opt,name=geo_isp,json=geoIsp,proto3" json:"geo_isp,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state                 protoimpl.MessageState `protogen:"open.v1"`
+	SourceIp              string                 `protobuf:"bytes,1,opt,name=source_ip,json=sourceIp,proto3" json:"source_ip,omitempty"`
+	Destination           string                 `protobuf:"bytes,2,opt,name=destination,proto3" json:"destination,omitempty"`
+	ProxyId               string                 `protobuf:"bytes,3,opt,name=proxy_id,json=proxyId,proto3" json:"proxy_id,omitempty"`
+	ProxyName             string                 `protobuf:"bytes,4,opt,name=proxy_name,json=proxyName,proto3" json:"proxy_name,omitempty"`
+	RuleId                string                 `protobuf:"bytes,5,opt,name=rule_id,json=ruleId,proto3" json:"rule_id,omitempty"`
+	GeoCountry            string                 `protobuf:"bytes,6,opt,name=geo_country,json=geoCountry,proto3" json:"geo_country,omitempty"`
+	GeoCity               string                 `protobuf:"bytes,7,opt,name=geo_city,json=geoCity,proto3" json:"geo_city,omitempty"`
+	GeoIsp                string                 `protobuf:"bytes,8,opt,name=geo_isp,json=geoIsp,proto3" json:"geo_isp,omitempty"`
+	BackendChoices        []*BackendChoice       `protobuf:"bytes,9,rep,name=backend_choices,json=backendChoices,proto3" json:"backend_choices,omitempty"`
+	SelectedTargetBackend string                 `protobuf:"bytes,10,opt,name=selected_target_backend,json=selectedTargetBackend,proto3" json:"selected_target_backend,omitempty"`
+	unknownFields         protoimpl.UnknownFields
+	sizeCache             protoimpl.SizeCache
 }
 
 func (x *AlertDetails) Reset() {
@@ -1002,6 +1004,80 @@ func (x *AlertDetails) GetGeoIsp() string {
 	return ""
 }
 
+func (x *AlertDetails) GetBackendChoices() []*BackendChoice {
+	if x != nil {
+		return x.BackendChoices
+	}
+	return nil
+}
+
+func (x *AlertDetails) GetSelectedTargetBackend() string {
+	if x != nil {
+		return x.SelectedTargetBackend
+	}
+	return ""
+}
+
+type BackendChoice struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Id            string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`           // Stable selector exposed to mobile.
+	Address       string                 `protobuf:"bytes,2,opt,name=address,proto3" json:"address,omitempty"` // host:port.
+	Label         string                 `protobuf:"bytes,3,opt,name=label,proto3" json:"label,omitempty"`     // Optional human-readable name for UI.
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *BackendChoice) Reset() {
+	*x = BackendChoice{}
+	mi := &file_common_common_proto_msgTypes[4]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *BackendChoice) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*BackendChoice) ProtoMessage() {}
+
+func (x *BackendChoice) ProtoReflect() protoreflect.Message {
+	mi := &file_common_common_proto_msgTypes[4]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use BackendChoice.ProtoReflect.Descriptor instead.
+func (*BackendChoice) Descriptor() ([]byte, []int) {
+	return file_common_common_proto_rawDescGZIP(), []int{4}
+}
+
+func (x *BackendChoice) GetId() string {
+	if x != nil {
+		return x.Id
+	}
+	return ""
+}
+
+func (x *BackendChoice) GetAddress() string {
+	if x != nil {
+		return x.Address
+	}
+	return ""
+}
+
+func (x *BackendChoice) GetLabel() string {
+	if x != nil {
+		return x.Label
+	}
+	return ""
+}
+
 // GeoInfo contains geographical information for an IP address.
 type GeoInfo struct {
 	state   protoimpl.MessageState `protogen:"open.v1"`
@@ -1027,7 +1103,7 @@ type GeoInfo struct {
 
 func (x *GeoInfo) Reset() {
 	*x = GeoInfo{}
-	mi := &file_common_common_proto_msgTypes[4]
+	mi := &file_common_common_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1039,7 +1115,7 @@ func (x *GeoInfo) String() string {
 func (*GeoInfo) ProtoMessage() {}
 
 func (x *GeoInfo) ProtoReflect() protoreflect.Message {
-	mi := &file_common_common_proto_msgTypes[4]
+	mi := &file_common_common_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1052,7 +1128,7 @@ func (x *GeoInfo) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GeoInfo.ProtoReflect.Descriptor instead.
 func (*GeoInfo) Descriptor() ([]byte, []int) {
-	return file_common_common_proto_rawDescGZIP(), []int{4}
+	return file_common_common_proto_rawDescGZIP(), []int{5}
 }
 
 func (x *GeoInfo) GetCountry() string {
@@ -1182,7 +1258,7 @@ const file_common_common_proto_rawDesc = "" +
 	"\bmetadata\x18\a \x03(\v2\x1c.nitella.Alert.MetadataEntryR\bmetadata\x1a;\n" +
 	"\rMetadataEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\xf5\x01\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\xee\x02\n" +
 	"\fAlertDetails\x12\x1b\n" +
 	"\tsource_ip\x18\x01 \x01(\tR\bsourceIp\x12 \n" +
 	"\vdestination\x18\x02 \x01(\tR\vdestination\x12\x19\n" +
@@ -1193,7 +1269,14 @@ const file_common_common_proto_rawDesc = "" +
 	"\vgeo_country\x18\x06 \x01(\tR\n" +
 	"geoCountry\x12\x19\n" +
 	"\bgeo_city\x18\a \x01(\tR\ageoCity\x12\x17\n" +
-	"\ageo_isp\x18\b \x01(\tR\x06geoIsp\"\xe6\x02\n" +
+	"\ageo_isp\x18\b \x01(\tR\x06geoIsp\x12?\n" +
+	"\x0fbackend_choices\x18\t \x03(\v2\x16.nitella.BackendChoiceR\x0ebackendChoices\x126\n" +
+	"\x17selected_target_backend\x18\n" +
+	" \x01(\tR\x15selectedTargetBackend\"O\n" +
+	"\rBackendChoice\x12\x0e\n" +
+	"\x02id\x18\x01 \x01(\tR\x02id\x12\x18\n" +
+	"\aaddress\x18\x02 \x01(\tR\aaddress\x12\x14\n" +
+	"\x05label\x18\x03 \x01(\tR\x05label\"\xe6\x02\n" +
 	"\aGeoInfo\x12\x18\n" +
 	"\acountry\x18\x01 \x01(\tR\acountry\x12\x12\n" +
 	"\x04city\x18\x02 \x01(\tR\x04city\x12\x10\n" +
@@ -1302,7 +1385,7 @@ func file_common_common_proto_rawDescGZIP() []byte {
 }
 
 var file_common_common_proto_enumTypes = make([]protoimpl.EnumInfo, 11)
-var file_common_common_proto_msgTypes = make([]protoimpl.MessageInfo, 6)
+var file_common_common_proto_msgTypes = make([]protoimpl.MessageInfo, 7)
 var file_common_common_proto_goTypes = []any{
 	(ActionType)(0),              // 0: nitella.ActionType
 	(FallbackAction)(0),          // 1: nitella.FallbackAction
@@ -1319,18 +1402,20 @@ var file_common_common_proto_goTypes = []any{
 	(*SecureCommandPayload)(nil), // 12: nitella.SecureCommandPayload
 	(*Alert)(nil),                // 13: nitella.Alert
 	(*AlertDetails)(nil),         // 14: nitella.AlertDetails
-	(*GeoInfo)(nil),              // 15: nitella.GeoInfo
-	nil,                          // 16: nitella.Alert.MetadataEntry
+	(*BackendChoice)(nil),        // 15: nitella.BackendChoice
+	(*GeoInfo)(nil),              // 16: nitella.GeoInfo
+	nil,                          // 17: nitella.Alert.MetadataEntry
 }
 var file_common_common_proto_depIdxs = []int32{
 	10, // 0: nitella.EncryptedPayload.algorithm:type_name -> nitella.CryptoAlgorithm
 	11, // 1: nitella.Alert.encrypted:type_name -> nitella.EncryptedPayload
-	16, // 2: nitella.Alert.metadata:type_name -> nitella.Alert.MetadataEntry
-	3,  // [3:3] is the sub-list for method output_type
-	3,  // [3:3] is the sub-list for method input_type
-	3,  // [3:3] is the sub-list for extension type_name
-	3,  // [3:3] is the sub-list for extension extendee
-	0,  // [0:3] is the sub-list for field type_name
+	17, // 2: nitella.Alert.metadata:type_name -> nitella.Alert.MetadataEntry
+	15, // 3: nitella.AlertDetails.backend_choices:type_name -> nitella.BackendChoice
+	4,  // [4:4] is the sub-list for method output_type
+	4,  // [4:4] is the sub-list for method input_type
+	4,  // [4:4] is the sub-list for extension type_name
+	4,  // [4:4] is the sub-list for extension extendee
+	0,  // [0:4] is the sub-list for field type_name
 }
 
 func init() { file_common_common_proto_init() }
@@ -1344,7 +1429,7 @@ func file_common_common_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_common_common_proto_rawDesc), len(file_common_common_proto_rawDesc)),
 			NumEnums:      11,
-			NumMessages:   6,
+			NumMessages:   7,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/ivere27/nitella/pkg/api/common"
 	nitellacrypto "github.com/ivere27/nitella/pkg/crypto"
 )
 
@@ -85,16 +86,18 @@ type P2PCommandResponse struct {
 
 // ApprovalRequest is sent from Node to CLI via P2P when connection needs approval
 type ApprovalRequest struct {
-	RequestID  string `json:"request_id"`
-	NodeID     string `json:"node_id"`
-	ProxyID    string `json:"proxy_id"`
-	SourceIP   string `json:"source_ip"`
-	DestAddr   string `json:"dest_addr"`
-	RuleID     string `json:"rule_id"`
-	GeoCountry string `json:"geo_country,omitempty"`
-	GeoCity    string `json:"geo_city,omitempty"`
-	GeoISP     string `json:"geo_isp,omitempty"`
-	Severity   string `json:"severity"`
+	RequestID             string                  `json:"request_id"`
+	NodeID                string                  `json:"node_id"`
+	ProxyID               string                  `json:"proxy_id"`
+	SourceIP              string                  `json:"source_ip"`
+	DestAddr              string                  `json:"dest_addr"`
+	RuleID                string                  `json:"rule_id"`
+	GeoCountry            string                  `json:"geo_country,omitempty"`
+	GeoCity               string                  `json:"geo_city,omitempty"`
+	GeoISP                string                  `json:"geo_isp,omitempty"`
+	Severity              string                  `json:"severity"`
+	BackendChoices        []*common.BackendChoice `json:"backend_choices,omitempty"`
+	SelectedTargetBackend string                  `json:"selected_target_backend,omitempty"`
 }
 
 // ApprovalDecision is sent from CLI to Node via P2P

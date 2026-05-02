@@ -3388,6 +3388,7 @@ class AddProxyRequest extends $pb.GeneratedMessage {
     $core.String? certPem,
     $core.String? keyPem,
     $core.String? caPem,
+    $core.Iterable<$5.BackendChoice>? approvalBackends,
   }) {
     final result = create();
     if (nodeId != null) result.nodeId = nodeId;
@@ -3402,6 +3403,8 @@ class AddProxyRequest extends $pb.GeneratedMessage {
     if (certPem != null) result.certPem = certPem;
     if (keyPem != null) result.keyPem = keyPem;
     if (caPem != null) result.caPem = caPem;
+    if (approvalBackends != null)
+      result.approvalBackends.addAll(approvalBackends);
     return result;
   }
 
@@ -3434,6 +3437,8 @@ class AddProxyRequest extends $pb.GeneratedMessage {
     ..aOS(10, _omitFieldNames ? '' : 'certPem')
     ..aOS(11, _omitFieldNames ? '' : 'keyPem')
     ..aOS(12, _omitFieldNames ? '' : 'caPem')
+    ..pPM<$5.BackendChoice>(13, _omitFieldNames ? '' : 'approvalBackends',
+        subBuilder: $5.BackendChoice.create)
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
@@ -3557,6 +3562,9 @@ class AddProxyRequest extends $pb.GeneratedMessage {
   $core.bool hasCaPem() => $_has(11);
   @$pb.TagNumber(12)
   void clearCaPem() => $_clearField(12);
+
+  @$pb.TagNumber(13)
+  $pb.PbList<$5.BackendChoice> get approvalBackends => $_getList(12);
 }
 
 class UpdateProxyRequest extends $pb.GeneratedMessage {
@@ -5771,6 +5779,8 @@ class ApprovalRequest extends $pb.GeneratedMessage {
     $3.Timestamp? timestamp,
     $core.String? tlsCn,
     $core.String? tlsFingerprint,
+    $core.Iterable<$5.BackendChoice>? backendChoices,
+    $core.String? selectedTargetBackend,
   }) {
     final result = create();
     if (requestId != null) result.requestId = requestId;
@@ -5787,6 +5797,9 @@ class ApprovalRequest extends $pb.GeneratedMessage {
     if (timestamp != null) result.timestamp = timestamp;
     if (tlsCn != null) result.tlsCn = tlsCn;
     if (tlsFingerprint != null) result.tlsFingerprint = tlsFingerprint;
+    if (backendChoices != null) result.backendChoices.addAll(backendChoices);
+    if (selectedTargetBackend != null)
+      result.selectedTargetBackend = selectedTargetBackend;
     return result;
   }
 
@@ -5819,6 +5832,9 @@ class ApprovalRequest extends $pb.GeneratedMessage {
         subBuilder: $3.Timestamp.create)
     ..aOS(13, _omitFieldNames ? '' : 'tlsCn')
     ..aOS(14, _omitFieldNames ? '' : 'tlsFingerprint')
+    ..pPM<$5.BackendChoice>(15, _omitFieldNames ? '' : 'backendChoices',
+        subBuilder: $5.BackendChoice.create)
+    ..aOS(16, _omitFieldNames ? '' : 'selectedTargetBackend')
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
@@ -5969,6 +5985,18 @@ class ApprovalRequest extends $pb.GeneratedMessage {
   $core.bool hasTlsFingerprint() => $_has(13);
   @$pb.TagNumber(14)
   void clearTlsFingerprint() => $_clearField(14);
+
+  @$pb.TagNumber(15)
+  $pb.PbList<$5.BackendChoice> get backendChoices => $_getList(14);
+
+  @$pb.TagNumber(16)
+  $core.String get selectedTargetBackend => $_getSZ(15);
+  @$pb.TagNumber(16)
+  set selectedTargetBackend($core.String value) => $_setString(15, value);
+  @$pb.TagNumber(16)
+  $core.bool hasSelectedTargetBackend() => $_has(15);
+  @$pb.TagNumber(16)
+  void clearSelectedTargetBackend() => $_clearField(16);
 }
 
 class ListPendingApprovalsRequest extends $pb.GeneratedMessage {
@@ -6321,12 +6349,15 @@ class ApproveRequestRequest extends $pb.GeneratedMessage {
     $5.ApprovalRetentionMode? retentionMode,
     $fixnum.Int64? durationSeconds,
     $core.bool? createRule,
+    $core.String? targetBackendOverride,
   }) {
     final result = create();
     if (requestId != null) result.requestId = requestId;
     if (retentionMode != null) result.retentionMode = retentionMode;
     if (durationSeconds != null) result.durationSeconds = durationSeconds;
     if (createRule != null) result.createRule = createRule;
+    if (targetBackendOverride != null)
+      result.targetBackendOverride = targetBackendOverride;
     return result;
   }
 
@@ -6348,6 +6379,7 @@ class ApproveRequestRequest extends $pb.GeneratedMessage {
         enumValues: $5.ApprovalRetentionMode.values)
     ..aInt64(3, _omitFieldNames ? '' : 'durationSeconds')
     ..aOB(4, _omitFieldNames ? '' : 'createRule')
+    ..aOS(5, _omitFieldNames ? '' : 'targetBackendOverride')
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
@@ -6405,6 +6437,15 @@ class ApproveRequestRequest extends $pb.GeneratedMessage {
   $core.bool hasCreateRule() => $_has(3);
   @$pb.TagNumber(4)
   void clearCreateRule() => $_clearField(4);
+
+  @$pb.TagNumber(5)
+  $core.String get targetBackendOverride => $_getSZ(4);
+  @$pb.TagNumber(5)
+  set targetBackendOverride($core.String value) => $_setString(4, value);
+  @$pb.TagNumber(5)
+  $core.bool hasTargetBackendOverride() => $_has(4);
+  @$pb.TagNumber(5)
+  void clearTargetBackendOverride() => $_clearField(5);
 }
 
 class ApproveRequestResponse extends $pb.GeneratedMessage {
@@ -6735,6 +6776,7 @@ class ResolveApprovalDecisionRequest extends $pb.GeneratedMessage {
     $5.ApprovalRetentionMode? retentionMode,
     $fixnum.Int64? durationSeconds,
     DenyBlockType? denyBlockType,
+    $core.String? targetBackendOverride,
   }) {
     final result = create();
     if (requestId != null) result.requestId = requestId;
@@ -6742,6 +6784,8 @@ class ResolveApprovalDecisionRequest extends $pb.GeneratedMessage {
     if (retentionMode != null) result.retentionMode = retentionMode;
     if (durationSeconds != null) result.durationSeconds = durationSeconds;
     if (denyBlockType != null) result.denyBlockType = denyBlockType;
+    if (targetBackendOverride != null)
+      result.targetBackendOverride = targetBackendOverride;
     return result;
   }
 
@@ -6766,6 +6810,7 @@ class ResolveApprovalDecisionRequest extends $pb.GeneratedMessage {
     ..aInt64(4, _omitFieldNames ? '' : 'durationSeconds')
     ..aE<DenyBlockType>(5, _omitFieldNames ? '' : 'denyBlockType',
         enumValues: DenyBlockType.values)
+    ..aOS(6, _omitFieldNames ? '' : 'targetBackendOverride')
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
@@ -6834,6 +6879,15 @@ class ResolveApprovalDecisionRequest extends $pb.GeneratedMessage {
   $core.bool hasDenyBlockType() => $_has(4);
   @$pb.TagNumber(5)
   void clearDenyBlockType() => $_clearField(5);
+
+  @$pb.TagNumber(6)
+  $core.String get targetBackendOverride => $_getSZ(5);
+  @$pb.TagNumber(6)
+  set targetBackendOverride($core.String value) => $_setString(5, value);
+  @$pb.TagNumber(6)
+  $core.bool hasTargetBackendOverride() => $_has(5);
+  @$pb.TagNumber(6)
+  void clearTargetBackendOverride() => $_clearField(6);
 }
 
 class ResolveApprovalDecisionResponse extends $pb.GeneratedMessage {

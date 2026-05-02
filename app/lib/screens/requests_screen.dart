@@ -481,7 +481,7 @@ class _HistoryCard extends StatelessWidget {
   }
 }
 
-class _PendingRequestCard extends ConsumerWidget {
+class _PendingRequestCard extends ConsumerStatefulWidget {
   final local.ApprovalRequest req;
   final List<int> approveDurationOptions;
   final List<local_enum.DenyBlockType> denyBlockOptions;
@@ -497,7 +497,39 @@ class _PendingRequestCard extends ConsumerWidget {
   });
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<_PendingRequestCard> createState() =>
+      _PendingRequestCardState();
+}
+
+class _PendingRequestCardState extends ConsumerState<_PendingRequestCard> {
+  String _selectedBackendId = '';
+
+  local.ApprovalRequest get req => widget.req;
+  List<int> get approveDurationOptions => widget.approveDurationOptions;
+  List<local_enum.DenyBlockType> get denyBlockOptions =>
+      widget.denyBlockOptions;
+  VoidCallback get onResolved => widget.onResolved;
+  ValueChanged<ReliabilityAuditEntry> get onHistoryPersistenceEvent =>
+      widget.onHistoryPersistenceEvent;
+
+  @override
+  void didUpdateWidget(covariant _PendingRequestCard oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.req.requestId != widget.req.requestId ||
+        !_backendChoiceIds(widget.req).contains(_selectedBackendId)) {
+      _selectedBackendId = '';
+    }
+  }
+
+  Set<String> _backendChoiceIds(local.ApprovalRequest request) {
+    return {
+      '',
+      for (final choice in request.backendChoices) choice.id,
+    };
+  }
+
+  @override
+  Widget build(BuildContext context) {
     final geoInfo = req.hasGeo() ? req.geo : null;
     final ip = req.sourceIp;
     final location = geoInfo != null
@@ -560,6 +592,42 @@ class _PendingRequestCard extends ConsumerWidget {
             ),
             const SizedBox(height: 16),
 
+            if (req.backendChoices.isNotEmpty) ...[
+              DropdownButtonFormField<String>(
+                key: ValueKey(
+                  '${req.requestId}:$_selectedBackendId:${req.backendChoices.length}',
+                ),
+                initialValue: _selectedBackendId,
+                decoration: const InputDecoration(
+                  labelText: 'Target backend',
+                  border: OutlineInputBorder(),
+                  isDense: true,
+                ),
+                items: [
+                  DropdownMenuItem<String>(
+                    value: '',
+                    child: Text(
+                      _defaultBackendLabel(),
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                  for (final choice in req.backendChoices)
+                    DropdownMenuItem<String>(
+                      value: choice.id,
+                      child: Text(
+                        _choiceLabel(choice.label, choice.address),
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                ],
+                onChanged: (value) {
+                  if (value == null) return;
+                  setState(() => _selectedBackendId = value);
+                },
+              ),
+              const SizedBox(height: 16),
+            ],
+
             // Action buttons
             Row(
               children: [
@@ -582,6 +650,20 @@ class _PendingRequestCard extends ConsumerWidget {
         ),
       ),
     );
+  }
+
+  String _defaultBackendLabel() {
+    final selected = req.selectedTargetBackend.trim();
+    if (selected.isEmpty) return 'Default';
+    return 'Default ($selected)';
+  }
+
+  String _choiceLabel(String label, String address) {
+    final displayLabel = label.trim();
+    final displayAddress = address.trim();
+    if (displayLabel.isEmpty) return displayAddress;
+    if (displayAddress.isEmpty) return displayLabel;
+    return '$displayLabel ($displayAddress)';
   }
 
   bool _decisionApplied(local.ResolveApprovalDecisionResponse response) {
@@ -638,6 +720,7 @@ class _PendingRequestCard extends ConsumerWidget {
         decision: local_enum.ApprovalDecision.APPROVAL_DECISION_APPROVE,
         retentionMode: choice.mode,
         durationSeconds: Int64(choice.durationSeconds),
+        targetBackendOverride: _selectedBackendId,
       ));
       if (!response.success) {
         if (context.mounted) {

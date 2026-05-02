@@ -619,15 +619,21 @@ func (c *CLIClient) RemoveNodeRule(ctx context.Context, nodeID string, ruleID st
 
 // ResolveApproval resolves a pending connection approval
 func (c *CLIClient) ResolveApproval(ctx context.Context, nodeID, reqID string, allow bool, durationSeconds int64, nodePubKey ed25519.PublicKey) error {
+	return c.ResolveApprovalWithBackendOverride(ctx, nodeID, reqID, allow, durationSeconds, "", nodePubKey)
+}
+
+// ResolveApprovalWithBackendOverride resolves a pending connection approval with an optional backend choice id.
+func (c *CLIClient) ResolveApprovalWithBackendOverride(ctx context.Context, nodeID, reqID string, allow bool, durationSeconds int64, targetBackendOverride string, nodePubKey ed25519.PublicKey) error {
 	action := common.ApprovalActionType_APPROVAL_ACTION_TYPE_BLOCK
 	if allow {
 		action = common.ApprovalActionType_APPROVAL_ACTION_TYPE_ALLOW
 	}
 
 	req := &pbProxy.ResolveApprovalRequest{
-		ReqId:           reqID,
-		Action:          action,
-		DurationSeconds: durationSeconds,
+		ReqId:                 reqID,
+		Action:                action,
+		DurationSeconds:       durationSeconds,
+		TargetBackendOverride: targetBackendOverride,
 	}
 	payload, _ := proto.Marshal(req)
 	result, err := c.SendCommand(ctx, nodeID, pb.CommandType_COMMAND_TYPE_RESOLVE_APPROVAL, payload, nodePubKey)

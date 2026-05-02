@@ -661,7 +661,7 @@ func newCompletion() *shell.SimpleCompletion {
 			"config":       {"local", "remote", "set"},
 			"add":          {"allow", "block"},
 			"global-rules": {"list", "remove"},
-			"approvals":    {"list", "cancel"},
+			"approvals":    {"list", "approve", "cancel"},
 		},
 	}
 }
@@ -721,7 +721,8 @@ Nitella CLI (Local Mode) Commands:
   status [proxy_id]            - Show proxy status
   list, ls                     - List all proxies
 
-  proxy create <addr> <backend> [name]  - Create a new proxy
+  proxy create <addr> <backend> [name] [--approval-backend id=addr[,label]]
+                                - Create a new proxy
   proxy delete <proxy_id>      - Delete a proxy
   proxy enable <proxy_id>      - Enable a disabled proxy
   proxy disable <proxy_id>     - Disable a proxy (stops listening)
@@ -729,7 +730,8 @@ Nitella CLI (Local Mode) Commands:
     Options: --backend <addr>, --name <name>
 
   rule list <proxy_id>         - List rules for a proxy
-  rule add <proxy_id> <action> <ip>  - Add a rule (action: allow/block)
+  rule add <proxy_id> <action> <ip>  - Add a rule (action: allow/block/require-approval)
+    Options for require-approval: --approval-backends a,b [--target-backend addr]
   rule remove <proxy_id> <rule_id>   - Remove a rule
 
   conn [proxy_id]              - List active connections
@@ -743,7 +745,9 @@ Nitella CLI (Local Mode) Commands:
   Note: Global ALLOW prevents blocking but does NOT bypass REQUIRE_APPROVAL.
         Use per-proxy rules with action=allow to fully whitelist an IP.
 
-  approvals                      - List active approvals
+  approvals                      - List pending approvals
+  approvals approve <key> [duration_seconds] [--backend choice_id]
+                                  - Approve with optional backend choice
   approvals cancel <key> [-c]    - Cancel approval (-c to close connections)
 
   geoip status                 - Show GeoIP service status
@@ -859,18 +863,36 @@ func cmdProxy(args []string) {
 
 	switch args[0] {
 	case "create":
-		if !cli.RequireArgs(args, 3, "Usage: proxy create <listen_addr> <backend_addr> [name]") {
+		if !cli.RequireArgs(args, 3, "Usage: proxy create <listen_addr> <backend_addr> [name] [--approval-backend id=addr[,label]]") {
 			return
 		}
 		name := "cli-proxy"
-		if len(args) > 3 {
+		approvalBackends := []*pbCommon.BackendChoice{}
+		if len(args) > 3 && !strings.HasPrefix(args[3], "--") {
 			name = args[3]
 		}
+		for i := 3; i < len(args); i++ {
+			switch args[i] {
+			case "--approval-backend":
+				if i+1 >= len(args) {
+					fmt.Println("Error: --approval-backend requires id=addr[,label]")
+					return
+				}
+				choice, err := parseApprovalBackendChoice(args[i+1])
+				if err != nil {
+					fmt.Printf("Error: %v\n", err)
+					return
+				}
+				approvalBackends = append(approvalBackends, choice)
+				i++
+			}
+		}
 		resp, err := client.AddProxy(ctx, &pbLocal.AddProxyRequest{
-			NodeId:         localNodeID,
-			ListenAddr:     args[1],
-			DefaultBackend: args[2],
-			Name:           name,
+			NodeId:           localNodeID,
+			ListenAddr:       args[1],
+			DefaultBackend:   args[2],
+			Name:             name,
+			ApprovalBackends: approvalBackends,
 		})
 		if err != nil {
 			fmt.Printf("Error: %v\n", err)
@@ -964,6 +986,45 @@ func cmdProxy(args []string) {
 	}
 }
 
+func parseApprovalBackendChoice(raw string) (*pbCommon.BackendChoice, error) {
+	id, rest, ok := strings.Cut(strings.TrimSpace(raw), "=")
+	if !ok || strings.TrimSpace(id) == "" || strings.TrimSpace(rest) == "" {
+		return nil, fmt.Errorf("approval backend must be id=addr[,label]")
+	}
+	addr := strings.TrimSpace(rest)
+	label := ""
+	if before, after, ok := strings.Cut(rest, ","); ok {
+		addr = strings.TrimSpace(before)
+		label = strings.TrimSpace(after)
+	}
+	if addr == "" {
+		return nil, fmt.Errorf("approval backend address is required")
+	}
+	return &pbCommon.BackendChoice{
+		Id:      strings.TrimSpace(id),
+		Address: addr,
+		Label:   label,
+	}, nil
+}
+
+func parseCSVIDs(raw string) []string {
+	parts := strings.Split(raw, ",")
+	out := make([]string, 0, len(parts))
+	seen := map[string]struct{}{}
+	for _, part := range parts {
+		id := strings.TrimSpace(part)
+		if id == "" {
+			continue
+		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		out = append(out, id)
+	}
+	return out
+}
+
 func cmdRule(args []string) {
 	if len(args) == 0 {
 		fmt.Println("Usage: rule <list|add|remove> ...")
@@ -999,12 +1060,32 @@ func cmdRule(args []string) {
 		fmt.Println()
 
 	case "add":
-		if !cli.RequireArgs(args, 4, "Usage: rule add <proxy_id> <allow|block> <ip>") {
+		if !cli.RequireArgs(args, 4, "Usage: rule add <proxy_id> <allow|block|require-approval> <ip>") {
 			return
 		}
 		proxyID := args[1]
 		action := strings.ToLower(args[2])
 		ip := args[3]
+		approvalBackendIDs := []string{}
+		targetBackend := ""
+		for i := 4; i < len(args); i++ {
+			switch args[i] {
+			case "--approval-backends":
+				if i+1 >= len(args) {
+					fmt.Println("Error: --approval-backends requires comma-separated choice ids")
+					return
+				}
+				approvalBackendIDs = parseCSVIDs(args[i+1])
+				i++
+			case "--target-backend":
+				if i+1 >= len(args) {
+					fmt.Println("Error: --target-backend requires an address")
+					return
+				}
+				targetBackend = args[i+1]
+				i++
+			}
+		}
 
 		var actionLabel string
 		var actionErr string
@@ -1037,8 +1118,36 @@ func cmdRule(args []string) {
 			if !resp.Success {
 				actionErr = resp.Error
 			}
+		case "approval", "require-approval", "require_approval":
+			actionLabel = "Require approval"
+			rule, err := client.AddRule(ctx, &pbLocal.AddRuleRequest{
+				NodeId:  localNodeID,
+				ProxyId: proxyID,
+				Rule: &pb.Rule{
+					Name:                     "CLI require approval " + ip,
+					Enabled:                  true,
+					Priority:                 100,
+					Action:                   pbCommon.ActionType_ACTION_TYPE_REQUIRE_APPROVAL,
+					TargetBackend:            targetBackend,
+					ApprovalBackendChoiceIds: approvalBackendIDs,
+					Conditions: []*pb.Condition{
+						{
+							Type:  pbCommon.ConditionType_CONDITION_TYPE_SOURCE_IP,
+							Op:    pbCommon.Operator_OPERATOR_EQ,
+							Value: ip,
+						},
+					},
+				},
+			})
+			if err != nil {
+				fmt.Printf("Error: %v\n", err)
+				return
+			}
+			if rule == nil || rule.Id == "" {
+				actionErr = "empty rule response"
+			}
 		default:
-			fmt.Println("Action must be 'allow' or 'block'")
+			fmt.Println("Action must be 'allow', 'block', or 'require-approval'")
 			return
 		}
 
@@ -1375,6 +1484,19 @@ func cmdApprovals(args []string) {
 			if a.ProxyId != "" {
 				fmt.Printf("  Proxy: %s\n", a.ProxyId)
 			}
+			if len(a.BackendChoices) > 0 {
+				if a.SelectedTargetBackend != "" {
+					fmt.Printf("  Default backend: %s\n", a.SelectedTargetBackend)
+				}
+				fmt.Println("  Backend choices:")
+				for _, choice := range a.BackendChoices {
+					label := choice.Label
+					if label == "" {
+						label = choice.Id
+					}
+					fmt.Printf("    %s: %s (%s)\n", choice.Id, choice.Address, label)
+				}
+			}
 		}
 		fmt.Println()
 		return
@@ -1383,6 +1505,48 @@ func cmdApprovals(args []string) {
 	switch args[0] {
 	case "list":
 		cmdApprovals(nil) // Call with no args to list
+
+	case "approve":
+		if !cli.RequireArgs(args, 2, "Usage: approvals approve <key> [duration_seconds] [--backend choice_id]") {
+			return
+		}
+		duration := int64(300)
+		targetBackendOverride := ""
+		for i := 2; i < len(args); i++ {
+			switch args[i] {
+			case "--backend":
+				if i+1 >= len(args) {
+					fmt.Println("Error: --backend requires a choice id")
+					return
+				}
+				targetBackendOverride = args[i+1]
+				i++
+			default:
+				if parsed, err := strconv.ParseInt(args[i], 10, 64); err == nil {
+					duration = parsed
+				}
+			}
+		}
+
+		ctx, cancel := authAPICtx()
+		defer cancel()
+
+		resp, err := client.ResolveApprovalDecision(ctx, &pbLocal.ResolveApprovalDecisionRequest{
+			RequestId:             args[1],
+			Decision:              pbLocal.ApprovalDecision_APPROVAL_DECISION_APPROVE,
+			RetentionMode:         pbCommon.ApprovalRetentionMode_APPROVAL_RETENTION_MODE_CACHE,
+			DurationSeconds:       duration,
+			TargetBackendOverride: targetBackendOverride,
+		})
+		if err != nil {
+			fmt.Printf("Error: %v\n", err)
+			return
+		}
+		if !resp.Success {
+			fmt.Printf("Error: %s\n", resp.Error)
+			return
+		}
+		fmt.Println("Approval approved.")
 
 	case "cancel":
 		if !cli.RequireArgs(args, 2, "Usage: approvals cancel <key> [--close-connections]") {

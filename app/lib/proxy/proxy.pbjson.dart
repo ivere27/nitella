@@ -256,6 +256,14 @@ const CreateProxyRequest$json = {
       '6': '.nitella.proxy.HealthCheckConfig',
       '10': 'healthCheck'
     },
+    {
+      '1': 'approval_backends',
+      '3': 14,
+      '4': 3,
+      '5': 11,
+      '6': '.nitella.BackendChoice',
+      '10': 'approvalBackends'
+    },
   ],
 };
 
@@ -271,7 +279,8 @@ final $typed_data.Uint8List createProxyRequestDescriptor = $convert.base64Decode
     'gKIAEoDjITLm5pdGVsbGEuTW9ja1ByZXNldFIMZmFsbGJhY2tNb2NrEkcKEGNsaWVudF9hdXRo'
     'X3R5cGUYCyABKA4yHS5uaXRlbGxhLnByb3h5LkNsaWVudEF1dGhUeXBlUg5jbGllbnRBdXRoVH'
     'lwZRISCgR0YWdzGAwgAygJUgR0YWdzEkMKDGhlYWx0aF9jaGVjaxgNIAEoCzIgLm5pdGVsbGEu'
-    'cHJveHkuSGVhbHRoQ2hlY2tDb25maWdSC2hlYWx0aENoZWNr');
+    'cHJveHkuSGVhbHRoQ2hlY2tDb25maWdSC2hlYWx0aENoZWNrEkMKEWFwcHJvdmFsX2JhY2tlbm'
+    'RzGA4gAygLMhYubml0ZWxsYS5CYWNrZW5kQ2hvaWNlUhBhcHByb3ZhbEJhY2tlbmRz');
 
 @$core.Deprecated('Use healthCheckConfigDescriptor instead')
 const HealthCheckConfig$json = {
@@ -455,6 +464,14 @@ const UpdateProxyRequest$json = {
       '6': '.nitella.proxy.HealthCheckConfig',
       '10': 'healthCheck'
     },
+    {
+      '1': 'approval_backends',
+      '3': 15,
+      '4': 3,
+      '5': 11,
+      '6': '.nitella.BackendChoice',
+      '10': 'approvalBackends'
+    },
   ],
 };
 
@@ -471,7 +488,8 @@ final $typed_data.Uint8List updateProxyRequestDescriptor = $convert.base64Decode
     'ZmFsbGJhY2tNb2NrEkcKEGNsaWVudF9hdXRoX3R5cGUYDCABKA4yHS5uaXRlbGxhLnByb3h5Lk'
     'NsaWVudEF1dGhUeXBlUg5jbGllbnRBdXRoVHlwZRISCgR0YWdzGA0gAygJUgR0YWdzEkMKDGhl'
     'YWx0aF9jaGVjaxgOIAEoCzIgLm5pdGVsbGEucHJveHkuSGVhbHRoQ2hlY2tDb25maWdSC2hlYW'
-    'x0aENoZWNr');
+    'x0aENoZWNrEkMKEWFwcHJvdmFsX2JhY2tlbmRzGA8gAygLMhYubml0ZWxsYS5CYWNrZW5kQ2hv'
+    'aWNlUhBhcHByb3ZhbEJhY2tlbmRz');
 
 @$core.Deprecated('Use updateProxyResponseDescriptor instead')
 const UpdateProxyResponse$json = {
@@ -598,6 +616,14 @@ const ProxyStatus$json = {
       '6': '.nitella.proxy.HealthStatus',
       '10': 'healthStatus'
     },
+    {
+      '1': 'approval_backends',
+      '3': 19,
+      '4': 3,
+      '5': 11,
+      '6': '.nitella.BackendChoice',
+      '10': 'approvalBackends'
+    },
   ],
 };
 
@@ -617,7 +643,9 @@ final $typed_data.Uint8List proxyStatusDescriptor = $convert.base64Decode(
     'V0aF90eXBlGA8gASgOMh0ubml0ZWxsYS5wcm94eS5DbGllbnRBdXRoVHlwZVIOY2xpZW50QXV0'
     'aFR5cGUSEgoEdGFncxgQIAMoCVIEdGFncxJDCgxoZWFsdGhfY2hlY2sYESABKAsyIC5uaXRlbG'
     'xhLnByb3h5LkhlYWx0aENoZWNrQ29uZmlnUgtoZWFsdGhDaGVjaxJACg1oZWFsdGhfc3RhdHVz'
-    'GBIgASgOMhsubml0ZWxsYS5wcm94eS5IZWFsdGhTdGF0dXNSDGhlYWx0aFN0YXR1cw==');
+    'GBIgASgOMhsubml0ZWxsYS5wcm94eS5IZWFsdGhTdGF0dXNSDGhlYWx0aFN0YXR1cxJDChFhcH'
+    'Byb3ZhbF9iYWNrZW5kcxgTIAMoCzIWLm5pdGVsbGEuQmFja2VuZENob2ljZVIQYXBwcm92YWxC'
+    'YWNrZW5kcw==');
 
 @$core.Deprecated('Use reloadRulesRequestDescriptor instead')
 const ReloadRulesRequest$json = {
@@ -768,6 +796,13 @@ const Rule$json = {
       '10': 'mockResponse'
     },
     {'1': 'expression', '3': 10, '4': 1, '5': 9, '10': 'expression'},
+    {
+      '1': 'approval_backend_choice_ids',
+      '3': 11,
+      '4': 3,
+      '5': 9,
+      '10': 'approvalBackendChoiceIds'
+    },
   ],
 };
 
@@ -780,7 +815,8 @@ final $typed_data.Uint8List ruleDescriptor = $convert.base64Decode(
     'CVINdGFyZ2V0QmFja2VuZBI9CgpyYXRlX2xpbWl0GAggASgLMh4ubml0ZWxsYS5wcm94eS5SYX'
     'RlTGltaXRDb25maWdSCXJhdGVMaW1pdBI+Cg1tb2NrX3Jlc3BvbnNlGAkgASgLMhkubml0ZWxs'
     'YS5wcm94eS5Nb2NrQ29uZmlnUgxtb2NrUmVzcG9uc2USHgoKZXhwcmVzc2lvbhgKIAEoCVIKZX'
-    'hwcmVzc2lvbg==');
+    'hwcmVzc2lvbhI9ChthcHByb3ZhbF9iYWNrZW5kX2Nob2ljZV9pZHMYCyADKAlSGGFwcHJvdmFs'
+    'QmFja2VuZENob2ljZUlkcw==');
 
 @$core.Deprecated('Use conditionDescriptor instead')
 const Condition$json = {
@@ -1573,6 +1609,13 @@ const ResolveApprovalRequest$json = {
     },
     {'1': 'duration_seconds', '3': 4, '4': 1, '5': 3, '10': 'durationSeconds'},
     {'1': 'reason', '3': 5, '4': 1, '5': 9, '10': 'reason'},
+    {
+      '1': 'target_backend_override',
+      '3': 6,
+      '4': 1,
+      '5': 9,
+      '10': 'targetBackendOverride'
+    },
   ],
 };
 
@@ -1582,7 +1625,8 @@ final $typed_data.Uint8List resolveApprovalRequestDescriptor = $convert.base64De
     '9uGAIgASgOMhsubml0ZWxsYS5BcHByb3ZhbEFjdGlvblR5cGVSBmFjdGlvbhJFCg5yZXRlbnRp'
     'b25fbW9kZRgDIAEoDjIeLm5pdGVsbGEuQXBwcm92YWxSZXRlbnRpb25Nb2RlUg1yZXRlbnRpb2'
     '5Nb2RlEikKEGR1cmF0aW9uX3NlY29uZHMYBCABKANSD2R1cmF0aW9uU2Vjb25kcxIWCgZyZWFz'
-    'b24YBSABKAlSBnJlYXNvbg==');
+    'b24YBSABKAlSBnJlYXNvbhI2Chd0YXJnZXRfYmFja2VuZF9vdmVycmlkZRgGIAEoCVIVdGFyZ2'
+    'V0QmFja2VuZE92ZXJyaWRl');
 
 @$core.Deprecated('Use resolveApprovalResponseDescriptor instead')
 const ResolveApprovalResponse$json = {
@@ -1590,14 +1634,21 @@ const ResolveApprovalResponse$json = {
   '2': [
     {'1': 'success', '3': 1, '4': 1, '5': 8, '10': 'success'},
     {'1': 'error_message', '3': 2, '4': 1, '5': 9, '10': 'errorMessage'},
+    {
+      '1': 'resolved_target_backend',
+      '3': 3,
+      '4': 1,
+      '5': 9,
+      '10': 'resolvedTargetBackend'
+    },
   ],
 };
 
 /// Descriptor for `ResolveApprovalResponse`. Decode as a `google.protobuf.DescriptorProto`.
-final $typed_data.Uint8List resolveApprovalResponseDescriptor =
-    $convert.base64Decode(
-        'ChdSZXNvbHZlQXBwcm92YWxSZXNwb25zZRIYCgdzdWNjZXNzGAEgASgIUgdzdWNjZXNzEiMKDW'
-        'Vycm9yX21lc3NhZ2UYAiABKAlSDGVycm9yTWVzc2FnZQ==');
+final $typed_data.Uint8List resolveApprovalResponseDescriptor = $convert.base64Decode(
+    'ChdSZXNvbHZlQXBwcm92YWxSZXNwb25zZRIYCgdzdWNjZXNzGAEgASgIUgdzdWNjZXNzEiMKDW'
+    'Vycm9yX21lc3NhZ2UYAiABKAlSDGVycm9yTWVzc2FnZRI2ChdyZXNvbHZlZF90YXJnZXRfYmFj'
+    'a2VuZBgDIAEoCVIVcmVzb2x2ZWRUYXJnZXRCYWNrZW5k');
 
 @$core.Deprecated('Use activeApprovalDescriptor instead')
 const ActiveApproval$json = {
@@ -1632,6 +1683,21 @@ const ActiveApproval$json = {
     {'1': 'geo_country', '3': 13, '4': 1, '5': 9, '10': 'geoCountry'},
     {'1': 'geo_city', '3': 14, '4': 1, '5': 9, '10': 'geoCity'},
     {'1': 'geo_isp', '3': 15, '4': 1, '5': 9, '10': 'geoIsp'},
+    {
+      '1': 'backend_choices',
+      '3': 16,
+      '4': 3,
+      '5': 11,
+      '6': '.nitella.BackendChoice',
+      '10': 'backendChoices'
+    },
+    {
+      '1': 'selected_target_backend',
+      '3': 17,
+      '4': 1,
+      '5': 9,
+      '10': 'selectedTargetBackend'
+    },
   ],
 };
 
@@ -1646,7 +1712,9 @@ final $typed_data.Uint8List activeApprovalDescriptor = $convert.base64Decode(
     'X291dBgKIAEoA1IIYnl0ZXNPdXQSIwoNYmxvY2tlZF9jb3VudBgLIAEoA1IMYmxvY2tlZENvdW'
     '50EhkKCGNvbm5faWRzGAwgAygJUgdjb25uSWRzEh8KC2dlb19jb3VudHJ5GA0gASgJUgpnZW9D'
     'b3VudHJ5EhkKCGdlb19jaXR5GA4gASgJUgdnZW9DaXR5EhcKB2dlb19pc3AYDyABKAlSBmdlb0'
-    'lzcA==');
+    'lzcBI/Cg9iYWNrZW5kX2Nob2ljZXMYECADKAsyFi5uaXRlbGxhLkJhY2tlbmRDaG9pY2VSDmJh'
+    'Y2tlbmRDaG9pY2VzEjYKF3NlbGVjdGVkX3RhcmdldF9iYWNrZW5kGBEgASgJUhVzZWxlY3RlZF'
+    'RhcmdldEJhY2tlbmQ=');
 
 @$core.Deprecated('Use listActiveApprovalsRequestDescriptor instead')
 const ListActiveApprovalsRequest$json = {

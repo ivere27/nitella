@@ -158,6 +158,14 @@ message AlertDetails {
     string geo_country = 6;
     string geo_city = 7;
     string geo_isp = 8;
+    repeated BackendChoice backend_choices = 9;
+    string selected_target_backend = 10;
+}
+
+message BackendChoice {
+  string id = 1;       // Stable selector exposed to mobile.
+  string address = 2;  // host:port.
+  string label = 3;    // Optional human-readable name for UI.
 }
 
 // GeoInfo contains geographical information for an IP address.

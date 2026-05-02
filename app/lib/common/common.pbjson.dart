@@ -333,6 +333,21 @@ const AlertDetails$json = {
     {'1': 'geo_country', '3': 6, '4': 1, '5': 9, '10': 'geoCountry'},
     {'1': 'geo_city', '3': 7, '4': 1, '5': 9, '10': 'geoCity'},
     {'1': 'geo_isp', '3': 8, '4': 1, '5': 9, '10': 'geoIsp'},
+    {
+      '1': 'backend_choices',
+      '3': 9,
+      '4': 3,
+      '5': 11,
+      '6': '.nitella.BackendChoice',
+      '10': 'backendChoices'
+    },
+    {
+      '1': 'selected_target_backend',
+      '3': 10,
+      '4': 1,
+      '5': 9,
+      '10': 'selectedTargetBackend'
+    },
   ],
 };
 
@@ -342,7 +357,24 @@ final $typed_data.Uint8List alertDetailsDescriptor = $convert.base64Decode(
     'lvbhgCIAEoCVILZGVzdGluYXRpb24SGQoIcHJveHlfaWQYAyABKAlSB3Byb3h5SWQSHQoKcHJv'
     'eHlfbmFtZRgEIAEoCVIJcHJveHlOYW1lEhcKB3J1bGVfaWQYBSABKAlSBnJ1bGVJZBIfCgtnZW'
     '9fY291bnRyeRgGIAEoCVIKZ2VvQ291bnRyeRIZCghnZW9fY2l0eRgHIAEoCVIHZ2VvQ2l0eRIX'
-    'CgdnZW9faXNwGAggASgJUgZnZW9Jc3A=');
+    'CgdnZW9faXNwGAggASgJUgZnZW9Jc3ASPwoPYmFja2VuZF9jaG9pY2VzGAkgAygLMhYubml0ZW'
+    'xsYS5CYWNrZW5kQ2hvaWNlUg5iYWNrZW5kQ2hvaWNlcxI2ChdzZWxlY3RlZF90YXJnZXRfYmFj'
+    'a2VuZBgKIAEoCVIVc2VsZWN0ZWRUYXJnZXRCYWNrZW5k');
+
+@$core.Deprecated('Use backendChoiceDescriptor instead')
+const BackendChoice$json = {
+  '1': 'BackendChoice',
+  '2': [
+    {'1': 'id', '3': 1, '4': 1, '5': 9, '10': 'id'},
+    {'1': 'address', '3': 2, '4': 1, '5': 9, '10': 'address'},
+    {'1': 'label', '3': 3, '4': 1, '5': 9, '10': 'label'},
+  ],
+};
+
+/// Descriptor for `BackendChoice`. Decode as a `google.protobuf.DescriptorProto`.
+final $typed_data.Uint8List backendChoiceDescriptor = $convert.base64Decode(
+    'Cg1CYWNrZW5kQ2hvaWNlEg4KAmlkGAEgASgJUgJpZBIYCgdhZGRyZXNzGAIgASgJUgdhZGRyZX'
+    'NzEhQKBWxhYmVsGAMgASgJUgVsYWJlbA==');
 
 @$core.Deprecated('Use geoInfoDescriptor instead')
 const GeoInfo$json = {

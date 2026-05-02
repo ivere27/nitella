@@ -873,6 +873,43 @@ impl AdminServer {
                     duration_seconds = 0;
                 }
 
+                let target_backend_override = if allowed && !req.target_backend_override.is_empty()
+                {
+                    match self
+                        .manager
+                        .validate_approval_backend_override(
+                            &req.req_id,
+                            &req.target_backend_override,
+                        )
+                        .await
+                    {
+                        Ok(Some(address)) => address,
+                        Ok(None) => String::new(),
+                        Err(e) if e == "not_found" => {
+                            let resp = ResolveApprovalResponse {
+                                success: false,
+                                error_message: "Approval not found".to_string(),
+                                resolved_target_backend: String::new(),
+                            };
+                            return (
+                                "ERROR".to_string(),
+                                "Approval not found".to_string(),
+                                resp.encode_to_vec(),
+                            );
+                        }
+                        Err(e) => {
+                            let resp = ResolveApprovalResponse {
+                                success: false,
+                                error_message: e.clone(),
+                                resolved_target_backend: String::new(),
+                            };
+                            return ("OK".to_string(), String::new(), resp.encode_to_vec());
+                        }
+                    }
+                } else {
+                    String::new()
+                };
+
                 let resolved = self
                     .manager
                     .approval_manager
@@ -882,18 +919,21 @@ impl AdminServer {
                         duration_seconds,
                         &req.reason,
                         retention_mode as i32,
+                        &target_backend_override,
                     )
                     .await;
                 if resolved {
                     let resp = ResolveApprovalResponse {
                         success: true,
                         error_message: "".to_string(),
+                        resolved_target_backend: target_backend_override.clone(),
                     };
                     ("OK".to_string(), "".to_string(), resp.encode_to_vec())
                 } else {
                     let resp = ResolveApprovalResponse {
                         success: false,
                         error_message: "Approval not found".to_string(),
+                        resolved_target_backend: String::new(),
                     };
                     (
                         "ERROR".to_string(),
@@ -956,6 +996,8 @@ impl AdminServer {
                 tls_session_id: e.tls_session_id,
                 blocked_count: e.blocked_count,
                 conn_ids: e.conn_ids,
+                backend_choices: vec![],
+                selected_target_backend: e.target_backend,
             })
             .collect();
 

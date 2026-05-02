@@ -8,22 +8,23 @@ import (
 
 // ProxyModel represents a saved proxy listener
 type ProxyModel struct {
-	ID              string `xorm:"'id' pk"`
-	Name            string `xorm:"index"`
-	ListenAddr      string
-	DefaultBackend  string
-	DefaultAction   int `xorm:"default 0"` // 0=Allow, 1=Block, 2=Mock
-	DefaultMock     string
-	FallbackAction  int `xorm:"default 0"` // 0=Close, 1=Mock
-	FallbackMock    string
-	Enabled         bool      `xorm:"default true"`
-	CertPEM         string    `xorm:"'cert_pem' text"`
-	KeyPEM          string    `xorm:"'key_pem' text"`
-	CaPEM           string    `xorm:"'ca_pem' text"`
-	ClientAuthType  int       `xorm:"default 0"` // 0=Auto, 1=None, 2=Request, 3=Require
-	HealthCheckJSON string    `xorm:"'health_check_json' text"`      // JSON of HealthCheckConfig
-	CreatedAt       time.Time `xorm:"created"`
-	UpdatedAt       time.Time `xorm:"updated"`
+	ID                   string `xorm:"'id' pk"`
+	Name                 string `xorm:"index"`
+	ListenAddr           string
+	DefaultBackend       string
+	DefaultAction        int `xorm:"default 0"` // 0=Allow, 1=Block, 2=Mock
+	DefaultMock          string
+	FallbackAction       int `xorm:"default 0"` // 0=Close, 1=Mock
+	FallbackMock         string
+	Enabled              bool      `xorm:"default true"`
+	CertPEM              string    `xorm:"'cert_pem' text"`
+	KeyPEM               string    `xorm:"'key_pem' text"`
+	CaPEM                string    `xorm:"'ca_pem' text"`
+	ClientAuthType       int       `xorm:"default 0"`                     // 0=Auto, 1=None, 2=Request, 3=Require
+	HealthCheckJSON      string    `xorm:"'health_check_json' text"`      // JSON of HealthCheckConfig
+	ApprovalBackendsJSON string    `xorm:"'approval_backends_json' text"` // JSON of BackendChoice
+	CreatedAt            time.Time `xorm:"created"`
+	UpdatedAt            time.Time `xorm:"updated"`
 }
 
 // RuleModel represents a rule associated with a proxy
@@ -37,10 +38,11 @@ type RuleModel struct {
 	TargetBackend string
 
 	// Serialized Data
-	ConditionsJSON string `xorm:"'conditions_json' text"` // JSON array of conditions
-	MockConfigJSON string `xorm:"'mock_config_json' text"` // JSON of MockConfig
-	RateLimitJSON  string `xorm:"'rate_limit_json' text"` // JSON of RateLimitConfig
-	Expression     string // Traefik-style expression string
+	ConditionsJSON               string `xorm:"'conditions_json' text"`  // JSON array of conditions
+	MockConfigJSON               string `xorm:"'mock_config_json' text"` // JSON of MockConfig
+	RateLimitJSON                string `xorm:"'rate_limit_json' text"`  // JSON of RateLimitConfig
+	Expression                   string // Traefik-style expression string
+	ApprovalBackendChoiceIDsJSON string `xorm:"'approval_backend_choice_ids_json' text"`
 
 	CreatedAt time.Time `xorm:"created"`
 	UpdatedAt time.Time `xorm:"updated"`

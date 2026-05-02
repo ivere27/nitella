@@ -104,9 +104,10 @@ type EmbeddedListener struct {
 	stats *stats.StatsService
 
 	// Approval system
-	approval    *ApprovalManager
-	globalRules *GlobalRulesStore
-	nodeID      string // For approval requests
+	approval         *ApprovalManager
+	approvalBackends []*common.BackendChoice
+	globalRules      *GlobalRulesStore
+	nodeID           string // For approval requests
 
 	// Shutdown context for cancelling long-running operations
 	stopCtx    context.Context
@@ -171,6 +172,103 @@ func (p *EmbeddedListener) SetGlobalRules(gr *GlobalRulesStore) {
 // SetNodeID sets the node ID for approval requests
 func (p *EmbeddedListener) SetNodeID(nodeID string) {
 	p.nodeID = nodeID
+}
+
+// SetApprovalBackends sets the proxy-level backend choice pool for approvals.
+func (p *EmbeddedListener) SetApprovalBackends(backends []*common.BackendChoice) {
+	p.rulesMux.Lock()
+	defer p.rulesMux.Unlock()
+	p.approvalBackends = cloneBackendChoices(backends)
+}
+
+func cloneBackendChoices(backends []*common.BackendChoice) []*common.BackendChoice {
+	if len(backends) == 0 {
+		return nil
+	}
+	out := make([]*common.BackendChoice, 0, len(backends))
+	for _, b := range backends {
+		if b == nil {
+			continue
+		}
+		copied := *b
+		out = append(out, &copied)
+	}
+	return out
+}
+
+func (p *EmbeddedListener) getApprovalBackends() []*common.BackendChoice {
+	p.rulesMux.RLock()
+	defer p.rulesMux.RUnlock()
+	return cloneBackendChoices(p.approvalBackends)
+}
+
+func (p *EmbeddedListener) approvalBackendChoicesForRule(rule *pb.Rule) []*common.BackendChoice {
+	if rule == nil || len(rule.ApprovalBackendChoiceIds) == 0 {
+		return nil
+	}
+
+	p.rulesMux.RLock()
+	defer p.rulesMux.RUnlock()
+
+	byID := make(map[string]*common.BackendChoice, len(p.approvalBackends))
+	for _, choice := range p.approvalBackends {
+		if choice != nil {
+			byID[choice.Id] = choice
+		}
+	}
+
+	choices := make([]*common.BackendChoice, 0, len(rule.ApprovalBackendChoiceIds))
+	for _, id := range rule.ApprovalBackendChoiceIds {
+		if choice := byID[id]; choice != nil {
+			copied := *choice
+			choices = append(choices, &copied)
+		}
+	}
+	return choices
+}
+
+// ResolveBackendOverride returns the resolved backend address for a choice id.
+// ok=true with an empty address means no override; ok=false means the id is not
+// permitted by the matched rule or does not exist in the proxy choice pool.
+func (p *EmbeddedListener) ResolveBackendOverride(ruleID, choiceID string) (string, bool) {
+	if choiceID == "" {
+		return "", true
+	}
+
+	p.rulesMux.RLock()
+	defer p.rulesMux.RUnlock()
+
+	var matched *pb.Rule
+	for _, rule := range p.rules {
+		if rule != nil && rule.Id == ruleID {
+			matched = rule
+			break
+		}
+	}
+	if matched == nil || len(matched.ApprovalBackendChoiceIds) == 0 {
+		return "", false
+	}
+
+	allowed := false
+	for _, id := range matched.ApprovalBackendChoiceIds {
+		if id == choiceID {
+			allowed = true
+			break
+		}
+	}
+	if !allowed {
+		return "", false
+	}
+
+	for _, choice := range p.approvalBackends {
+		if choice != nil && choice.Id == choiceID {
+			if choice.Address == "" {
+				return "", false
+			}
+			return choice.Address, true
+		}
+	}
+	return "", false
 }
 
 func NewEmbeddedListener(id, name, listenAddr, defaultBackend string, defaultAction common.ActionType, defaultMock common.MockPreset, certPEM, keyPEM, caPEM string, clientAuth pb.ClientAuthType, geoIP *GeoIPService) *EmbeddedListener {
@@ -581,6 +679,7 @@ func (p *EmbeddedListener) handleConn(conn net.Conn) {
 
 	ruleId := "default"
 	backend := ""
+	approvalBackend := ""
 	var tlsSessionID string   // For approval cache tracking
 	var hasApprovalEntry bool // Track if this conn has an approval cache entry
 	var connectionOnlyMaxDuration time.Duration
@@ -642,6 +741,7 @@ func (p *EmbeddedListener) handleConn(conn net.Conn) {
 				log.Printf("[DEBUG] Cache hit: allowed=%v", allowed)
 				if allowed {
 					action = common.ActionType_ACTION_TYPE_ALLOW
+					approvalBackend = p.approval.GetCachedTargetBackend(sourceIP, ruleId, tlsSessionID)
 					// Track this connection under the approval with live byte counters
 					p.approval.SetConnID(sourceIP, ruleId, tlsSessionID, connID, &connBytesIn, &connBytesOut)
 					hasApprovalEntry = true
@@ -663,15 +763,21 @@ func (p *EmbeddedListener) handleConn(conn net.Conn) {
 					geoISP = geoInfo.Isp
 				}
 
+				selectedTargetBackend := backend
+				if selectedTargetBackend == "" {
+					selectedTargetBackend = p.DefaultBackend
+				}
 				alertDetails := &pbCommon.AlertDetails{
-					SourceIp:    sourceIP,
-					Destination: p.DefaultBackend,
-					ProxyId:     p.ID,
-					ProxyName:   p.Name,
-					RuleId:      ruleId,
-					GeoCountry:  geoCountry,
-					GeoCity:     geoCity,
-					GeoIsp:      geoISP,
+					SourceIp:              sourceIP,
+					Destination:           selectedTargetBackend,
+					ProxyId:               p.ID,
+					ProxyName:             p.Name,
+					RuleId:                ruleId,
+					GeoCountry:            geoCountry,
+					GeoCity:               geoCity,
+					GeoIsp:                geoISP,
+					BackendChoices:        p.approvalBackendChoicesForRule(rule),
+					SelectedTargetBackend: selectedTargetBackend,
 				}
 				info, err := proto.Marshal(alertDetails)
 				if err != nil {
@@ -722,6 +828,7 @@ func (p *EmbeddedListener) handleConn(conn net.Conn) {
 						action = common.ActionType_ACTION_TYPE_BLOCK
 					} else if result.Allowed {
 						action = common.ActionType_ACTION_TYPE_ALLOW
+						approvalBackend = result.TargetBackendOverride
 						if result.RetentionMode == common.ApprovalRetentionMode_APPROVAL_RETENTION_MODE_CONNECTION_ONLY {
 							// CONNECTION_ONLY applies only to this connection; no cache entry.
 							if result.Duration > 0 {
@@ -730,7 +837,7 @@ func (p *EmbeddedListener) handleConn(conn net.Conn) {
 						} else {
 							// CACHE mode stores decision for follow-up connections.
 							if result.Duration > 0 {
-								p.approval.AddToCacheWithGeo(sourceIP, ruleId, p.ID, tlsSessionID, true, result.Duration, geoCountry, geoCity, geoISP)
+								p.approval.AddToCacheWithGeoAndBackend(sourceIP, ruleId, p.ID, tlsSessionID, true, result.Duration, geoCountry, geoCity, geoISP, approvalBackend)
 								p.approval.SetConnID(sourceIP, ruleId, tlsSessionID, connID, &connBytesIn, &connBytesOut)
 								hasApprovalEntry = true
 							}
@@ -877,6 +984,9 @@ func (p *EmbeddedListener) handleConn(conn net.Conn) {
 	targetBackend := p.DefaultBackend
 	if backend != "" {
 		targetBackend = backend
+	}
+	if approvalBackend != "" {
+		targetBackend = approvalBackend
 	}
 
 	// Update Metadata with Target
@@ -1083,6 +1193,7 @@ func (p *EmbeddedListener) GetStatus() *pb.ProxyStatus {
 		FallbackAction:    common.FallbackAction(p.FallbackAction),
 		FallbackMock:      p.FallbackMock,
 		ClientAuthType:    p.ClientAuthType,
+		ApprovalBackends:  p.getApprovalBackends(),
 	}
 }
 

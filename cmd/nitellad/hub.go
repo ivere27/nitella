@@ -1136,14 +1136,15 @@ func applyProxy(pm *node.ProxyManager, params []byte) ([]byte, error) {
 
 	// Return ProxyStatus (what the mobile client expects to unmarshal)
 	status := &pb.ProxyStatus{
-		ProxyId:        createResp.ProxyId,
-		Running:        true,
-		ListenAddr:     req.ListenAddr,
-		DefaultBackend: req.DefaultBackend,
-		DefaultAction:  req.DefaultAction,
-		DefaultMock:    req.DefaultMock,
-		FallbackAction: req.FallbackAction,
-		FallbackMock:   req.FallbackMock,
+		ProxyId:          createResp.ProxyId,
+		Running:          true,
+		ListenAddr:       req.ListenAddr,
+		DefaultBackend:   req.DefaultBackend,
+		DefaultAction:    req.DefaultAction,
+		DefaultMock:      req.DefaultMock,
+		FallbackAction:   req.FallbackAction,
+		FallbackMock:     req.FallbackMock,
+		ApprovalBackends: req.ApprovalBackends,
 	}
 	return proto.Marshal(status)
 }
@@ -1307,7 +1308,19 @@ func resolveApproval(pm *node.ProxyManager, params []byte) ([]byte, error) {
 	log.Printf("[Hub] Resolving approval request %s (action=%v, mode=%v, duration=%ds)",
 		req.ReqId, req.Action, retentionMode, durationSeconds)
 
-	meta := pm.Approval.ResolveWithRetention(req.ReqId, allowed, durationSeconds, req.Reason, retentionMode)
+	targetBackendOverride := ""
+	if allowed && req.GetTargetBackendOverride() != "" {
+		address, ok, found := pm.ResolveApprovalBackendOverride(req.ReqId, req.GetTargetBackendOverride())
+		if !found {
+			return nil, fmt.Errorf("no pending approval found for request %s", req.ReqId)
+		}
+		if !ok {
+			resp := &pb.ResolveApprovalResponse{Success: false, ErrorMessage: "invalid target_backend_override"}
+			return proto.Marshal(resp)
+		}
+		targetBackendOverride = address
+	}
+	meta := pm.Approval.ResolveWithRetention(req.ReqId, allowed, durationSeconds, req.Reason, retentionMode, targetBackendOverride)
 	if meta == nil {
 		return nil, fmt.Errorf("no pending approval found for request %s", req.ReqId)
 	}
@@ -1316,7 +1329,8 @@ func resolveApproval(pm *node.ProxyManager, params []byte) ([]byte, error) {
 		req.ReqId, allowed, retentionMode, durationSeconds, req.Reason, meta.SourceIP)
 
 	resp := &pb.ResolveApprovalResponse{
-		Success: true,
+		Success:               true,
+		ResolvedTargetBackend: targetBackendOverride,
 	}
 	return proto.Marshal(resp)
 }
@@ -1563,6 +1577,33 @@ func listActiveApprovals(pm *node.ProxyManager, params []byte) ([]byte, error) {
 	}
 	entries := pm.Approval.GetActiveApprovals()
 	approvals := make([]*pb.ActiveApproval, 0, len(entries))
+	for reqID, pending := range pm.Approval.GetPendingApprovals() {
+		var details common.AlertDetails
+		if pending.Info != "" {
+			if err := proto.Unmarshal([]byte(pending.Info), &details); err != nil {
+				log.Warnf("[Hub] Failed to parse pending approval details for %s: %v", reqID, err)
+			}
+		}
+		if req.ProxyId != "" && pending.Meta.ProxyID != req.ProxyId {
+			continue
+		}
+		if req.SourceIp != "" && pending.Meta.SourceIP != req.SourceIp {
+			continue
+		}
+		approvals = append(approvals, &pb.ActiveApproval{
+			Key:                   reqID,
+			SourceIp:              pending.Meta.SourceIP,
+			RuleId:                pending.Meta.RuleID,
+			ProxyId:               pending.Meta.ProxyID,
+			Allowed:               false,
+			CreatedAt:             timestamppb.New(pending.CreatedAt),
+			GeoCountry:            pending.Meta.GeoCountry,
+			GeoCity:               pending.Meta.GeoCity,
+			GeoIsp:                pending.Meta.GeoISP,
+			BackendChoices:        details.GetBackendChoices(),
+			SelectedTargetBackend: details.GetSelectedTargetBackend(),
+		})
+	}
 	for _, e := range entries {
 		if req.ProxyId != "" && e.ProxyID != req.ProxyId {
 			continue
@@ -1580,6 +1621,7 @@ func listActiveApprovals(pm *node.ProxyManager, params []byte) ([]byte, error) {
 			CreatedAt: timestamppb.New(e.CreatedAt), ExpiresAt: timestamppb.New(e.ExpiresAt),
 			BytesIn: e.BytesIn, BytesOut: e.BytesOut, BlockedCount: int64(e.BlockedCount),
 			ConnIds: connIDs, GeoCountry: e.GeoCountry, GeoCity: e.GeoCity, GeoIsp: e.GeoISP,
+			SelectedTargetBackend: e.TargetBackend,
 		})
 	}
 	return proto.Marshal(&pb.ListActiveApprovalsResponse{Approvals: approvals})

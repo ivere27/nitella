@@ -365,6 +365,8 @@ class AlertDetails extends $pb.GeneratedMessage {
     $core.String? geoCountry,
     $core.String? geoCity,
     $core.String? geoIsp,
+    $core.Iterable<BackendChoice>? backendChoices,
+    $core.String? selectedTargetBackend,
   }) {
     final result = create();
     if (sourceIp != null) result.sourceIp = sourceIp;
@@ -375,6 +377,9 @@ class AlertDetails extends $pb.GeneratedMessage {
     if (geoCountry != null) result.geoCountry = geoCountry;
     if (geoCity != null) result.geoCity = geoCity;
     if (geoIsp != null) result.geoIsp = geoIsp;
+    if (backendChoices != null) result.backendChoices.addAll(backendChoices);
+    if (selectedTargetBackend != null)
+      result.selectedTargetBackend = selectedTargetBackend;
     return result;
   }
 
@@ -399,6 +404,9 @@ class AlertDetails extends $pb.GeneratedMessage {
     ..aOS(6, _omitFieldNames ? '' : 'geoCountry')
     ..aOS(7, _omitFieldNames ? '' : 'geoCity')
     ..aOS(8, _omitFieldNames ? '' : 'geoIsp')
+    ..pPM<BackendChoice>(9, _omitFieldNames ? '' : 'backendChoices',
+        subBuilder: BackendChoice.create)
+    ..aOS(10, _omitFieldNames ? '' : 'selectedTargetBackend')
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
@@ -491,6 +499,96 @@ class AlertDetails extends $pb.GeneratedMessage {
   $core.bool hasGeoIsp() => $_has(7);
   @$pb.TagNumber(8)
   void clearGeoIsp() => $_clearField(8);
+
+  @$pb.TagNumber(9)
+  $pb.PbList<BackendChoice> get backendChoices => $_getList(8);
+
+  @$pb.TagNumber(10)
+  $core.String get selectedTargetBackend => $_getSZ(9);
+  @$pb.TagNumber(10)
+  set selectedTargetBackend($core.String value) => $_setString(9, value);
+  @$pb.TagNumber(10)
+  $core.bool hasSelectedTargetBackend() => $_has(9);
+  @$pb.TagNumber(10)
+  void clearSelectedTargetBackend() => $_clearField(10);
+}
+
+class BackendChoice extends $pb.GeneratedMessage {
+  factory BackendChoice({
+    $core.String? id,
+    $core.String? address,
+    $core.String? label,
+  }) {
+    final result = create();
+    if (id != null) result.id = id;
+    if (address != null) result.address = address;
+    if (label != null) result.label = label;
+    return result;
+  }
+
+  BackendChoice._();
+
+  factory BackendChoice.fromBuffer($core.List<$core.int> data,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      create()..mergeFromBuffer(data, registry);
+  factory BackendChoice.fromJson($core.String json,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      create()..mergeFromJson(json, registry);
+
+  static final $pb.BuilderInfo _i = $pb.BuilderInfo(
+      _omitMessageNames ? '' : 'BackendChoice',
+      package: const $pb.PackageName(_omitMessageNames ? '' : 'nitella'),
+      createEmptyInstance: create)
+    ..aOS(1, _omitFieldNames ? '' : 'id')
+    ..aOS(2, _omitFieldNames ? '' : 'address')
+    ..aOS(3, _omitFieldNames ? '' : 'label')
+    ..hasRequiredFields = false;
+
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  BackendChoice clone() => deepCopy();
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  BackendChoice copyWith(void Function(BackendChoice) updates) =>
+      super.copyWith((message) => updates(message as BackendChoice))
+          as BackendChoice;
+
+  @$core.override
+  $pb.BuilderInfo get info_ => _i;
+
+  @$core.pragma('dart2js:noInline')
+  static BackendChoice create() => BackendChoice._();
+  @$core.override
+  BackendChoice createEmptyInstance() => create();
+  @$core.pragma('dart2js:noInline')
+  static BackendChoice getDefault() => _defaultInstance ??=
+      $pb.GeneratedMessage.$_defaultFor<BackendChoice>(create);
+  static BackendChoice? _defaultInstance;
+
+  @$pb.TagNumber(1)
+  $core.String get id => $_getSZ(0);
+  @$pb.TagNumber(1)
+  set id($core.String value) => $_setString(0, value);
+  @$pb.TagNumber(1)
+  $core.bool hasId() => $_has(0);
+  @$pb.TagNumber(1)
+  void clearId() => $_clearField(1);
+
+  @$pb.TagNumber(2)
+  $core.String get address => $_getSZ(1);
+  @$pb.TagNumber(2)
+  set address($core.String value) => $_setString(1, value);
+  @$pb.TagNumber(2)
+  $core.bool hasAddress() => $_has(1);
+  @$pb.TagNumber(2)
+  void clearAddress() => $_clearField(2);
+
+  @$pb.TagNumber(3)
+  $core.String get label => $_getSZ(2);
+  @$pb.TagNumber(3)
+  set label($core.String value) => $_setString(2, value);
+  @$pb.TagNumber(3)
+  $core.bool hasLabel() => $_has(2);
+  @$pb.TagNumber(3)
+  void clearLabel() => $_clearField(3);
 }
 
 /// GeoInfo contains geographical information for an IP address.
