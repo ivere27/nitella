@@ -1,7 +1,8 @@
 # syntax=docker/dockerfile:1
 
 ARG BUILDER_IMAGE=nitella-builder:unstable
-FROM ${BUILDER_IMAGE} AS builder
+FROM --platform=$BUILDPLATFORM ${BUILDER_IMAGE} AS builder
+ARG TARGETPLATFORM
 
 WORKDIR /app
 COPY go.mod go.sum ./
@@ -11,7 +12,9 @@ RUN --mount=type=cache,id=go-mod-cache,target=/go/pkg/mod \
 COPY . .
 RUN --mount=type=cache,id=go-build-cache,target=/root/.cache/go-build \
     --mount=type=cache,id=go-mod-cache,target=/go/pkg/mod \
-    CGO_ENABLED=0 go build -o mock ./cmd/mock
+    set -eux; \
+    CGO_ENABLED=0 xx-go build -ldflags="-s -w" -o mock ./cmd/mock; \
+    xx-verify mock
 
 FROM alpine:3.19
 RUN apk add --no-cache ca-certificates

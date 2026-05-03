@@ -617,10 +617,10 @@ tcp:
 
 ```bash
 # Build and run nitellad with backend on host
-make nitellad_docker_run BACKEND=host.docker.internal:3000
+make docker_nitellad_run BACKEND=host.docker.internal:3000
 
 # With custom ports
-make nitellad_docker_run BACKEND=host.docker.internal:3000 PROXY_PORT=9090
+make docker_nitellad_run BACKEND=host.docker.internal:3000 PROXY_PORT=9090
 
 # GeoIP server
 make geoip_docker_run GEOIP_TOKEN=your-secret-token

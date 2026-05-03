@@ -1,14 +1,15 @@
+# syntax=docker/dockerfile:1
+
 # Nitella GeoIP Server
 #
 # Includes GeoLite2 databases from MaxMind (https://www.maxmind.com)
 # License: CC BY-SA 4.0 - Commercial use allowed with attribution
 # Database source: https://github.com/P3TERX/GeoLite.mmdb
 
-# syntax=docker/dockerfile:1
-
 # Build stage
 ARG BUILDER_IMAGE=nitella-builder:unstable
-FROM ${BUILDER_IMAGE} AS builder
+FROM --platform=$BUILDPLATFORM ${BUILDER_IMAGE} AS builder
+ARG TARGETPLATFORM
 
 WORKDIR /app
 
@@ -21,8 +22,11 @@ COPY . .
 # Build with CGO enabled for SQLite support
 RUN --mount=type=cache,id=go-build-cache,target=/root/.cache/go-build \
     --mount=type=cache,id=go-mod-cache,target=/go/pkg/mod \
-    CGO_ENABLED=1 go build -ldflags="-s -w" -o /app/bin/geoip-server ./cmd/geoip-server \
-    && CGO_ENABLED=1 go build -ldflags="-s -w" -o /app/bin/geoip ./cmd/geoip
+    set -eux; \
+    xx-apk add --no-cache xx-c-essentials; \
+    CGO_ENABLED=1 xx-go build -ldflags="-s -w" -o /app/bin/geoip-server ./cmd/geoip-server; \
+    CGO_ENABLED=1 xx-go build -ldflags="-s -w" -o /app/bin/geoip ./cmd/geoip; \
+    xx-verify /app/bin/geoip-server /app/bin/geoip
 
 # Runtime stage
 FROM alpine:3.19

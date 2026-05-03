@@ -31,7 +31,7 @@ endif
 MOBILE_BACKEND_PATH := ./cmd/mobile_backend
 
 .PHONY: all help build proto test clean deps fmt lint build_plugin
-.PHONY: hub_build hub_server hubctl_build hub_proto hub_test hub_run hub_docker_build hub_docker_run
+.PHONY: hub_build hub_server hubctl_build hub_proto hub_test hub_run hub_docker_run
 .PHONY: local_proto local_ffi_proto mobile_build mobile_android mobile_ios mobile_linux app_run
 .PHONY: mobile_test mobile_test_e2e mobile_test_e2e_standalone mobile_test_e2e_visible mobile_test_clean
 .PHONY: pre shared_android build_android run_android_release run_android_debug release_unstable release_unstable_clean release_stable release_stable_clean
@@ -55,10 +55,8 @@ help:
 	@echo "  make nitellad_rs_run NITELLAD_ARGS=\"--listen :8080 --backend localhost:3000\""
 	@echo "                                     Build and run Rust nitellad-rs"
 	@echo "                                     NITELLAD_RS_ARGS is also accepted"
-	@echo "  make docker_builder_build          Build shared Go/Rust Docker builder image"
-	@echo "  make docker_build_all              Build nitella, nitellad, and nitellad-rs Docker images"
-	@echo "  make docker_publish_all            Build and push all images for amd64, 386, arm64, and arm/v7"
-	@echo "  make docker_publish_all_multiarch  Alias for docker_publish_all"
+	@echo "  make docker_all                    Build all release Docker images for amd64, 386, arm64, and arm/v7"
+	@echo "  make docker_publish                Build and push all release Docker images"
 	@echo "                                     Override DOCKER_NAMESPACE=..., DOCKER_TAG=latest, or DOCKER_PLATFORMS=..."
 	@echo "                                     Builder image uses DOCKER_BUILDER_PLATFORM=$(DOCKER_BUILDER_PLATFORM)"
 	@echo "  GeoIP example:"
@@ -392,12 +390,7 @@ geoip_clean:
 # ============================================================================
 
 .PHONY: nitellad_build nitellad_run nitellad_rs_build nitellad_rs_run nitellad_test nitellad_test_integration nitella_build nitella_run
-.PHONY: docker_builder_build docker_builder_publish_multiarch docker_build_all docker_nitella_build docker_nitella_publish docker_nitella_publish_multiarch docker_publish_all docker_publish_all_multiarch
-.PHONY: docker_nitellad_build docker_nitellad_run docker_nitellad_publish docker_nitellad_rs_build docker_nitellad_rs_publish docker_nitellad_publish_all docker_namespace_required
-.PHONY: docker_nitellad_publish_multiarch docker_nitellad_rs_publish_multiarch
-.PHONY: _docker_nitella_build _docker_nitellad_build _docker_nitellad_rs_build
-.PHONY: _docker_nitella_publish_multiarch _docker_nitellad_publish_multiarch _docker_nitellad_rs_publish_multiarch
-.PHONY: nitellad_docker_build nitellad_docker_run nitellad_docker_publish nitellad_rs_docker_build nitellad_rs_docker_publish nitellad_docker_publish_all
+.PHONY: docker_all docker_publish docker_nitellad_run geoip_docker_run
 
 nitellad_build: proto
 	@mkdir -p $(BUILD_DIR)
@@ -485,33 +478,48 @@ DOCKER_BUILDER_PUBLISH_IMAGE = $(DOCKER_REGISTRY)/$(DOCKER_NAMESPACE)/$(DOCKER_B
 NITELLA_DOCKER_IMAGE ?= nitella
 NITELLAD_DOCKER_IMAGE ?= nitellad
 NITELLAD_RS_DOCKER_IMAGE ?= nitellad-rs
+GEOIP_DOCKER_IMAGE ?= nitella-geoip
+MOCK_DOCKER_IMAGE ?= nitella-mock
+HUB_DOCKER_IMAGE ?= nitella-hub
+HUBCTL_DOCKER_IMAGE ?= nitella-hubctl
 NITELLA_DOCKER_PUBLISH_IMAGE = $(DOCKER_REGISTRY)/$(DOCKER_NAMESPACE)/$(NITELLA_DOCKER_IMAGE):$(DOCKER_TAG)
 NITELLAD_DOCKER_PUBLISH_IMAGE = $(DOCKER_REGISTRY)/$(DOCKER_NAMESPACE)/$(NITELLAD_DOCKER_IMAGE):$(DOCKER_TAG)
 NITELLAD_RS_DOCKER_PUBLISH_IMAGE = $(DOCKER_REGISTRY)/$(DOCKER_NAMESPACE)/$(NITELLAD_RS_DOCKER_IMAGE):$(DOCKER_TAG)
+GEOIP_DOCKER_PUBLISH_IMAGE = $(DOCKER_REGISTRY)/$(DOCKER_NAMESPACE)/$(GEOIP_DOCKER_IMAGE):$(DOCKER_TAG)
+MOCK_DOCKER_PUBLISH_IMAGE = $(DOCKER_REGISTRY)/$(DOCKER_NAMESPACE)/$(MOCK_DOCKER_IMAGE):$(DOCKER_TAG)
+HUB_DOCKER_PUBLISH_IMAGE = $(DOCKER_REGISTRY)/$(DOCKER_NAMESPACE)/$(HUB_DOCKER_IMAGE):$(DOCKER_TAG)
+HUBCTL_DOCKER_PUBLISH_IMAGE = $(DOCKER_REGISTRY)/$(DOCKER_NAMESPACE)/$(HUBCTL_DOCKER_IMAGE):$(DOCKER_TAG)
 
-docker_namespace_required:
+# docker_all performs a multi-platform build without publishing. Buildx keeps
+# those results in its cache; use docker_publish when registry artifacts are needed.
+docker_all:
 	@if [ -z "$(DOCKER_NAMESPACE)" ]; then \
-		echo "DOCKER_NAMESPACE is required for Docker Hub publishing."; \
+		echo "DOCKER_NAMESPACE is required for Docker builds."; \
 		echo "Examples:"; \
-		echo "  make docker_publish_all DOCKER_NAMESPACE=your-dockerhub-user DOCKER_TAG=latest"; \
+		echo "  make docker_publish DOCKER_NAMESPACE=your-dockerhub-user DOCKER_TAG=latest"; \
 		exit 1; \
 	fi
+	@echo "$(if $(DOCKER_BUILDX_OUTPUT),Building and pushing,Building) all Docker images for: $(DOCKER_PLATFORMS)"
+	docker buildx build --platform $(DOCKER_BUILDER_PLATFORM) -f Dockerfile.builder -t $(DOCKER_BUILDER_PUBLISH_IMAGE) $(DOCKER_BUILDX_OUTPUT) .
+	docker buildx build --platform $(DOCKER_PLATFORMS) --build-arg BUILDER_IMAGE=$(DOCKER_BUILDER_PUBLISH_IMAGE) -f Dockerfile.nitella -t $(NITELLA_DOCKER_PUBLISH_IMAGE) $(DOCKER_BUILDX_OUTPUT) .
+	docker buildx build --platform $(DOCKER_PLATFORMS) --build-arg BUILDER_IMAGE=$(DOCKER_BUILDER_PUBLISH_IMAGE) -f Dockerfile.nitellad -t $(NITELLAD_DOCKER_PUBLISH_IMAGE) $(DOCKER_BUILDX_OUTPUT) .
+	docker buildx build --platform $(DOCKER_PLATFORMS) --build-arg BUILDER_IMAGE=$(DOCKER_BUILDER_PUBLISH_IMAGE) -f Dockerfile.nitellad-rs -t $(NITELLAD_RS_DOCKER_PUBLISH_IMAGE) $(DOCKER_BUILDX_OUTPUT) .
+	docker buildx build --platform $(DOCKER_PLATFORMS) --build-arg BUILDER_IMAGE=$(DOCKER_BUILDER_PUBLISH_IMAGE) -f Dockerfile.geoip -t $(GEOIP_DOCKER_PUBLISH_IMAGE) $(DOCKER_BUILDX_OUTPUT) .
+	docker buildx build --platform $(DOCKER_PLATFORMS) --build-arg BUILDER_IMAGE=$(DOCKER_BUILDER_PUBLISH_IMAGE) -f Dockerfile.mock -t $(MOCK_DOCKER_PUBLISH_IMAGE) $(DOCKER_BUILDX_OUTPUT) .
+	docker buildx build --platform $(DOCKER_PLATFORMS) --build-arg BUILDER_IMAGE=$(DOCKER_BUILDER_PUBLISH_IMAGE) -f Dockerfile.hub -t $(HUB_DOCKER_PUBLISH_IMAGE) $(DOCKER_BUILDX_OUTPUT) .
+	docker buildx build --platform $(DOCKER_PLATFORMS) --build-arg BUILDER_IMAGE=$(DOCKER_BUILDER_PUBLISH_IMAGE) -f Dockerfile.hubctl -t $(HUBCTL_DOCKER_PUBLISH_IMAGE) $(DOCKER_BUILDX_OUTPUT) .
 
-docker_builder_build:
-	DOCKER_BUILDKIT=1 docker build -f Dockerfile.builder -t $(DOCKER_BUILDER_IMAGE) -t $(DOCKER_BUILDER_REF) .
-
-docker_builder_publish_multiarch: docker_namespace_required
-	docker buildx build --platform $(DOCKER_BUILDER_PLATFORM) -f Dockerfile.builder -t $(DOCKER_BUILDER_PUBLISH_IMAGE) --push .
-
-geoip_docker_build: docker_builder_build
-	DOCKER_BUILDKIT=1 docker build --build-arg BUILDER_IMAGE=$(DOCKER_BUILDER_REF) -f Dockerfile.geoip -t nitella-geoip .
+docker_publish: DOCKER_BUILDX_OUTPUT = --push
+docker_publish: docker_all
 
 # Run docker container (includes GeoLite2 databases)
 # Usage: make geoip_docker_run
 #        make geoip_docker_run GEOIP_TOKEN=my-secret-token
 #        make geoip_docker_run GEOIP_CONFIG=my_config.yaml
 GEOIP_TOKEN ?=
-geoip_docker_run: geoip_docker_build
+geoip_docker_run:
+	DOCKER_BUILDKIT=1 docker build -f Dockerfile.builder -t $(DOCKER_BUILDER_IMAGE) -t $(DOCKER_BUILDER_REF) .
+	DOCKER_BUILDKIT=1 docker build --build-arg BUILDER_IMAGE=$(DOCKER_BUILDER_REF) -f Dockerfile.geoip -t $(GEOIP_DOCKER_IMAGE) .
 	@mkdir -p data
 	@if [ -f "$(GEOIP_CONFIG)" ]; then \
 		echo "Running with config: $(GEOIP_CONFIG)"; \
@@ -520,7 +528,7 @@ geoip_docker_run: geoip_docker_build
 			$(if $(GEOIP_TOKEN),-e GEOIP_TOKEN=$(GEOIP_TOKEN)) \
 			-v $(PWD)/$(GEOIP_CONFIG):/app/config/geoip_provider.yaml \
 			-v $(PWD)/data:/app/data \
-			nitella-geoip --config /app/config/geoip_provider.yaml \
+			$(GEOIP_DOCKER_IMAGE) --config /app/config/geoip_provider.yaml \
 			--db /app/data/geoip_cache.db \
 			--city-db /app/db/GeoLite2-City.mmdb \
 			--isp-db /app/db/GeoLite2-ASN.mmdb \
@@ -531,63 +539,8 @@ geoip_docker_run: geoip_docker_build
 			-p 50052:50052 -p 50053:50053 \
 			$(if $(GEOIP_TOKEN),-e GEOIP_TOKEN=$(GEOIP_TOKEN)) \
 			-v $(PWD)/data:/app/data \
-			nitella-geoip; \
+			$(GEOIP_DOCKER_IMAGE); \
 	fi
-
-# Nitellad Docker
-docker_nitellad_build: docker_build_all
-
-_docker_nitellad_build: docker_builder_build
-	DOCKER_BUILDKIT=1 docker build --build-arg BUILDER_IMAGE=$(DOCKER_BUILDER_REF) -f Dockerfile.nitellad -t $(NITELLAD_DOCKER_IMAGE) -t $(NITELLAD_DOCKER_IMAGE):$(DOCKER_TAG) .
-
-docker_nitellad_publish: docker_publish_all
-
-docker_nitellad_publish_multiarch: docker_publish_all
-
-_docker_nitellad_publish_multiarch: docker_namespace_required
-	docker buildx build --platform $(DOCKER_PLATFORMS) --build-arg BUILDER_IMAGE=$(DOCKER_BUILDER_PUBLISH_IMAGE) -f Dockerfile.nitellad -t $(NITELLAD_DOCKER_PUBLISH_IMAGE) --push .
-
-docker_nitellad_rs_build: docker_build_all
-
-_docker_nitellad_rs_build: docker_builder_build
-	DOCKER_BUILDKIT=1 docker build --build-arg BUILDER_IMAGE=$(DOCKER_BUILDER_REF) -f Dockerfile.nitellad-rs -t $(NITELLAD_RS_DOCKER_IMAGE) -t $(NITELLAD_RS_DOCKER_IMAGE):$(DOCKER_TAG) .
-
-docker_nitellad_rs_publish: docker_publish_all
-
-docker_nitellad_rs_publish_multiarch: docker_publish_all
-
-_docker_nitellad_rs_publish_multiarch: docker_namespace_required
-	docker buildx build --platform $(DOCKER_PLATFORMS) --build-arg BUILDER_IMAGE=$(DOCKER_BUILDER_PUBLISH_IMAGE) -f Dockerfile.nitellad-rs -t $(NITELLAD_RS_DOCKER_PUBLISH_IMAGE) --push .
-
-docker_nitella_build: docker_build_all
-
-_docker_nitella_build: docker_builder_build
-	DOCKER_BUILDKIT=1 docker build --build-arg BUILDER_IMAGE=$(DOCKER_BUILDER_REF) -f Dockerfile.nitella -t $(NITELLA_DOCKER_IMAGE) -t $(NITELLA_DOCKER_IMAGE):$(DOCKER_TAG) .
-
-docker_nitella_publish: docker_publish_all
-
-docker_nitella_publish_multiarch: docker_publish_all
-
-_docker_nitella_publish_multiarch: docker_namespace_required
-	docker buildx build --platform $(DOCKER_PLATFORMS) --build-arg BUILDER_IMAGE=$(DOCKER_BUILDER_PUBLISH_IMAGE) -f Dockerfile.nitella -t $(NITELLA_DOCKER_PUBLISH_IMAGE) --push .
-
-docker_build_all: _docker_nitella_build _docker_nitellad_build _docker_nitellad_rs_build
-
-docker_nitellad_publish_all: docker_publish_all
-
-docker_publish_all: docker_namespace_required
-	$(MAKE) docker_builder_publish_multiarch
-	$(MAKE) _docker_nitella_publish_multiarch
-	$(MAKE) _docker_nitellad_publish_multiarch
-	$(MAKE) _docker_nitellad_rs_publish_multiarch
-
-docker_publish_all_multiarch: docker_publish_all
-
-nitellad_docker_build: docker_nitellad_build
-nitellad_docker_publish: docker_nitellad_publish
-nitellad_rs_docker_build: docker_nitellad_rs_build
-nitellad_rs_docker_publish: docker_nitellad_rs_publish
-nitellad_docker_publish_all: docker_nitellad_publish_all
 
 # Run nitellad docker container (includes GeoLite2 databases)
 # Usage: make docker_nitellad_run
@@ -599,7 +552,9 @@ NITELLA_CONFIG ?=
 PROXY_PORT ?= 8080
 ADMIN_PORT ?= 50051
 BACKEND ?=
-docker_nitellad_run: docker_nitellad_build
+docker_nitellad_run:
+	DOCKER_BUILDKIT=1 docker build -f Dockerfile.builder -t $(DOCKER_BUILDER_IMAGE) -t $(DOCKER_BUILDER_REF) .
+	DOCKER_BUILDKIT=1 docker build --build-arg BUILDER_IMAGE=$(DOCKER_BUILDER_REF) -f Dockerfile.nitellad -t $(NITELLAD_DOCKER_IMAGE) -t $(NITELLAD_DOCKER_IMAGE):$(DOCKER_TAG) .
 	@mkdir -p data
 	@if [ -n "$(NITELLA_CONFIG)" ] && [ -f "$(NITELLA_CONFIG)" ]; then \
 		echo "Running with config: $(NITELLA_CONFIG)"; \
@@ -629,13 +584,11 @@ docker_nitellad_run: docker_nitellad_build
 			$(if $(BACKEND),--backend $(BACKEND)); \
 	fi
 
-nitellad_docker_run: docker_nitellad_run
-
 # ============================================================================
 # Mock Server Module
 # ============================================================================
 
-.PHONY: mock_build mock_run example_backend_build example_backend mock_test mock_test_integration mock_docker_build mock_docker_run
+.PHONY: mock_build mock_run example_backend_build example_backend mock_test mock_test_integration mock_docker_run
 
 mock_build:
 	@mkdir -p $(BUILD_DIR)
@@ -670,25 +623,23 @@ example_backend: example_backend_build
 mock_clean:
 	rm -f $(BUILD_DIR)/mock $(BUILD_DIR)/rust-backend
 
-# Docker
-mock_docker_build: docker_builder_build
-	DOCKER_BUILDKIT=1 docker build --build-arg BUILDER_IMAGE=$(DOCKER_BUILDER_REF) -f Dockerfile.mock -t nitella-mock .
-
 # Run mock docker container
 # Usage: make mock_docker_run PORT=2222 PROTOCOL=ssh
-mock_docker_run: mock_docker_build
+mock_docker_run:
+	DOCKER_BUILDKIT=1 docker build -f Dockerfile.builder -t $(DOCKER_BUILDER_IMAGE) -t $(DOCKER_BUILDER_REF) .
+	DOCKER_BUILDKIT=1 docker build --build-arg BUILDER_IMAGE=$(DOCKER_BUILDER_REF) -f Dockerfile.mock -t $(MOCK_DOCKER_IMAGE) .
 	docker run -it --rm \
 		-p $(MOCK_PORT):$(MOCK_PORT) \
 		-e PORT=$(MOCK_PORT) \
 		-e PROTOCOL=$(MOCK_PROTOCOL) \
-		nitella-mock
+		$(MOCK_DOCKER_IMAGE)
 
 # ============================================================================
 # Hub Server Module
 # ============================================================================
 
 .PHONY: hub_build hub_server hubctl_build hub_proto hub_test hub_test_integration
-.PHONY: hub_run hubctl_run hub_docker_build hubctl_docker_build hub_docker_run hub_clean
+.PHONY: hub_run hubctl_run hub_docker_run hub_clean
 
 hub_build: hub_proto hub_server hubctl_build
 
@@ -791,18 +742,13 @@ hub_clean:
 	rm -f $(BUILD_DIR)/hub $(BUILD_DIR)/hubctl
 	rm -f pkg/api/hub/*.pb.go
 
-# Docker
-hub_docker_build: docker_builder_build
-	DOCKER_BUILDKIT=1 docker build --build-arg BUILDER_IMAGE=$(DOCKER_BUILDER_REF) -f Dockerfile.hub -t nitella-hub .
-
-hubctl_docker_build: docker_builder_build
-	DOCKER_BUILDKIT=1 docker build --build-arg BUILDER_IMAGE=$(DOCKER_BUILDER_REF) -f Dockerfile.hubctl -t nitella-hubctl .
-
 # Run Hub docker container
 # Usage: make hub_docker_run
 #        make hub_docker_run HUB_PORT=50052
 #        make hub_docker_run HUB_TLS_CERT=cert.pem HUB_TLS_KEY=key.pem
-hub_docker_run: hub_docker_build
+hub_docker_run:
+	DOCKER_BUILDKIT=1 docker build -f Dockerfile.builder -t $(DOCKER_BUILDER_IMAGE) -t $(DOCKER_BUILDER_REF) .
+	DOCKER_BUILDKIT=1 docker build --build-arg BUILDER_IMAGE=$(DOCKER_BUILDER_REF) -f Dockerfile.hub -t $(HUB_DOCKER_IMAGE) .
 	@mkdir -p data
 	docker run -it --rm \
 		-p $(HUB_PORT):50052 \
@@ -811,7 +757,7 @@ hub_docker_run: hub_docker_build
 		$(if $(HUB_TLS_CERT),-v $(PWD)/$(HUB_TLS_CERT):/app/certs/cert.pem) \
 		$(if $(HUB_TLS_KEY),-v $(PWD)/$(HUB_TLS_KEY):/app/certs/key.pem) \
 		$(if $(HUB_TLS_CA),-v $(PWD)/$(HUB_TLS_CA):/app/certs/ca.pem) \
-		nitella-hub \
+		$(HUB_DOCKER_IMAGE) \
 		--db-path /app/data/hub.db \
 		$(if $(HUB_TLS_CERT),--tls-cert /app/certs/cert.pem) \
 		$(if $(HUB_TLS_KEY),--tls-key /app/certs/key.pem) \

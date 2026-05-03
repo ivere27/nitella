@@ -135,16 +135,12 @@ make mock_test                # Unit tests
 make mock_test_integration    # Integration tests
 
 # Docker
-make mock_docker_build
 make mock_docker_run PORT=2222 PROTOCOL=ssh
 ```
 
 ## Docker
 
 ```bash
-# Build
-make mock_docker_build
-
 # Run HTTP mock
 make mock_docker_run
 
